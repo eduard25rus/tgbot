@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ class Storage:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        self._seed_if_empty()
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
@@ -109,6 +111,57 @@ class Storage:
             contract_ids = [row["contract_id"] for row in conn.execute("SELECT DISTINCT contract_id FROM stages").fetchall()]
             for contract_id in contract_ids:
                 self._normalize_stage_positions(conn, int(contract_id))
+
+    def _seed_if_empty(self) -> None:
+        seed_path = Path(__file__).with_name("seed_data.json")
+        if not seed_path.exists():
+            return
+        with self.connection() as conn:
+            has_contracts = conn.execute("SELECT 1 FROM contracts LIMIT 1").fetchone() is not None
+            if has_contracts:
+                return
+            data = json.loads(seed_path.read_text(encoding="utf-8"))
+            for chat in data.get("chats", []):
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO chats (chat_id, created_at)
+                    VALUES (?, ?)
+                    """,
+                    (chat["chat_id"], chat["created_at"]),
+                )
+            for contract in data.get("contracts", []):
+                conn.execute(
+                    """
+                    INSERT INTO contracts (id, chat_id, title, description, end_date, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        contract["id"],
+                        contract["chat_id"],
+                        contract["title"],
+                        contract["description"],
+                        contract["end_date"],
+                        contract["created_at"],
+                    ),
+                )
+            for stage in data.get("stages", []):
+                conn.execute(
+                    """
+                    INSERT INTO stages (id, contract_id, position, name, status, notes, end_date, amount, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        stage["id"],
+                        stage["contract_id"],
+                        stage["position"],
+                        stage["name"],
+                        stage["status"],
+                        stage["notes"],
+                        stage["end_date"],
+                        stage["amount"],
+                        stage["created_at"],
+                    ),
+                )
 
     def register_chat(self, chat_id: int) -> None:
         with self.connection() as conn:
