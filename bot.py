@@ -61,12 +61,14 @@ MENU_CONTRACTS = "Показать контракты"
 MENU_UPCOMING = "Ближайшие сроки"
 MENU_CANCEL = "Отмена"
 MENU_INVITE = "Дать доступ"
+MENU_ACCESS_LIST = "Список доступов"
 CONTRACT_MANAGE_PREFIX = "manage_contract:"
 CONTRACT_ADD_STAGE_PREFIX = "add_stage_contract:"
 STAGE_EDIT_PREFIX = "edit_stage:"
 STAGE_DELETE_PREFIX = "delete_stage:"
 STAGE_STATUS_PREFIX = "stage_status:"
 STAGE_STATUS_SET_PREFIX = "stage_status_set:"
+ACCESS_REVOKE_PREFIX = "access_revoke:"
 
 STAGE_STATUSES = {
     "not_started": ("✖", "Не приступили"),
@@ -175,7 +177,7 @@ def main_menu_markup() -> ReplyKeyboardMarkup:
         [
             [MENU_NEW_CONTRACT, MENU_NEW_STAGE],
             [MENU_CONTRACTS, MENU_UPCOMING],
-            [MENU_INVITE],
+            [MENU_INVITE, MENU_ACCESS_LIST],
         ],
         resize_keyboard=True,
     )
@@ -192,7 +194,7 @@ def cancel_markup() -> ReplyKeyboardMarkup:
 
 
 def is_menu_text(raw: str) -> bool:
-    return raw in {MENU_NEW_CONTRACT, MENU_NEW_STAGE, MENU_CONTRACTS, MENU_UPCOMING, MENU_INVITE, MENU_CANCEL}
+    return raw in {MENU_NEW_CONTRACT, MENU_NEW_STAGE, MENU_CONTRACTS, MENU_UPCOMING, MENU_INVITE, MENU_ACCESS_LIST, MENU_CANCEL}
 
 
 def viewer_menu_markup() -> ReplyKeyboardMarkup:
@@ -270,6 +272,12 @@ def contract_manage_actions_markup(contract_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def revoke_access_markup(viewer_user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Отозвать доступ", callback_data=f"{ACCESS_REVOKE_PREFIX}{viewer_user_id}")]]
+    )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     storage: Storage = context.application.bot_data["storage"]
     chat = update.effective_chat
@@ -280,7 +288,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if context.args and chat.type == "private":
         token_arg = context.args[0]
         if token_arg.startswith("view_"):
-            owner_chat_id = storage.consume_invite_token(token_arg.removeprefix("view_"), user.id)
+            owner_chat_id = storage.consume_invite_token(
+                token_arg.removeprefix("view_"),
+                user.id,
+                user.username or "",
+                user.full_name or "",
+            )
             if owner_chat_id is not None:
                 await update.message.reply_text(
                     "Доступ к контрактам выдан. Теперь вы можете смотреть список и ближайшие сроки.",
@@ -340,6 +353,47 @@ async def invite_viewer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(
         "Отправьте эту ссылку человеку, которому хотите дать просмотр:\n"
         f"{invite_link}",
+        reply_markup=main_menu_markup(),
+    )
+
+
+async def access_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None:
+        return
+    owner_chat_id, _ = owner_scope
+    grants = storage.viewer_grants_for_owner(owner_chat_id)
+    if not grants:
+        await update.message.reply_text("Доступы пока никому не выданы.", reply_markup=main_menu_markup())
+        return
+    for grant in grants:
+        username = f"@{grant['viewer_username']}" if grant["viewer_username"] else "без username"
+        name = grant["viewer_name"] or "без имени"
+        await update.message.reply_text(
+            f"{name}\n{username}\nID: {grant['viewer_user_id']}",
+            reply_markup=revoke_access_markup(grant["viewer_user_id"]),
+        )
+    await update.message.reply_text("Список доступов показан.", reply_markup=main_menu_markup())
+
+
+async def revoke_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    query = update.callback_query
+    if owner_scope is None or query is None or query.data is None:
+        return
+    owner_chat_id, _ = owner_scope
+    await query.answer()
+    try:
+        viewer_user_id = int(query.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+    revoked = storage.revoke_viewer_access(owner_chat_id, viewer_user_id)
+    await query.edit_message_reply_markup(reply_markup=None)
+    await query.message.reply_text(
+        "Доступ отозван." if revoked else "Доступ не найден.",
         reply_markup=main_menu_markup(),
     )
 
@@ -1062,6 +1116,10 @@ async def menu_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await invite_viewer(update, context)
 
 
+async def menu_access_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await access_list(update, context)
+
+
 async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     storage: Storage = context.application.bot_data["storage"]
     candidates = storage.reminder_candidates(REMINDER_DAYS)
@@ -1151,18 +1209,21 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("invite_viewer", invite_viewer))
+    app.add_handler(CommandHandler("access_list", access_list))
     app.add_handler(CommandHandler("contracts", list_contracts))
     app.add_handler(CommandHandler("upcoming", upcoming))
     app.add_handler(CommandHandler("delete_contract", delete_contract))
     app.add_handler(CommandHandler("delete_stage", delete_stage))
     app.add_handler(CallbackQueryHandler(contract_manage_menu, pattern=f"^{CONTRACT_MANAGE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(start_stage_add_from_contract, pattern=f"^{CONTRACT_ADD_STAGE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(revoke_access, pattern=f"^{ACCESS_REVOKE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(show_stage_status_menu, pattern=f"^{STAGE_STATUS_PREFIX}"))
     app.add_handler(CallbackQueryHandler(set_stage_status, pattern=f"^{STAGE_STATUS_SET_PREFIX}"))
     app.add_handler(CallbackQueryHandler(delete_stage_callback, pattern=f"^{STAGE_DELETE_PREFIX}"))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_CONTRACTS}$"), menu_contracts))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_UPCOMING}$"), menu_upcoming))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_INVITE}$"), menu_invite))
+    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_ACCESS_LIST}$"), menu_access_list))
     app.add_handler(contract_conv)
     app.add_handler(stage_conv)
     app.add_handler(edit_stage_conv)

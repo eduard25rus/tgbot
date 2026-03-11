@@ -98,6 +98,8 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS access_grants (
                     owner_chat_id INTEGER NOT NULL,
                     viewer_user_id INTEGER NOT NULL UNIQUE,
+                    viewer_username TEXT NOT NULL DEFAULT '',
+                    viewer_name TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (owner_chat_id, viewer_user_id)
                 );
@@ -118,6 +120,13 @@ class Storage:
                 conn.execute("ALTER TABLE stages ADD COLUMN position INTEGER NOT NULL DEFAULT 1")
             if "status" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN status TEXT NOT NULL DEFAULT 'not_started'")
+            grant_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(access_grants)").fetchall()
+            }
+            if "viewer_username" not in grant_columns:
+                conn.execute("ALTER TABLE access_grants ADD COLUMN viewer_username TEXT NOT NULL DEFAULT ''")
+            if "viewer_name" not in grant_columns:
+                conn.execute("ALTER TABLE access_grants ADD COLUMN viewer_name TEXT NOT NULL DEFAULT ''")
             contract_ids = [row["contract_id"] for row in conn.execute("SELECT DISTINCT contract_id FROM stages").fetchall()]
             for contract_id in contract_ids:
                 self._normalize_stage_positions(conn, int(contract_id))
@@ -142,7 +151,7 @@ class Storage:
                 (token, owner_chat_id, datetime.utcnow().isoformat()),
             )
 
-    def consume_invite_token(self, token: str, viewer_user_id: int) -> int | None:
+    def consume_invite_token(self, token: str, viewer_user_id: int, viewer_username: str, viewer_name: str) -> int | None:
         with self.connection() as conn:
             row = conn.execute(
                 """
@@ -158,10 +167,12 @@ class Storage:
             conn.execute("DELETE FROM invite_tokens WHERE token = ?", (token,))
             conn.execute(
                 """
-                INSERT OR REPLACE INTO access_grants (owner_chat_id, viewer_user_id, created_at)
-                VALUES (?, ?, ?)
+                INSERT OR REPLACE INTO access_grants (
+                    owner_chat_id, viewer_user_id, viewer_username, viewer_name, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (owner_chat_id, viewer_user_id, datetime.utcnow().isoformat()),
+                (owner_chat_id, viewer_user_id, viewer_username, viewer_name, datetime.utcnow().isoformat()),
             )
             return owner_chat_id
 
@@ -189,6 +200,38 @@ class Storage:
                 (owner_chat_id,),
             ).fetchall()
         return [int(row["viewer_user_id"]) for row in rows]
+
+    def viewer_grants_for_owner(self, owner_chat_id: int) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT viewer_user_id, viewer_username, viewer_name, created_at
+                FROM access_grants
+                WHERE owner_chat_id = ?
+                ORDER BY created_at ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [
+            {
+                "viewer_user_id": int(row["viewer_user_id"]),
+                "viewer_username": row["viewer_username"],
+                "viewer_name": row["viewer_name"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def revoke_viewer_access(self, owner_chat_id: int, viewer_user_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM access_grants
+                WHERE owner_chat_id = ? AND viewer_user_id = ?
+                """,
+                (owner_chat_id, viewer_user_id),
+            )
+            return cursor.rowcount > 0
 
     def add_contract(self, chat_id: int, title: str, description: str, end_date: date) -> int:
         with self.connection() as conn:
