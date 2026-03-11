@@ -233,6 +233,17 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def update_viewer_profile(self, owner_chat_id: int, viewer_user_id: int, viewer_username: str, viewer_name: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                UPDATE access_grants
+                SET viewer_username = ?, viewer_name = ?
+                WHERE owner_chat_id = ? AND viewer_user_id = ?
+                """,
+                (viewer_username, viewer_name, owner_chat_id, viewer_user_id),
+            )
+
     def add_contract(self, chat_id: int, title: str, description: str, end_date: date) -> int:
         with self.connection() as conn:
             conn.execute(

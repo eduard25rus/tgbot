@@ -368,10 +368,25 @@ async def access_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("Доступы пока никому не выданы.", reply_markup=main_menu_markup())
         return
     for grant in grants:
-        username = f"@{grant['viewer_username']}" if grant["viewer_username"] else "без username"
-        name = grant["viewer_name"] or "без имени"
+        username = grant["viewer_username"] or ""
+        name = grant["viewer_name"] or ""
+        if not username or not name:
+            try:
+                chat_info = await context.bot.get_chat(grant["viewer_user_id"])
+                username = chat_info.username or username
+                name = chat_info.full_name or name
+                storage.update_viewer_profile(
+                    owner_chat_id,
+                    grant["viewer_user_id"],
+                    username or "",
+                    name or "",
+                )
+            except Exception:
+                LOGGER.exception("Failed to refresh viewer profile for user_id=%s", grant["viewer_user_id"])
+        username_line = f"@{username}" if username else "username не указан"
+        name_line = name or "Имя не указано"
         await update.message.reply_text(
-            f"{name}\n{username}\nID: {grant['viewer_user_id']}",
+            f"{name_line}\n{username_line}\nID: {grant['viewer_user_id']}",
             reply_markup=revoke_access_markup(grant["viewer_user_id"]),
         )
     await update.message.reply_text("Список доступов показан.", reply_markup=main_menu_markup())
