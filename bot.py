@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 from datetime import date, time
 from html import escape
 
@@ -59,6 +60,7 @@ MENU_NEW_STAGE = "Добавить этап"
 MENU_CONTRACTS = "Показать контракты"
 MENU_UPCOMING = "Ближайшие сроки"
 MENU_CANCEL = "Отмена"
+MENU_INVITE = "Дать доступ"
 CONTRACT_MANAGE_PREFIX = "manage_contract:"
 CONTRACT_ADD_STAGE_PREFIX = "add_stage_contract:"
 STAGE_EDIT_PREFIX = "edit_stage:"
@@ -173,6 +175,7 @@ def main_menu_markup() -> ReplyKeyboardMarkup:
         [
             [MENU_NEW_CONTRACT, MENU_NEW_STAGE],
             [MENU_CONTRACTS, MENU_UPCOMING],
+            [MENU_INVITE],
         ],
         resize_keyboard=True,
     )
@@ -189,7 +192,47 @@ def cancel_markup() -> ReplyKeyboardMarkup:
 
 
 def is_menu_text(raw: str) -> bool:
-    return raw in {MENU_NEW_CONTRACT, MENU_NEW_STAGE, MENU_CONTRACTS, MENU_UPCOMING, MENU_CANCEL}
+    return raw in {MENU_NEW_CONTRACT, MENU_NEW_STAGE, MENU_CONTRACTS, MENU_UPCOMING, MENU_INVITE, MENU_CANCEL}
+
+
+def viewer_menu_markup() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [MENU_CONTRACTS, MENU_UPCOMING],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def resolve_data_scope(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[int, bool] | None:
+    storage: Storage = context.application.bot_data["storage"]
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat is None or user is None:
+        return None
+    if chat.type != "private":
+        return None
+    owner_chat_id = storage.get_shared_owner(user.id)
+    if owner_chat_id is not None and owner_chat_id != chat.id:
+        return owner_chat_id, False
+    return chat.id, True
+
+
+async def require_owner(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[int, bool] | None:
+    scope = resolve_data_scope(update, context)
+    if scope is None:
+        if update.effective_message is not None:
+            await update.effective_message.reply_text("Используйте бота в личном чате.")
+        return None
+    owner_chat_id, can_edit = scope
+    if not can_edit:
+        if update.effective_message is not None:
+            await update.effective_message.reply_text(
+                "У вас есть только просмотр. Изменять данные может только владелец.",
+                reply_markup=viewer_menu_markup(),
+            )
+        return None
+    return owner_chat_id, can_edit
 
 
 def stage_actions_markup(stage_id: int) -> InlineKeyboardMarkup:
@@ -230,9 +273,28 @@ def contract_manage_actions_markup(contract_id: int) -> InlineKeyboardMarkup:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     storage: Storage = context.application.bot_data["storage"]
     chat = update.effective_chat
-    if chat is None or update.message is None:
+    user = update.effective_user
+    if chat is None or update.message is None or user is None:
         return
     storage.register_chat(chat.id)
+    if context.args and chat.type == "private":
+        token_arg = context.args[0]
+        if token_arg.startswith("view_"):
+            owner_chat_id = storage.consume_invite_token(token_arg.removeprefix("view_"), user.id)
+            if owner_chat_id is not None:
+                await update.message.reply_text(
+                    "Доступ к контрактам выдан. Теперь вы можете смотреть список и ближайшие сроки.",
+                    reply_markup=viewer_menu_markup(),
+                )
+                return
+            await update.message.reply_text("Ссылка недействительна или уже использована.", reply_markup=viewer_menu_markup())
+            return
+
+    scope = resolve_data_scope(update, context)
+    if scope is None:
+        await update.message.reply_text("Используйте бота в личном чате.")
+        return
+    _, can_edit = scope
     await update.message.reply_text(
         "Бот для контрактов готов.\n\n"
         "Команды:\n"
@@ -240,30 +302,51 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/new_stage - добавить этап к контракту\n"
         "/contracts - список контрактов и этапов\n"
         "/upcoming - ближайшие дедлайны\n"
+        "/invite_viewer - дать ссылку на просмотр\n"
         "/delete_contract ID - удалить контракт\n"
         "/delete_stage ID - удалить этап\n"
         "/help - подсказка",
-        reply_markup=main_menu_markup(),
+        reply_markup=main_menu_markup() if can_edit else viewer_menu_markup(),
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
+    scope = resolve_data_scope(update, context)
+    can_edit = bool(scope and scope[1])
     await update.message.reply_text(
         "Формат дат: DD-MM-YYYY\n"
         "Формат суммы: 150000 или 150000.50\n"
-        "Напоминания отправляются автоматически за 14 и 7 дней до окончания контракта или этапа.\n\n"
+        "Напоминания отправляются автоматически за 30, 20, 14, 7, 5, 3, 2 и 1 день до окончания контракта или этапа.\n\n"
         "Типовой сценарий:\n"
         "1. /new_contract\n"
         "2. Бот сам спросит этапы, суммы и сроки\n"
         "3. /upcoming",
+        reply_markup=main_menu_markup() if can_edit else viewer_menu_markup(),
+    )
+
+
+async def invite_viewer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None:
+        return
+    owner_chat_id, _ = owner_scope
+    token = secrets.token_urlsafe(18)
+    storage.create_invite_token(owner_chat_id, token)
+    bot_info = await context.bot.get_me()
+    invite_link = f"https://t.me/{bot_info.username}?start=view_{token}"
+    await update.message.reply_text(
+        "Отправьте эту ссылку человеку, которому хотите дать просмотр:\n"
+        f"{invite_link}",
         reply_markup=main_menu_markup(),
     )
 
 
 async def new_contract(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if update.message is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None:
         return ConversationHandler.END
     context.user_data.clear()
     await update.message.reply_text("Введите название контракта.", reply_markup=cancel_markup())
@@ -352,8 +435,10 @@ async def contract_stage_end_date(update: Update, context: ContextTypes.DEFAULT_
 
 async def contract_stage_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or not update.message.text or update.effective_chat is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text or update.effective_chat is None:
         return CONTRACT_STAGE_AMOUNT
+    owner_chat_id, _ = owner_scope
     raw = update.message.text.strip()
     if is_menu_text(raw):
         await update.message.reply_text("Введите сумму этапа или нажмите Отмена.", reply_markup=cancel_markup())
@@ -382,7 +467,7 @@ async def contract_stage_amount(update: Update, context: ContextTypes.DEFAULT_TY
 
     stage_items = context.user_data["contract_stage_items"]
     contract_id = storage.add_contract(
-        chat_id=update.effective_chat.id,
+        chat_id=owner_chat_id,
         title=context.user_data["contract_title"],
         description=context.user_data["contract_description"],
         end_date=stage_items[-1]["end_date"],
@@ -408,8 +493,10 @@ async def start_stage_add_from_contract(update: Update, context: ContextTypes.DE
     query = update.callback_query
     storage: Storage = context.application.bot_data["storage"]
     chat = update.effective_chat
-    if query is None or chat is None or query.data is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or query is None or chat is None or query.data is None:
         return ConversationHandler.END
+    owner_chat_id, _ = owner_scope
     await query.answer()
     try:
         contract_id = int(query.data.split(":", 1)[1])
@@ -417,7 +504,7 @@ async def start_stage_add_from_contract(update: Update, context: ContextTypes.DE
         await query.edit_message_reply_markup(reply_markup=None)
         return ConversationHandler.END
 
-    contract = storage.get_contract(chat.id, contract_id)
+    contract = storage.get_contract(owner_chat_id, contract_id)
     if contract is None:
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text("Контракт не найден.", reply_markup=main_menu_markup())
@@ -425,7 +512,7 @@ async def start_stage_add_from_contract(update: Update, context: ContextTypes.DE
 
     context.user_data.clear()
     context.user_data["stage_contract_id"] = contract_id
-    stages = storage.list_stages_for_contract(chat.id, contract_id)
+    stages = storage.list_stages_for_contract(owner_chat_id, contract_id)
     await query.message.reply_text(
         f"Добавление этапа для контракта «{contract.title}».\n"
         f"Введите номер этапа. Например, следующий этап обычно {len(stages) + 1}.",
@@ -454,10 +541,12 @@ async def contract_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def new_stage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or update.effective_chat is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or update.effective_chat is None:
         return ConversationHandler.END
+    owner_chat_id, _ = owner_scope
     context.user_data.clear()
-    contracts = storage.list_contracts(update.effective_chat.id)
+    contracts = storage.list_contracts(owner_chat_id)
     if not contracts:
         await update.message.reply_text("Сначала добавьте контракт через /new_contract.", reply_markup=main_menu_markup())
         return ConversationHandler.END
@@ -470,8 +559,10 @@ async def new_stage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def stage_contract_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or not update.message.text or update.effective_chat is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text or update.effective_chat is None:
         return STAGE_CONTRACT_ID
+    owner_chat_id, _ = owner_scope
     raw = update.message.text.strip()
     if raw == MENU_CANCEL:
         return await cancel(update, context)
@@ -481,13 +572,13 @@ async def stage_contract_id(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("Выберите контракт кнопкой или введите его ID числом.")
         return STAGE_CONTRACT_ID
 
-    contract = storage.get_contract(update.effective_chat.id, contract_id)
+    contract = storage.get_contract(owner_chat_id, contract_id)
     if contract is None:
         await update.message.reply_text("Контракт не найден. Проверьте ID.")
         return STAGE_CONTRACT_ID
 
     context.user_data["stage_contract_id"] = contract_id
-    stages = storage.list_stages_for_contract(update.effective_chat.id, contract_id)
+    stages = storage.list_stages_for_contract(owner_chat_id, contract_id)
     await update.message.reply_text(
         f"Введите номер этапа. Например, следующий этап обычно {len(stages) + 1}.",
         reply_markup=cancel_markup(),
@@ -529,8 +620,10 @@ async def stage_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 async def stage_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or not update.message.text or update.effective_chat is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text or update.effective_chat is None:
         return STAGE_END_DATE
+    owner_chat_id, _ = owner_scope
     if is_menu_text(update.message.text.strip()):
         await update.message.reply_text("Введите дату этапа в формате DD-MM-YYYY или нажмите Отмена.", reply_markup=cancel_markup())
         return STAGE_END_DATE
@@ -540,7 +633,7 @@ async def stage_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Не удалось распознать дату. Нужен формат DD-MM-YYYY.")
         return STAGE_END_DATE
 
-    contract = storage.get_contract(update.effective_chat.id, context.user_data["stage_contract_id"])
+    contract = storage.get_contract(owner_chat_id, context.user_data["stage_contract_id"])
     if contract is None:
         context.user_data.clear()
         await update.message.reply_text("Контракт больше не найден. Повторите через /new_stage.")
@@ -557,7 +650,8 @@ async def stage_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def stage_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or not update.message.text:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text:
         return STAGE_AMOUNT
     if is_menu_text(update.message.text.strip()):
         await update.message.reply_text("Введите сумму этапа или нажмите Отмена.", reply_markup=cancel_markup())
@@ -584,8 +678,10 @@ async def edit_stage_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     storage: Storage = context.application.bot_data["storage"]
     chat = update.effective_chat
-    if query is None or chat is None or query.data is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or query is None or chat is None or query.data is None:
         return ConversationHandler.END
+    owner_chat_id, _ = owner_scope
     await query.answer()
     try:
         stage_id = int(query.data.split(":", 1)[1])
@@ -593,7 +689,7 @@ async def edit_stage_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_reply_markup(reply_markup=None)
         return ConversationHandler.END
 
-    stage = storage.get_stage(chat.id, stage_id)
+    stage = storage.get_stage(owner_chat_id, stage_id)
     if stage is None:
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text("Этап не найден.", reply_markup=main_menu_markup())
@@ -630,8 +726,10 @@ async def edit_stage_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def edit_stage_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or not update.message.text or update.effective_chat is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text or update.effective_chat is None:
         return EDIT_STAGE_END_DATE
+    owner_chat_id, _ = owner_scope
     raw = update.message.text.strip()
     if is_menu_text(raw):
         await update.message.reply_text("Введите дату, '.' или нажмите Отмена.", reply_markup=cancel_markup())
@@ -642,7 +740,7 @@ async def edit_stage_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE
         except ValueError:
             await update.message.reply_text("Не удалось распознать дату. Нужен формат DD-MM-YYYY.")
             return EDIT_STAGE_END_DATE
-        contract = storage.get_contract(update.effective_chat.id, context.user_data["edit_contract_id"])
+        contract = storage.get_contract(owner_chat_id, context.user_data["edit_contract_id"])
         if contract is None:
             context.user_data.clear()
             await update.message.reply_text("Контракт больше не найден.", reply_markup=main_menu_markup())
@@ -659,8 +757,10 @@ async def edit_stage_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def edit_stage_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or not update.message.text or update.effective_chat is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text or update.effective_chat is None:
         return EDIT_STAGE_AMOUNT
+    owner_chat_id, _ = owner_scope
     raw = update.message.text.strip()
     if is_menu_text(raw):
         await update.message.reply_text("Введите сумму, '.' или нажмите Отмена.", reply_markup=cancel_markup())
@@ -673,7 +773,7 @@ async def edit_stage_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return EDIT_STAGE_AMOUNT
 
     updated = storage.update_stage(
-        chat_id=update.effective_chat.id,
+        chat_id=owner_chat_id,
         stage_id=context.user_data["edit_stage_id"],
         name=context.user_data["edit_stage_name"],
         notes=context.user_data["edit_stage_notes"],
@@ -699,8 +799,10 @@ async def delete_stage_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     storage: Storage = context.application.bot_data["storage"]
     chat = update.effective_chat
-    if query is None or chat is None or query.data is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or query is None or chat is None or query.data is None:
         return
+    owner_chat_id, _ = owner_scope
     await query.answer()
     try:
         stage_id = int(query.data.split(":", 1)[1])
@@ -708,7 +810,7 @@ async def delete_stage_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_reply_markup(reply_markup=None)
         return
 
-    deleted = storage.delete_stage(chat.id, stage_id)
+    deleted = storage.delete_stage(owner_chat_id, stage_id)
     await query.edit_message_reply_markup(reply_markup=None)
     await query.message.reply_text(
         "Этап удален." if deleted else "Этап не найден.",
@@ -720,15 +822,17 @@ async def show_stage_status_menu(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     storage: Storage = context.application.bot_data["storage"]
     chat = update.effective_chat
-    if query is None or chat is None or query.data is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or query is None or chat is None or query.data is None:
         return
+    owner_chat_id, _ = owner_scope
     await query.answer()
     try:
         stage_id = int(query.data.split(":", 1)[1])
     except (IndexError, ValueError):
         await query.edit_message_reply_markup(reply_markup=None)
         return
-    stage = storage.get_stage(chat.id, stage_id)
+    stage = storage.get_stage(owner_chat_id, stage_id)
     if stage is None:
         await query.message.reply_text("Этап не найден.", reply_markup=main_menu_markup())
         return
@@ -742,8 +846,10 @@ async def set_stage_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     storage: Storage = context.application.bot_data["storage"]
     chat = update.effective_chat
-    if query is None or chat is None or query.data is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or query is None or chat is None or query.data is None:
         return
+    owner_chat_id, _ = owner_scope
     await query.answer()
     payload = query.data.removeprefix(STAGE_STATUS_SET_PREFIX)
     try:
@@ -755,7 +861,7 @@ async def set_stage_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if status not in STAGE_STATUSES:
         await query.edit_message_reply_markup(reply_markup=None)
         return
-    updated = storage.update_stage_status(chat.id, stage_id, status)
+    updated = storage.update_stage_status(owner_chat_id, stage_id, status)
     await query.edit_message_reply_markup(reply_markup=None)
     await query.message.reply_text(
         f"Статус обновлен: {status_emoji(status)} {status_label(status)}" if updated else "Этап не найден.",
@@ -767,8 +873,10 @@ async def contract_manage_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     storage: Storage = context.application.bot_data["storage"]
     chat = update.effective_chat
-    if query is None or chat is None or query.data is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or query is None or chat is None or query.data is None:
         return
+    owner_chat_id, _ = owner_scope
     await query.answer()
     try:
         contract_id = int(query.data.split(":", 1)[1])
@@ -776,12 +884,12 @@ async def contract_manage_menu(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_reply_markup(reply_markup=None)
         return
 
-    contract = storage.get_contract(chat.id, contract_id)
+    contract = storage.get_contract(owner_chat_id, contract_id)
     if contract is None:
         await query.message.reply_text("Контракт не найден.", reply_markup=main_menu_markup())
         return
 
-    stages = storage.list_stages_for_contract(chat.id, contract_id)
+    stages = storage.list_stages_for_contract(owner_chat_id, contract_id)
     await query.message.reply_text(
         f"Управление этапами контракта «{contract.title}»:",
         reply_markup=contract_manage_actions_markup(contract_id),
@@ -799,28 +907,32 @@ async def contract_manage_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def list_contracts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or update.effective_chat is None:
+    scope = resolve_data_scope(update, context)
+    if scope is None or update.message is None or update.effective_chat is None:
         return
+    owner_chat_id, can_edit = scope
 
-    contracts = storage.list_contracts(update.effective_chat.id)
+    contracts = storage.list_contracts(owner_chat_id)
     if not contracts:
-        await update.message.reply_text("Контрактов пока нет.", reply_markup=main_menu_markup())
+        await update.message.reply_text("Контрактов пока нет.", reply_markup=main_menu_markup() if can_edit else viewer_menu_markup())
         return
 
     for contract in contracts:
-        stages = storage.list_stages_for_contract(update.effective_chat.id, contract.id)
+        stages = storage.list_stages_for_contract(owner_chat_id, contract.id)
         await update.message.reply_text(
             render_contract_with_stages(contract, stages),
             parse_mode=ParseMode.HTML,
-            reply_markup=contract_actions_markup(contract.id),
+            reply_markup=contract_actions_markup(contract.id) if can_edit else None,
         )
-    await update.message.reply_text("Список показан.", reply_markup=main_menu_markup())
+    await update.message.reply_text("Список показан.", reply_markup=main_menu_markup() if can_edit else viewer_menu_markup())
 
 
 async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or update.effective_chat is None:
+    scope = resolve_data_scope(update, context)
+    if scope is None or update.message is None or update.effective_chat is None:
         return
+    owner_chat_id, can_edit = scope
     days = 30
     if context.args:
         try:
@@ -829,14 +941,14 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("Если указывать число, то в формате /upcoming 30")
             return
 
-    items = storage.upcoming_items(update.effective_chat.id, within_days=days)
+    items = storage.upcoming_items(owner_chat_id, within_days=days)
     if not items:
-        nearest = storage.nearest_item(update.effective_chat.id)
+        nearest = storage.nearest_item(owner_chat_id)
         if nearest is None:
-            await update.message.reply_text(f"На ближайшие {days} дней дедлайнов нет.", reply_markup=main_menu_markup())
+            await update.message.reply_text(f"На ближайшие {days} дней дедлайнов нет.", reply_markup=main_menu_markup() if can_edit else viewer_menu_markup())
             return
         if nearest["entity_type"] == "stage":
-            stage = storage.get_stage(update.effective_chat.id, nearest["entity_id"])
+            stage = storage.get_stage(owner_chat_id, nearest["entity_id"])
             if stage is not None:
                 details = (
                     "Самый ближайший известный дедлайн:\n"
@@ -855,10 +967,10 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     f"Осталось: {nearest['days_left']} дн."
                 )
         else:
-            contract = storage.get_contract(update.effective_chat.id, nearest["entity_id"])
+            contract = storage.get_contract(owner_chat_id, nearest["entity_id"])
             contract_amount = 0.0
             if contract is not None:
-                contract_amount = sum(stage.amount for stage in storage.list_stages_for_contract(update.effective_chat.id, contract.id))
+                contract_amount = sum(stage.amount for stage in storage.list_stages_for_contract(owner_chat_id, contract.id))
             details = (
                 "Самый ближайший известный дедлайн:\n"
                 f"Контракт: {nearest['title']}\n"
@@ -870,7 +982,7 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             f"На ближайшие {days} дней дедлайнов нет.\n"
             f"{details}",
-            reply_markup=main_menu_markup(),
+            reply_markup=main_menu_markup() if can_edit else viewer_menu_markup(),
         )
         return
 
@@ -879,19 +991,21 @@ async def upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         kind = "Контракт" if item["entity_type"] == "contract" else "Этап"
         suffix = ""
         if item["entity_type"] == "stage":
-            stage = storage.get_stage(update.effective_chat.id, item["entity_id"])
+            stage = storage.get_stage(owner_chat_id, item["entity_id"])
             if stage is not None:
                 suffix = f" | {status_emoji(stage.status)} {status_label(stage.status)} | сумма {format_amount(stage.amount)}"
         lines.append(
             f"{kind} #{item['entity_id']}: {item['title']} | {format_date(item['end_date'])} | {format_due(item['days_left'])}{suffix}"
         )
-    await update.message.reply_text("\n".join(lines), reply_markup=main_menu_markup())
+    await update.message.reply_text("\n".join(lines), reply_markup=main_menu_markup() if can_edit else viewer_menu_markup())
 
 
 async def delete_contract(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or update.effective_chat is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or update.effective_chat is None:
         return
+    owner_chat_id, _ = owner_scope
     if not context.args:
         await update.message.reply_text("Формат: /delete_contract ID", reply_markup=main_menu_markup())
         return
@@ -900,7 +1014,7 @@ async def delete_contract(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except ValueError:
         await update.message.reply_text("ID должен быть числом.")
         return
-    deleted = storage.delete_contract(update.effective_chat.id, contract_id)
+    deleted = storage.delete_contract(owner_chat_id, contract_id)
     await update.message.reply_text(
         "Контракт удален." if deleted else "Контракт не найден.",
         reply_markup=main_menu_markup(),
@@ -909,8 +1023,10 @@ async def delete_contract(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def delete_stage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     storage: Storage = context.application.bot_data["storage"]
-    if update.message is None or update.effective_chat is None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or update.effective_chat is None:
         return
+    owner_chat_id, _ = owner_scope
     if not context.args:
         await update.message.reply_text("Формат: /delete_stage ID", reply_markup=main_menu_markup())
         return
@@ -919,7 +1035,7 @@ async def delete_stage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except ValueError:
         await update.message.reply_text("ID должен быть числом.")
         return
-    deleted = storage.delete_stage(update.effective_chat.id, stage_id)
+    deleted = storage.delete_stage(owner_chat_id, stage_id)
     await update.message.reply_text(
         "Этап удален." if deleted else "Этап не найден.",
         reply_markup=main_menu_markup(),
@@ -940,6 +1056,10 @@ async def menu_contracts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def menu_upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await upcoming(update, context)
+
+
+async def menu_invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await invite_viewer(update, context)
 
 
 async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1026,6 +1146,7 @@ def build_application() -> Application:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("invite_viewer", invite_viewer))
     app.add_handler(CommandHandler("contracts", list_contracts))
     app.add_handler(CommandHandler("upcoming", upcoming))
     app.add_handler(CommandHandler("delete_contract", delete_contract))
@@ -1037,6 +1158,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(delete_stage_callback, pattern=f"^{STAGE_DELETE_PREFIX}"))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_CONTRACTS}$"), menu_contracts))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_UPCOMING}$"), menu_upcoming))
+    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_INVITE}$"), menu_invite))
     app.add_handler(contract_conv)
     app.add_handler(stage_conv)
     app.add_handler(edit_stage_conv)

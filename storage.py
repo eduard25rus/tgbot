@@ -94,6 +94,19 @@ class Storage:
                     created_at TEXT NOT NULL,
                     UNIQUE(chat_id, entity_type, entity_id, days_before, target_date)
                 );
+
+                CREATE TABLE IF NOT EXISTS access_grants (
+                    owner_chat_id INTEGER NOT NULL,
+                    viewer_user_id INTEGER NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (owner_chat_id, viewer_user_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS invite_tokens (
+                    token TEXT PRIMARY KEY,
+                    owner_chat_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             columns = {
@@ -118,6 +131,51 @@ class Storage:
                 """,
                 (chat_id, datetime.utcnow().isoformat()),
             )
+
+    def create_invite_token(self, owner_chat_id: int, token: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO invite_tokens (token, owner_chat_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (token, owner_chat_id, datetime.utcnow().isoformat()),
+            )
+
+    def consume_invite_token(self, token: str, viewer_user_id: int) -> int | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT owner_chat_id
+                FROM invite_tokens
+                WHERE token = ?
+                """,
+                (token,),
+            ).fetchone()
+            if row is None:
+                return None
+            owner_chat_id = int(row["owner_chat_id"])
+            conn.execute("DELETE FROM invite_tokens WHERE token = ?", (token,))
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO access_grants (owner_chat_id, viewer_user_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (owner_chat_id, viewer_user_id, datetime.utcnow().isoformat()),
+            )
+            return owner_chat_id
+
+    def get_shared_owner(self, viewer_user_id: int) -> int | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT owner_chat_id
+                FROM access_grants
+                WHERE viewer_user_id = ?
+                """,
+                (viewer_user_id,),
+            ).fetchone()
+        return int(row["owner_chat_id"]) if row else None
 
     def add_contract(self, chat_id: int, title: str, description: str, end_date: date) -> int:
         with self.connection() as conn:
