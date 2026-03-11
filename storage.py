@@ -177,6 +177,19 @@ class Storage:
             ).fetchone()
         return int(row["owner_chat_id"]) if row else None
 
+    def viewers_for_owner(self, owner_chat_id: int) -> list[int]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT viewer_user_id
+                FROM access_grants
+                WHERE owner_chat_id = ?
+                ORDER BY viewer_user_id ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [int(row["viewer_user_id"]) for row in rows]
+
     def add_contract(self, chat_id: int, title: str, description: str, end_date: date) -> int:
         with self.connection() as conn:
             conn.execute(

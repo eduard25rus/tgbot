@@ -1066,15 +1066,6 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     storage: Storage = context.application.bot_data["storage"]
     candidates = storage.reminder_candidates(REMINDER_DAYS)
     for item in candidates:
-        if storage.reminder_already_sent(
-            item["chat_id"],
-            item["entity_type"],
-            item["entity_id"],
-            item["days_left"],
-            item["end_date"],
-        ):
-            continue
-
         kind = "контракт" if item["entity_type"] == "contract" else "этап"
         text = (
             f"Напоминание: скоро заканчивается {kind}.\n"
@@ -1082,14 +1073,27 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Дата окончания: {format_date(item['end_date'])}\n"
             f"Осталось: {item['days_left']} дн."
         )
-        await context.bot.send_message(chat_id=item["chat_id"], text=text)
-        storage.mark_reminder_sent(
-            item["chat_id"],
-            item["entity_type"],
-            item["entity_id"],
-            item["days_left"],
-            item["end_date"],
-        )
+        recipients = [item["chat_id"], *storage.viewers_for_owner(item["chat_id"])]
+        for recipient_chat_id in recipients:
+            if storage.reminder_already_sent(
+                recipient_chat_id,
+                item["entity_type"],
+                item["entity_id"],
+                item["days_left"],
+                item["end_date"],
+            ):
+                continue
+            try:
+                await context.bot.send_message(chat_id=recipient_chat_id, text=text)
+                storage.mark_reminder_sent(
+                    recipient_chat_id,
+                    item["entity_type"],
+                    item["entity_id"],
+                    item["days_left"],
+                    item["end_date"],
+                )
+            except Exception:
+                LOGGER.exception("Failed to send reminder to chat_id=%s", recipient_chat_id)
 
 
 def build_application() -> Application:
