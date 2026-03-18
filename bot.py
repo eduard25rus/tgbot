@@ -75,8 +75,10 @@ MENU_BROADCAST = "Сообщение всем"
 MENU_CONTRACTS = "Показать контракты"
 MENU_UPCOMING = "Ближайшие сроки"
 MENU_CANCEL = "Отмена"
-MENU_INVITE = "Дать доступ"
-MENU_ACCESS_LIST = "Список доступов"
+MENU_ACCESS = "Доступы"
+MENU_ACCESS_ADD = "Добавить доступ"
+MENU_ACCESS_LIST = "Показать список"
+MENU_BACK = "Назад"
 CONTRACT_MANAGE_PREFIX = "manage_contract:"
 CONTRACT_ADD_STAGE_PREFIX = "add_stage_contract:"
 CONTRACT_PAYMENTS_PREFIX = "contract_payments:"
@@ -618,11 +620,20 @@ def render_stage(stage) -> str:
 def main_menu_markup() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [MENU_NEW_CONTRACT, MENU_NEW_STAGE],
-            [MENU_NEW_PAYMENT, MENU_CONTRACTS],
-            [MENU_UPCOMING, MENU_EXPORT_EXCEL],
-            [MENU_INVITE, MENU_ACCESS_LIST],
+            [MENU_NEW_CONTRACT, MENU_NEW_PAYMENT],
+            [MENU_CONTRACTS, MENU_UPCOMING],
+            [MENU_EXPORT_EXCEL, MENU_ACCESS],
             [MENU_BROADCAST],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def access_menu_markup() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [MENU_ACCESS_ADD, MENU_ACCESS_LIST],
+            [MENU_BACK],
         ],
         resize_keyboard=True,
     )
@@ -647,8 +658,10 @@ def is_menu_text(raw: str) -> bool:
         MENU_BROADCAST,
         MENU_CONTRACTS,
         MENU_UPCOMING,
-        MENU_INVITE,
+        MENU_ACCESS,
+        MENU_ACCESS_ADD,
         MENU_ACCESS_LIST,
+        MENU_BACK,
         MENU_CANCEL,
     }
 
@@ -791,9 +804,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/new_payment - добавить оплату по контракту\n"
         "/export_excel - выгрузить Excel-отчет\n"
         "/broadcast_access - отправить сообщение всем, у кого есть доступ\n"
+        "/invite_viewer - дать ссылку на просмотр\n"
+        "/access_list - показать выданные доступы\n"
         "/contracts - список контрактов и этапов\n"
         "/upcoming - ближайшие дедлайны\n"
-        "/invite_viewer - дать ссылку на просмотр\n"
         "/delete_contract ID - удалить контракт\n"
         "/delete_stage ID - удалить этап\n"
         "/help - подсказка",
@@ -1935,8 +1949,28 @@ async def menu_export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await export_excel(update, context)
 
 
+async def menu_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None:
+        return
+    await update.message.reply_text(
+        "Раздел доступа. Здесь можно выдать новый доступ или посмотреть текущие.",
+        reply_markup=access_menu_markup(),
+    )
+
+
+async def menu_access_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await invite_viewer(update, context)
+
+
 async def menu_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await broadcast_access(update, context)
+
+
+async def menu_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message is None:
+        return
+    await update.message.reply_text("Главное меню.", reply_markup=main_menu_markup())
 
 
 async def menu_upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2090,11 +2124,13 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(set_stage_status, pattern=f"^{STAGE_STATUS_SET_PREFIX}"))
     app.add_handler(CallbackQueryHandler(delete_stage_callback, pattern=f"^{STAGE_DELETE_PREFIX}"))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_CONTRACTS}$"), menu_contracts))
+    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_ACCESS}$"), menu_access))
+    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_ACCESS_ADD}$"), menu_access_add))
+    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_ACCESS_LIST}$"), menu_access_list))
+    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_BACK}$"), menu_back))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_BROADCAST}$"), menu_broadcast))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_EXPORT_EXCEL}$"), menu_export_excel))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_UPCOMING}$"), menu_upcoming))
-    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_INVITE}$"), menu_invite))
-    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_ACCESS_LIST}$"), menu_access_list))
     app.add_handler(contract_conv)
     app.add_handler(stage_conv)
     app.add_handler(payment_conv)
