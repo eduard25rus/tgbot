@@ -908,26 +908,37 @@ async def broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if is_menu_text(raw):
         await update.message.reply_text("Введите текст сообщения или нажмите Отмена.", reply_markup=cancel_markup())
         return BROADCAST_TEXT
-    viewers = storage.viewers_for_owner(owner_chat_id)
-    if not viewers:
+    viewer_grants = storage.viewer_grants_for_owner(owner_chat_id)
+    if not viewer_grants:
         await update.message.reply_text("Сейчас нет людей, которым выдали доступ.", reply_markup=main_menu_markup())
         return ConversationHandler.END
 
-    sent_count = 0
-    for viewer_chat_id in viewers:
+    sent_to: list[str] = []
+    failed_to: list[str] = []
+    for grant in viewer_grants:
+        viewer_chat_id = grant["viewer_user_id"]
+        display_name = grant["viewer_name"] or (f"@{grant['viewer_username']}" if grant["viewer_username"] else str(viewer_chat_id))
         try:
             await context.bot.send_message(
                 chat_id=viewer_chat_id,
                 text=f"Сообщение от владельца контрактов:\n\n{raw}",
             )
-            sent_count += 1
+            sent_to.append(display_name)
         except Exception:
             LOGGER.exception("Failed to broadcast message to chat_id=%s", viewer_chat_id)
+            failed_to.append(display_name)
 
-    await update.message.reply_text(
-        f"Сообщение отправлено {sent_count} получателям из {len(viewers)}.",
-        reply_markup=main_menu_markup(),
-    )
+    lines = [f"Сообщение отправлено {len(sent_to)} получателям из {len(viewer_grants)}."]
+    if sent_to:
+        lines.append("")
+        lines.append("Получили:")
+        lines.extend(f"- {name}" for name in sent_to)
+    if failed_to:
+        lines.append("")
+        lines.append("Не получили:")
+        lines.extend(f"- {name}" for name in failed_to)
+
+    await update.message.reply_text("\n".join(lines), reply_markup=main_menu_markup())
     return ConversationHandler.END
 
 
