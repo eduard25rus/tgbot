@@ -158,11 +158,12 @@ def render_contract_with_stages(contract, stages) -> str:
     total_amount = sum(stage.amount for stage in stages)
     paid_amount = getattr(contract, "paid_amount", 0.0)
     debt_amount = max(total_amount - paid_amount, 0.0)
+    paid_percent = (paid_amount / total_amount * 100) if total_amount > 0 else 0.0
     lines = [
         f"Контракт #{contract.id}: <b>{escape(contract.title)}</b>",
         f"Общий дедлайн: {format_date(contract.end_date)}",
         f"Общая сумма: {format_amount(total_amount)}",
-        f"Оплачено: {format_amount(paid_amount)} из {format_amount(total_amount)}",
+        f"Оплачено: {format_amount(paid_amount)} из {format_amount(total_amount)} ({format_percent(paid_percent)})",
         f"Долг: {format_amount(debt_amount)}",
     ]
     if contract.description:
