@@ -10,7 +10,9 @@ from tempfile import NamedTemporaryFile
 
 from dotenv import load_dotenv
 from openpyxl import Workbook
-from openpyxl.styles import Font
+from openpyxl.chart import DoughnutChart, Reference
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -151,10 +153,56 @@ def status_label(status: str) -> str:
     return STAGE_STATUSES.get(status, STAGE_STATUSES["not_started"])[1]
 
 
+def safe_sheet_title(title: str, used_titles: set[str]) -> str:
+    base = "".join(char for char in title if char not in "[]:*?/\\") or "Контракт"
+    base = base[:31]
+    candidate = base
+    index = 2
+    while candidate in used_titles:
+        suffix = f" {index}"
+        candidate = f"{base[:31 - len(suffix)]}{suffix}"
+        index += 1
+    used_titles.add(candidate)
+    return candidate
+
+
+def apply_title(worksheet, cell_range: str, value: str, fill_color: str) -> None:
+    worksheet.merge_cells(cell_range)
+    cell = worksheet[cell_range.split(":")[0]]
+    cell.value = value
+    cell.font = Font(size=14, bold=True, color="FFFFFF")
+    cell.fill = PatternFill("solid", fgColor=fill_color)
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+
+def style_header_row(worksheet, row_index: int, fill_color: str) -> None:
+    for cell in worksheet[row_index]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor=fill_color)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+
+def style_metric_card(label_cell, value_cell, fill_color: str) -> None:
+    border = Border(
+        left=Side(style="thin", color="D9E2F3"),
+        right=Side(style="thin", color="D9E2F3"),
+        top=Side(style="thin", color="D9E2F3"),
+        bottom=Side(style="thin", color="D9E2F3"),
+    )
+    label_cell.font = Font(bold=True, color="FFFFFF")
+    label_cell.fill = PatternFill("solid", fgColor=fill_color)
+    label_cell.alignment = Alignment(horizontal="center")
+    label_cell.border = border
+    value_cell.font = Font(size=12, bold=True)
+    value_cell.fill = PatternFill("solid", fgColor="F8FBFF")
+    value_cell.alignment = Alignment(horizontal="center")
+    value_cell.border = border
+
+
 def autosize_worksheet(worksheet) -> None:
-    for column_cells in worksheet.columns:
+    for column_index, column_cells in enumerate(worksheet.columns, start=1):
         max_length = 0
-        column_letter = column_cells[0].column_letter
+        column_letter = get_column_letter(column_index)
         for cell in column_cells:
             value = "" if cell.value is None else str(cell.value)
             max_length = max(max_length, len(value))
@@ -176,6 +224,8 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
     bold_font = Font(bold=True)
     money_format = "#,##0.00"
     percent_format = "0.0%"
+    date_format = "DD-MM-YYYY"
+    used_sheet_titles = {"Сводка", "Контракты", "Этапы", "Оплаты"}
 
     total_contract_amount = 0.0
     total_paid_amount = 0.0
@@ -206,6 +256,8 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
                 "debt_amount": debt_amount,
                 "stage_count": len(stages),
                 "payment_count": len(payments),
+                "stages": stages,
+                "payments": payments,
             }
         )
 
@@ -236,6 +288,7 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
     total_paid_ratio = (total_paid_amount / total_contract_amount) if total_contract_amount > 0 else 0.0
     total_debt_ratio = (total_debt_amount / total_contract_amount) if total_contract_amount > 0 else 0.0
 
+    apply_title(summary_sheet, "A1:F1", "Сводка по контрактам", "1F4E78")
     summary_rows = [
         ("Дата выгрузки", date.today()),
         ("Количество контрактов", len(contracts)),
@@ -245,14 +298,56 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
         ("Долг всего", total_debt_amount),
         ("Долг, %", total_debt_ratio),
     ]
-    for index, (label, value) in enumerate(summary_rows, start=1):
+    for index, (label, value) in enumerate(summary_rows, start=3):
         summary_sheet.cell(row=index, column=1, value=label).font = bold_font
         summary_sheet.cell(row=index, column=2, value=value)
-    for row_index in (3, 4, 6):
+        summary_sheet.cell(row=index, column=1).fill = PatternFill("solid", fgColor="DCE6F1")
+    summary_sheet["D3"] = "Оплачено"
+    summary_sheet["D4"] = total_paid_amount
+    summary_sheet["E3"] = "Оплачено, %"
+    summary_sheet["E4"] = total_paid_ratio
+    summary_sheet["F3"] = "Долг"
+    summary_sheet["F4"] = total_debt_amount
+    summary_sheet["G3"] = "Долг, %"
+    summary_sheet["G4"] = total_debt_ratio
+    for cell_ref, fill_color in (("D3", "2E8B57"), ("E3", "2E8B57"), ("F3", "C0504D"), ("G3", "C0504D")):
+        summary_sheet[cell_ref].font = Font(bold=True, color="FFFFFF")
+        summary_sheet[cell_ref].fill = PatternFill("solid", fgColor=fill_color)
+        summary_sheet[cell_ref].alignment = Alignment(horizontal="center")
+    for cell_ref in ("D4", "E4", "F4", "G4"):
+        summary_sheet[cell_ref].font = Font(size=12, bold=True)
+        summary_sheet[cell_ref].alignment = Alignment(horizontal="center")
+        summary_sheet[cell_ref].fill = PatternFill("solid", fgColor="F8FBFF")
+    for row_index in (5, 6, 8):
         summary_sheet.cell(row=row_index, column=2).number_format = money_format
-    for row_index in (5, 7):
+    summary_sheet.cell(row=3, column=2).number_format = date_format
+    for row_index in (7, 9):
         summary_sheet.cell(row=row_index, column=2).number_format = percent_format
+    summary_sheet["D4"].number_format = money_format
+    summary_sheet["E4"].number_format = percent_format
+    summary_sheet["F4"].number_format = money_format
+    summary_sheet["G4"].number_format = percent_format
 
+    summary_sheet["I3"] = "Статус"
+    summary_sheet["J3"] = "Сумма"
+    summary_sheet["I4"] = "Оплачено"
+    summary_sheet["I5"] = "Долг"
+    summary_sheet["J4"] = total_paid_amount
+    summary_sheet["J5"] = total_debt_amount
+    summary_sheet["J4"].number_format = money_format
+    summary_sheet["J5"].number_format = money_format
+    chart = DoughnutChart()
+    chart.title = "Оплата vs долг"
+    chart.holeSize = 58
+    labels = Reference(summary_sheet, min_col=9, min_row=4, max_row=5)
+    data = Reference(summary_sheet, min_col=10, min_row=3, max_row=5)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(labels)
+    chart.height = 7
+    chart.width = 9
+    summary_sheet.add_chart(chart, "I7")
+
+    apply_title(contracts_sheet, "A1:J1", "Сводная таблица контрактов", "264653")
     contracts_sheet.append(
         [
             "ID контракта",
@@ -267,8 +362,7 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
             "Кол-во оплат",
         ]
     )
-    for cell in contracts_sheet[1]:
-        cell.font = bold_font
+    style_header_row(contracts_sheet, 2, "264653")
     for row in contract_rows:
         contracts_sheet.append(
             [
@@ -284,12 +378,13 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
                 row["payment_count"],
             ]
         )
-    for row in contracts_sheet.iter_rows(min_row=2, max_row=contracts_sheet.max_row):
+    for row in contracts_sheet.iter_rows(min_row=3, max_row=contracts_sheet.max_row):
         row[4].number_format = money_format
         row[5].number_format = money_format
         row[6].number_format = percent_format
         row[7].number_format = money_format
 
+    apply_title(stages_sheet, "A1:G1", "Все этапы", "8A5A44")
     stages_sheet.append(
         [
             "ID контракта",
@@ -301,8 +396,7 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
             "Примечание",
         ]
     )
-    for cell in stages_sheet[1]:
-        cell.font = bold_font
+    style_header_row(stages_sheet, 2, "8A5A44")
     for row in stage_rows:
         stages_sheet.append(
             [
@@ -315,9 +409,10 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
                 row["notes"],
             ]
         )
-    for row in stages_sheet.iter_rows(min_row=2, max_row=stages_sheet.max_row):
+    for row in stages_sheet.iter_rows(min_row=3, max_row=stages_sheet.max_row):
         row[5].number_format = money_format
 
+    apply_title(payments_sheet, "A1:D1", "Все оплаты", "2A9D8F")
     payments_sheet.append(
         [
             "ID контракта",
@@ -326,8 +421,7 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
             "Сумма оплаты",
         ]
     )
-    for cell in payments_sheet[1]:
-        cell.font = bold_font
+    style_header_row(payments_sheet, 2, "2A9D8F")
     for row in payment_rows:
         payments_sheet.append(
             [
@@ -337,12 +431,99 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
                 row["amount"],
             ]
         )
-    for row in payments_sheet.iter_rows(min_row=2, max_row=payments_sheet.max_row):
+    for row in payments_sheet.iter_rows(min_row=3, max_row=payments_sheet.max_row):
         row[3].number_format = money_format
+
+    for contract_row in contract_rows:
+        sheet_title = safe_sheet_title(contract_row["title"], used_sheet_titles)
+        contract_sheet = workbook.create_sheet(sheet_title)
+        apply_title(contract_sheet, "A1:H1", f"Дашборд: {contract_row['title']}", "0B6E4F")
+        contract_sheet["A2"] = "Описание"
+        contract_sheet["B2"] = contract_row["description"] or "-"
+        contract_sheet["E2"] = "Дедлайн"
+        contract_sheet["F2"] = contract_row["deadline"]
+        contract_sheet["F2"].number_format = date_format
+        contract_sheet["A4"] = "Сумма контракта"
+        contract_sheet["B4"] = contract_row["contract_amount"]
+        contract_sheet["C4"] = "Оплачено"
+        contract_sheet["D4"] = contract_row["paid_amount"]
+        contract_sheet["E4"] = "Оплачено, %"
+        contract_sheet["F4"] = contract_row["paid_ratio"]
+        contract_sheet["G4"] = "Долг"
+        contract_sheet["H4"] = contract_row["debt_amount"]
+        contract_sheet["I4"] = "Этапов"
+        contract_sheet["J4"] = contract_row["stage_count"]
+        contract_sheet["K4"] = "Оплат"
+        contract_sheet["L4"] = contract_row["payment_count"]
+        for pair in (("A4", "B4"), ("C4", "D4"), ("E4", "F4"), ("G4", "H4"), ("I4", "J4"), ("K4", "L4")):
+            style_metric_card(contract_sheet[pair[0]], contract_sheet[pair[1]], "0B6E4F")
+        contract_sheet["B4"].number_format = money_format
+        contract_sheet["D4"].number_format = money_format
+        contract_sheet["F4"].number_format = percent_format
+        contract_sheet["H4"].number_format = money_format
+
+        contract_sheet["N2"] = "Статус"
+        contract_sheet["O2"] = "Сумма"
+        contract_sheet["N3"] = "Оплачено"
+        contract_sheet["N4"] = "Долг"
+        contract_sheet["O3"] = contract_row["paid_amount"]
+        contract_sheet["O4"] = contract_row["debt_amount"]
+        contract_sheet["O3"].number_format = money_format
+        contract_sheet["O4"].number_format = money_format
+        contract_chart = DoughnutChart()
+        contract_chart.title = "Оплата по контракту"
+        contract_chart.holeSize = 62
+        chart_labels = Reference(contract_sheet, min_col=14, min_row=3, max_row=4)
+        chart_data = Reference(contract_sheet, min_col=15, min_row=2, max_row=4)
+        contract_chart.add_data(chart_data, titles_from_data=True)
+        contract_chart.set_categories(chart_labels)
+        contract_chart.height = 6
+        contract_chart.width = 8
+        contract_sheet.add_chart(contract_chart, "N6")
+
+        apply_title(contract_sheet, "A7:G7", "Этапы контракта", "8A5A44")
+        contract_sheet.append(
+            ["Этап", "Статус", "Дедлайн", "Сумма", "Примечание", "", ""]
+        )
+        style_header_row(contract_sheet, 8, "8A5A44")
+        for stage in contract_row["stages"]:
+            contract_sheet.append(
+                [
+                    stage.name,
+                    status_label(stage.status),
+                    stage.end_date,
+                    stage.amount,
+                    stage.notes,
+                    "",
+                    "",
+                ]
+            )
+        stage_start_row = 9
+        for row in contract_sheet.iter_rows(min_row=stage_start_row, max_row=contract_sheet.max_row):
+            if row[0].value is None:
+                break
+            row[2].number_format = date_format
+            row[3].number_format = money_format
+
+        payments_title_row = contract_sheet.max_row + 2
+        apply_title(contract_sheet, f"A{payments_title_row}:D{payments_title_row}", "Оплаты по контракту", "2A9D8F")
+        payment_header_row = payments_title_row + 1
+        contract_sheet.append(["Дата оплаты", "Сумма", "", ""])
+        style_header_row(contract_sheet, payment_header_row, "2A9D8F")
+        for payment in contract_row["payments"]:
+            contract_sheet.append([payment.payment_date, payment.amount, "", ""])
+        for row in contract_sheet.iter_rows(min_row=payment_header_row + 1, max_row=contract_sheet.max_row):
+            if row[0].value is None:
+                break
+            row[0].number_format = date_format
+            row[1].number_format = money_format
 
     for worksheet in (summary_sheet, contracts_sheet, stages_sheet, payments_sheet):
         autosize_worksheet(worksheet)
-        worksheet.freeze_panes = "A2"
+        worksheet.freeze_panes = "A3"
+    for worksheet in workbook.worksheets[4:]:
+        autosize_worksheet(worksheet)
+        worksheet.freeze_panes = "A8"
 
     report_file = NamedTemporaryFile(prefix="contracts_report_", suffix=".xlsx", delete=False)
     report_path = Path(report_file.name)
