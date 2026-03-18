@@ -77,6 +77,7 @@ STAGE_DELETE_PREFIX = "delete_stage:"
 STAGE_STATUS_PREFIX = "stage_status:"
 STAGE_STATUS_SET_PREFIX = "stage_status_set:"
 PAYMENT_EDIT_PREFIX = "edit_payment:"
+PAYMENT_DELETE_PREFIX = "delete_payment:"
 ACCESS_REVOKE_PREFIX = "access_revoke:"
 
 STAGE_STATUSES = {
@@ -131,6 +132,10 @@ def format_amount(amount: float) -> str:
         parts.append(whole[-3:])
         whole = whole[:-3]
     return f"{' '.join(reversed(parts))},{frac} ₽"
+
+
+def format_percent(value: float) -> str:
+    return f"{value:.1f}".replace(".", ",") + "%"
 
 
 def status_emoji(status: str) -> str:
@@ -239,7 +244,8 @@ def payment_list_markup(contract_id: int, payments, can_edit: bool) -> InlineKey
                     InlineKeyboardButton(
                         f"Изменить {format_date(payment.payment_date)} · {format_amount(payment.amount)}",
                         callback_data=f"{PAYMENT_EDIT_PREFIX}{payment.id}",
-                    )
+                    ),
+                    InlineKeyboardButton("Удалить", callback_data=f"{PAYMENT_DELETE_PREFIX}{payment.id}"),
                 ]
             )
     return InlineKeyboardMarkup(rows) if rows else None
@@ -1033,6 +1039,7 @@ async def show_contract_payments(update: Update, context: ContextTypes.DEFAULT_T
     total_amount = sum(stage.amount for stage in storage.list_stages_for_contract(owner_chat_id, contract_id))
     paid_amount = sum(payment.amount for payment in payments)
     debt_amount = max(total_amount - paid_amount, 0.0)
+    paid_percent = (paid_amount / total_amount * 100) if total_amount > 0 else 0.0
     lines = [f"Платежи по контракту «{escape(contract.title)}»:"]
     if payments:
         lines.append("")
@@ -1042,7 +1049,7 @@ async def show_contract_payments(update: Update, context: ContextTypes.DEFAULT_T
         lines.append("")
         lines.append("Платежей пока нет.")
     lines.append("")
-    lines.append(f"Итого оплачено: {format_amount(paid_amount)}")
+    lines.append(f"Итого оплачено: {format_amount(paid_amount)} ({format_percent(paid_percent)})")
     lines.append(f"Общая сумма контракта: {format_amount(total_amount)}")
     lines.append(f"Долг: {format_amount(debt_amount)}")
     await query.message.reply_text(
@@ -1125,6 +1132,27 @@ async def edit_payment_amount(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=main_menu_markup(),
     )
     return ConversationHandler.END
+
+
+async def delete_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or query is None or query.data is None:
+        return
+    owner_chat_id, _ = owner_scope
+    await query.answer()
+    try:
+        payment_id = int(query.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+    deleted = storage.delete_payment(owner_chat_id, payment_id)
+    await query.edit_message_reply_markup(reply_markup=None)
+    await query.message.reply_text(
+        "Платеж удален." if deleted else "Платеж не найден.",
+        reply_markup=main_menu_markup(),
+    )
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1530,6 +1558,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(contract_manage_menu, pattern=f"^{CONTRACT_MANAGE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(show_contract_payments, pattern=f"^{CONTRACT_PAYMENTS_PREFIX}"))
     app.add_handler(CallbackQueryHandler(start_stage_add_from_contract, pattern=f"^{CONTRACT_ADD_STAGE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(delete_payment_callback, pattern=f"^{PAYMENT_DELETE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(revoke_access, pattern=f"^{ACCESS_REVOKE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(show_stage_status_menu, pattern=f"^{STAGE_STATUS_PREFIX}"))
     app.add_handler(CallbackQueryHandler(set_stage_status, pattern=f"^{STAGE_STATUS_SET_PREFIX}"))

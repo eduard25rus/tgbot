@@ -495,6 +495,20 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def delete_payment(self, chat_id: int, payment_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM payments
+                WHERE id = ?
+                  AND contract_id IN (
+                      SELECT id FROM contracts WHERE chat_id = ?
+                  )
+                """,
+                (payment_id, chat_id),
+            )
+            return cursor.rowcount > 0
+
     def list_payments_for_contract(self, chat_id: int, contract_id: int) -> list[Payment]:
         with self.connection() as conn:
             rows = conn.execute(
