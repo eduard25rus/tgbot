@@ -35,6 +35,17 @@ class Stage:
     chat_id: int
 
 
+@dataclass
+class Payment:
+    id: int
+    contract_id: int
+    payment_date: date
+    amount: float
+    created_at: datetime
+    contract_title: str
+    chat_id: int
+
+
 class Storage:
     def __init__(self, db_path: str) -> None:
         self.db_path = Path(db_path)
@@ -108,6 +119,15 @@ class Storage:
                     token TEXT PRIMARY KEY,
                     owner_chat_id INTEGER NOT NULL,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    contract_id INTEGER NOT NULL,
+                    payment_date TEXT NOT NULL,
+                    amount REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
                 );
                 """
             )
@@ -425,6 +445,84 @@ class Storage:
                 return True
             return False
 
+    def add_payment(self, chat_id: int, contract_id: int, payment_date: date, amount: float) -> int | None:
+        with self.connection() as conn:
+            contract = conn.execute(
+                """
+                SELECT id
+                FROM contracts
+                WHERE id = ? AND chat_id = ?
+                """,
+                (contract_id, chat_id),
+            ).fetchone()
+            if contract is None:
+                return None
+            cursor = conn.execute(
+                """
+                INSERT INTO payments (contract_id, payment_date, amount, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (contract_id, payment_date.strftime(DATE_FMT), amount, datetime.utcnow().isoformat()),
+            )
+            return int(cursor.lastrowid)
+
+    def get_payment(self, chat_id: int, payment_id: int) -> Payment | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT p.id, p.contract_id, p.payment_date, p.amount, p.created_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM payments p
+                JOIN contracts c ON c.id = p.contract_id
+                WHERE c.chat_id = ? AND p.id = ?
+                """,
+                (chat_id, payment_id),
+            ).fetchone()
+        return self._payment_from_row(row) if row else None
+
+    def update_payment(self, chat_id: int, payment_id: int, payment_date: date, amount: float) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE payments
+                SET payment_date = ?, amount = ?
+                WHERE id = ?
+                  AND contract_id IN (
+                      SELECT id FROM contracts WHERE chat_id = ?
+                  )
+                """,
+                (payment_date.strftime(DATE_FMT), amount, payment_id, chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def list_payments_for_contract(self, chat_id: int, contract_id: int) -> list[Payment]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.id, p.contract_id, p.payment_date, p.amount, p.created_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM payments p
+                JOIN contracts c ON c.id = p.contract_id
+                WHERE c.chat_id = ? AND c.id = ?
+                ORDER BY p.payment_date ASC, p.id ASC
+                """,
+                (chat_id, contract_id),
+            ).fetchall()
+        return [self._payment_from_row(row) for row in rows]
+
+    def contract_payment_total(self, chat_id: int, contract_id: int) -> float:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(p.amount), 0) AS total_amount
+                FROM payments p
+                JOIN contracts c ON c.id = p.contract_id
+                WHERE c.chat_id = ? AND c.id = ?
+                """,
+                (chat_id, contract_id),
+            ).fetchone()
+        return float(row["total_amount"]) if row else 0.0
+
     def list_contracts(self, chat_id: int) -> list[Contract]:
         with self.connection() as conn:
             rows = conn.execute(
@@ -608,6 +706,18 @@ class Storage:
             status=row["status"],
             notes=row["notes"],
             end_date=date.fromisoformat(row["end_date"]),
+            amount=float(row["amount"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            contract_title=row["contract_title"],
+            chat_id=row["chat_id"],
+        )
+
+    @staticmethod
+    def _payment_from_row(row: sqlite3.Row) -> Payment:
+        return Payment(
+            id=row["id"],
+            contract_id=row["contract_id"],
+            payment_date=date.fromisoformat(row["payment_date"]),
             amount=float(row["amount"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],

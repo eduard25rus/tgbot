@@ -49,14 +49,20 @@ REMINDER_DAYS = (30, 20, 14, 7, 5, 3, 2, 1)
     STAGE_NOTES,
     STAGE_END_DATE,
     STAGE_AMOUNT,
+    PAYMENT_CONTRACT_ID,
+    PAYMENT_DATE,
+    PAYMENT_AMOUNT,
     EDIT_STAGE_NAME,
     EDIT_STAGE_NOTES,
     EDIT_STAGE_END_DATE,
     EDIT_STAGE_AMOUNT,
-) = range(14)
+    EDIT_PAYMENT_DATE,
+    EDIT_PAYMENT_AMOUNT,
+) = range(19)
 
 MENU_NEW_CONTRACT = "Добавить контракт"
 MENU_NEW_STAGE = "Добавить этап"
+MENU_NEW_PAYMENT = "Добавить оплату"
 MENU_CONTRACTS = "Показать контракты"
 MENU_UPCOMING = "Ближайшие сроки"
 MENU_CANCEL = "Отмена"
@@ -64,10 +70,13 @@ MENU_INVITE = "Дать доступ"
 MENU_ACCESS_LIST = "Список доступов"
 CONTRACT_MANAGE_PREFIX = "manage_contract:"
 CONTRACT_ADD_STAGE_PREFIX = "add_stage_contract:"
+CONTRACT_PAYMENTS_PREFIX = "contract_payments:"
+CONTRACT_ADD_PAYMENT_PREFIX = "add_payment_contract:"
 STAGE_EDIT_PREFIX = "edit_stage:"
 STAGE_DELETE_PREFIX = "delete_stage:"
 STAGE_STATUS_PREFIX = "stage_status:"
 STAGE_STATUS_SET_PREFIX = "stage_status_set:"
+PAYMENT_EDIT_PREFIX = "edit_payment:"
 ACCESS_REVOKE_PREFIX = "access_revoke:"
 
 STAGE_STATUSES = {
@@ -142,10 +151,14 @@ def render_contract(contract) -> str:
 
 def render_contract_with_stages(contract, stages) -> str:
     total_amount = sum(stage.amount for stage in stages)
+    paid_amount = getattr(contract, "paid_amount", 0.0)
+    debt_amount = max(total_amount - paid_amount, 0.0)
     lines = [
         f"Контракт #{contract.id}: <b>{escape(contract.title)}</b>",
         f"Общий дедлайн: {format_date(contract.end_date)}",
         f"Общая сумма: {format_amount(total_amount)}",
+        f"Оплачено: {format_amount(paid_amount)} из {format_amount(total_amount)}",
+        f"Долг: {format_amount(debt_amount)}",
     ]
     if contract.description:
         lines.append(f"Описание: {escape(contract.description)}")
@@ -176,8 +189,9 @@ def main_menu_markup() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             [MENU_NEW_CONTRACT, MENU_NEW_STAGE],
-            [MENU_CONTRACTS, MENU_UPCOMING],
-            [MENU_INVITE, MENU_ACCESS_LIST],
+            [MENU_NEW_PAYMENT, MENU_CONTRACTS],
+            [MENU_UPCOMING, MENU_INVITE],
+            [MENU_ACCESS_LIST],
         ],
         resize_keyboard=True,
     )
@@ -194,7 +208,16 @@ def cancel_markup() -> ReplyKeyboardMarkup:
 
 
 def is_menu_text(raw: str) -> bool:
-    return raw in {MENU_NEW_CONTRACT, MENU_NEW_STAGE, MENU_CONTRACTS, MENU_UPCOMING, MENU_INVITE, MENU_ACCESS_LIST, MENU_CANCEL}
+    return raw in {
+        MENU_NEW_CONTRACT,
+        MENU_NEW_STAGE,
+        MENU_NEW_PAYMENT,
+        MENU_CONTRACTS,
+        MENU_UPCOMING,
+        MENU_INVITE,
+        MENU_ACCESS_LIST,
+        MENU_CANCEL,
+    }
 
 
 def viewer_menu_markup() -> ReplyKeyboardMarkup:
@@ -204,6 +227,22 @@ def viewer_menu_markup() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
     )
+
+
+def payment_list_markup(contract_id: int, payments, can_edit: bool) -> InlineKeyboardMarkup | None:
+    rows = []
+    if can_edit:
+        rows.append([InlineKeyboardButton("Добавить оплату", callback_data=f"{CONTRACT_ADD_PAYMENT_PREFIX}{contract_id}")])
+        for payment in payments:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        f"Изменить {format_date(payment.payment_date)} · {format_amount(payment.amount)}",
+                        callback_data=f"{PAYMENT_EDIT_PREFIX}{payment.id}",
+                    )
+                ]
+            )
+    return InlineKeyboardMarkup(rows) if rows else None
 
 
 def resolve_data_scope(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[int, bool] | None:
@@ -260,10 +299,11 @@ def stage_status_markup(stage_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def contract_actions_markup(contract_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Управлять этапами", callback_data=f"{CONTRACT_MANAGE_PREFIX}{contract_id}")]]
-    )
+def contract_actions_markup(contract_id: int, can_edit: bool) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("Показать список платежей", callback_data=f"{CONTRACT_PAYMENTS_PREFIX}{contract_id}")]]
+    if can_edit:
+        rows.insert(0, [InlineKeyboardButton("Управлять этапами", callback_data=f"{CONTRACT_MANAGE_PREFIX}{contract_id}")])
+    return InlineKeyboardMarkup(rows)
 
 
 def contract_manage_actions_markup(contract_id: int) -> InlineKeyboardMarkup:
@@ -313,6 +353,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Команды:\n"
         "/new_contract - добавить контракт\n"
         "/new_stage - добавить этап к контракту\n"
+        "/new_payment - добавить оплату по контракту\n"
         "/contracts - список контрактов и этапов\n"
         "/upcoming - ближайшие дедлайны\n"
         "/invite_viewer - дать ссылку на просмотр\n"
@@ -335,7 +376,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Типовой сценарий:\n"
         "1. /new_contract\n"
         "2. Бот сам спросит этапы, суммы и сроки\n"
-        "3. /upcoming",
+        "3. /new_payment когда пришла оплата\n"
+        "4. /upcoming",
         reply_markup=main_menu_markup() if can_edit else viewer_menu_markup(),
     )
 
@@ -626,6 +668,24 @@ async def new_stage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return STAGE_CONTRACT_ID
 
 
+async def new_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None:
+        return ConversationHandler.END
+    owner_chat_id, _ = owner_scope
+    context.user_data.clear()
+    contracts = storage.list_contracts(owner_chat_id)
+    if not contracts:
+        await update.message.reply_text("Сначала добавьте контракт через /new_contract.", reply_markup=main_menu_markup())
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "Выберите контракт, по которому поступила оплата:",
+        reply_markup=contract_selection_markup(contracts),
+    )
+    return PAYMENT_CONTRACT_ID
+
+
 async def stage_contract_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     storage: Storage = context.application.bot_data["storage"]
     owner_scope = await require_owner(update, context)
@@ -743,6 +803,75 @@ async def stage_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 
+async def payment_contract_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text:
+        return PAYMENT_CONTRACT_ID
+    owner_chat_id, _ = owner_scope
+    raw = update.message.text.strip()
+    if raw == MENU_CANCEL:
+        return await cancel(update, context)
+    try:
+        contract_id = int(raw.split("|", 1)[0].strip())
+    except ValueError:
+        await update.message.reply_text("Выберите контракт кнопкой или введите его ID числом.")
+        return PAYMENT_CONTRACT_ID
+    contract = storage.get_contract(owner_chat_id, contract_id)
+    if contract is None:
+        await update.message.reply_text("Контракт не найден. Проверьте ID.")
+        return PAYMENT_CONTRACT_ID
+    context.user_data["payment_contract_id"] = contract_id
+    await update.message.reply_text("Введите дату оплаты в формате DD-MM-YYYY.", reply_markup=cancel_markup())
+    return PAYMENT_DATE
+
+
+async def payment_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None or not update.message.text:
+        return PAYMENT_DATE
+    raw = update.message.text.strip()
+    if is_menu_text(raw):
+        await update.message.reply_text("Введите дату оплаты в формате DD-MM-YYYY или нажмите Отмена.", reply_markup=cancel_markup())
+        return PAYMENT_DATE
+    try:
+        parsed_date = parse_date(raw)
+    except ValueError:
+        await update.message.reply_text("Не удалось распознать дату. Нужен формат DD-MM-YYYY.")
+        return PAYMENT_DATE
+    context.user_data["payment_date"] = parsed_date
+    await update.message.reply_text("Введите сумму оплаты числом. Например: 150000 или 150000.50", reply_markup=cancel_markup())
+    return PAYMENT_AMOUNT
+
+
+async def payment_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text:
+        return PAYMENT_AMOUNT
+    owner_chat_id, _ = owner_scope
+    raw = update.message.text.strip()
+    if is_menu_text(raw):
+        await update.message.reply_text("Введите сумму оплаты или нажмите Отмена.", reply_markup=cancel_markup())
+        return PAYMENT_AMOUNT
+    try:
+        amount = parse_amount(raw)
+    except ValueError:
+        await update.message.reply_text("Не удалось распознать сумму. Пример: 150000.50")
+        return PAYMENT_AMOUNT
+    payment_id = storage.add_payment(
+        owner_chat_id,
+        context.user_data["payment_contract_id"],
+        context.user_data["payment_date"],
+        amount,
+    )
+    context.user_data.clear()
+    await update.message.reply_text(
+        f"Оплата сохранена с ID {payment_id}." if payment_id is not None else "Контракт не найден.",
+        reply_markup=main_menu_markup(),
+    )
+    return ConversationHandler.END
+
+
 async def edit_stage_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     storage: Storage = context.application.bot_data["storage"]
@@ -852,6 +981,147 @@ async def edit_stage_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data.clear()
     await update.message.reply_text(
         "Этап изменен." if updated else "Этап не найден.",
+        reply_markup=main_menu_markup(),
+    )
+    return ConversationHandler.END
+
+
+async def start_payment_add_from_contract(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or query is None or query.data is None:
+        return ConversationHandler.END
+    owner_chat_id, _ = owner_scope
+    await query.answer()
+    try:
+        contract_id = int(query.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await query.edit_message_reply_markup(reply_markup=None)
+        return ConversationHandler.END
+    contract = storage.get_contract(owner_chat_id, contract_id)
+    if contract is None:
+        await query.message.reply_text("Контракт не найден.", reply_markup=main_menu_markup())
+        return ConversationHandler.END
+    context.user_data.clear()
+    context.user_data["payment_contract_id"] = contract_id
+    await query.message.reply_text(
+        f"Добавление оплаты для контракта «{contract.title}».\nВведите дату оплаты в формате DD-MM-YYYY.",
+        reply_markup=cancel_markup(),
+    )
+    return PAYMENT_DATE
+
+
+async def show_contract_payments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    storage: Storage = context.application.bot_data["storage"]
+    scope = resolve_data_scope(update, context)
+    if scope is None or query is None or query.data is None:
+        return
+    owner_chat_id, can_edit = scope
+    await query.answer()
+    try:
+        contract_id = int(query.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+    contract = storage.get_contract(owner_chat_id, contract_id)
+    if contract is None:
+        await query.message.reply_text("Контракт не найден.", reply_markup=main_menu_markup() if can_edit else viewer_menu_markup())
+        return
+    payments = storage.list_payments_for_contract(owner_chat_id, contract_id)
+    total_amount = sum(stage.amount for stage in storage.list_stages_for_contract(owner_chat_id, contract_id))
+    paid_amount = sum(payment.amount for payment in payments)
+    debt_amount = max(total_amount - paid_amount, 0.0)
+    lines = [f"Платежи по контракту «{escape(contract.title)}»:"]
+    if payments:
+        lines.append("")
+        for payment in payments:
+            lines.append(f"{format_date(payment.payment_date)} - {format_amount(payment.amount)}")
+    else:
+        lines.append("")
+        lines.append("Платежей пока нет.")
+    lines.append("")
+    lines.append(f"Итого оплачено: {format_amount(paid_amount)}")
+    lines.append(f"Общая сумма контракта: {format_amount(total_amount)}")
+    lines.append(f"Долг: {format_amount(debt_amount)}")
+    await query.message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        reply_markup=payment_list_markup(contract_id, payments, can_edit),
+    )
+
+
+async def edit_payment_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or query is None or query.data is None:
+        return ConversationHandler.END
+    owner_chat_id, _ = owner_scope
+    await query.answer()
+    try:
+        payment_id = int(query.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await query.edit_message_reply_markup(reply_markup=None)
+        return ConversationHandler.END
+    payment = storage.get_payment(owner_chat_id, payment_id)
+    if payment is None:
+        await query.message.reply_text("Платеж не найден.", reply_markup=main_menu_markup())
+        return ConversationHandler.END
+    context.user_data["edit_payment_id"] = payment.id
+    context.user_data["edit_payment_date"] = payment.payment_date
+    context.user_data["edit_payment_amount"] = payment.amount
+    await query.message.reply_text(
+        f"Изменение платежа по контракту «{payment.contract_title}».\n"
+        f"Введите новую дату DD-MM-YYYY или '.' чтобы оставить текущую ({format_date(payment.payment_date)}).",
+        reply_markup=cancel_markup(),
+    )
+    return EDIT_PAYMENT_DATE
+
+
+async def edit_payment_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message is None or not update.message.text:
+        return EDIT_PAYMENT_DATE
+    raw = update.message.text.strip()
+    if is_menu_text(raw):
+        await update.message.reply_text("Введите дату, '.' или нажмите Отмена.", reply_markup=cancel_markup())
+        return EDIT_PAYMENT_DATE
+    if raw != ".":
+        try:
+            context.user_data["edit_payment_date"] = parse_date(raw)
+        except ValueError:
+            await update.message.reply_text("Не удалось распознать дату. Нужен формат DD-MM-YYYY.")
+            return EDIT_PAYMENT_DATE
+    await update.message.reply_text("Введите новую сумму или '.' чтобы оставить текущую.", reply_markup=cancel_markup())
+    return EDIT_PAYMENT_AMOUNT
+
+
+async def edit_payment_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text:
+        return EDIT_PAYMENT_AMOUNT
+    owner_chat_id, _ = owner_scope
+    raw = update.message.text.strip()
+    if is_menu_text(raw):
+        await update.message.reply_text("Введите сумму, '.' или нажмите Отмена.", reply_markup=cancel_markup())
+        return EDIT_PAYMENT_AMOUNT
+    if raw != ".":
+        try:
+            context.user_data["edit_payment_amount"] = parse_amount(raw)
+        except ValueError:
+            await update.message.reply_text("Не удалось распознать сумму. Пример: 150000.50")
+            return EDIT_PAYMENT_AMOUNT
+    updated = storage.update_payment(
+        owner_chat_id,
+        context.user_data["edit_payment_id"],
+        context.user_data["edit_payment_date"],
+        context.user_data["edit_payment_amount"],
+    )
+    context.user_data.clear()
+    await update.message.reply_text(
+        "Платеж изменен." if updated else "Платеж не найден.",
         reply_markup=main_menu_markup(),
     )
     return ConversationHandler.END
@@ -988,10 +1258,11 @@ async def list_contracts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     for contract in contracts:
         stages = storage.list_stages_for_contract(owner_chat_id, contract.id)
+        contract.paid_amount = storage.contract_payment_total(owner_chat_id, contract.id)
         await update.message.reply_text(
             render_contract_with_stages(contract, stages),
             parse_mode=ParseMode.HTML,
-            reply_markup=contract_actions_markup(contract.id) if can_edit else None,
+            reply_markup=contract_actions_markup(contract.id, can_edit),
         )
     await update.message.reply_text("Список показан.", reply_markup=main_menu_markup() if can_edit else viewer_menu_markup())
 
@@ -1119,6 +1390,10 @@ async def menu_new_stage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return await new_stage(update, context)
 
 
+async def menu_new_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    return await new_payment(update, context)
+
+
 async def menu_contracts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await list_contracts(update, context)
 
@@ -1219,6 +1494,29 @@ def build_application() -> Application:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    payment_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("new_payment", new_payment),
+            MessageHandler(filters.Regex(f"^{MENU_NEW_PAYMENT}$"), menu_new_payment),
+            CallbackQueryHandler(start_payment_add_from_contract, pattern=f"^{CONTRACT_ADD_PAYMENT_PREFIX}"),
+        ],
+        states={
+            PAYMENT_CONTRACT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, payment_contract_id)],
+            PAYMENT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, payment_date)],
+            PAYMENT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, payment_amount)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    edit_payment_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_payment_start, pattern=f"^{PAYMENT_EDIT_PREFIX}")],
+        states={
+            EDIT_PAYMENT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_payment_date)],
+            EDIT_PAYMENT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_payment_amount)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_CANCEL}$"), cancel))
 
     app.add_handler(CommandHandler("start", start))
@@ -1230,6 +1528,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("delete_contract", delete_contract))
     app.add_handler(CommandHandler("delete_stage", delete_stage))
     app.add_handler(CallbackQueryHandler(contract_manage_menu, pattern=f"^{CONTRACT_MANAGE_PREFIX}"))
+    app.add_handler(CallbackQueryHandler(show_contract_payments, pattern=f"^{CONTRACT_PAYMENTS_PREFIX}"))
     app.add_handler(CallbackQueryHandler(start_stage_add_from_contract, pattern=f"^{CONTRACT_ADD_STAGE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(revoke_access, pattern=f"^{ACCESS_REVOKE_PREFIX}"))
     app.add_handler(CallbackQueryHandler(show_stage_status_menu, pattern=f"^{STAGE_STATUS_PREFIX}"))
@@ -1241,7 +1540,9 @@ def build_application() -> Application:
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_ACCESS_LIST}$"), menu_access_list))
     app.add_handler(contract_conv)
     app.add_handler(stage_conv)
+    app.add_handler(payment_conv)
     app.add_handler(edit_stage_conv)
+    app.add_handler(edit_payment_conv)
 
     app.job_queue.run_daily(
         send_reminders,
