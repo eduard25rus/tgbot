@@ -5,8 +5,12 @@ import os
 import secrets
 from datetime import date, time
 from html import escape
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from dotenv import load_dotenv
+from openpyxl import Workbook
+from openpyxl.styles import Font
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -63,6 +67,7 @@ REMINDER_DAYS = (30, 20, 14, 7, 5, 3, 2, 1)
 MENU_NEW_CONTRACT = "Добавить контракт"
 MENU_NEW_STAGE = "Добавить этап"
 MENU_NEW_PAYMENT = "Добавить оплату"
+MENU_EXPORT_EXCEL = "Выгрузка Excel"
 MENU_CONTRACTS = "Показать контракты"
 MENU_UPCOMING = "Ближайшие сроки"
 MENU_CANCEL = "Отмена"
@@ -146,6 +151,206 @@ def status_label(status: str) -> str:
     return STAGE_STATUSES.get(status, STAGE_STATUSES["not_started"])[1]
 
 
+def autosize_worksheet(worksheet) -> None:
+    for column_cells in worksheet.columns:
+        max_length = 0
+        column_letter = column_cells[0].column_letter
+        for cell in column_cells:
+            value = "" if cell.value is None else str(cell.value)
+            max_length = max(max_length, len(value))
+        worksheet.column_dimensions[column_letter].width = min(max_length + 2, 40)
+
+
+def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
+    contracts = storage.list_contracts(owner_chat_id)
+    if not contracts:
+        return None
+
+    workbook = Workbook()
+    summary_sheet = workbook.active
+    summary_sheet.title = "Сводка"
+    contracts_sheet = workbook.create_sheet("Контракты")
+    stages_sheet = workbook.create_sheet("Этапы")
+    payments_sheet = workbook.create_sheet("Оплаты")
+
+    bold_font = Font(bold=True)
+    money_format = "#,##0.00"
+    percent_format = "0.0%"
+
+    total_contract_amount = 0.0
+    total_paid_amount = 0.0
+    contract_rows: list[dict] = []
+    stage_rows: list[dict] = []
+    payment_rows: list[dict] = []
+
+    for contract in contracts:
+        stages = storage.list_stages_for_contract(owner_chat_id, contract.id)
+        payments = storage.list_payments_for_contract(owner_chat_id, contract.id)
+        contract_amount = sum(stage.amount for stage in stages)
+        paid_amount = sum(payment.amount for payment in payments)
+        debt_amount = max(contract_amount - paid_amount, 0.0)
+        paid_ratio = (paid_amount / contract_amount) if contract_amount > 0 else 0.0
+
+        total_contract_amount += contract_amount
+        total_paid_amount += paid_amount
+
+        contract_rows.append(
+            {
+                "contract_id": contract.id,
+                "title": contract.title,
+                "description": contract.description,
+                "deadline": contract.end_date,
+                "contract_amount": contract_amount,
+                "paid_amount": paid_amount,
+                "paid_ratio": paid_ratio,
+                "debt_amount": debt_amount,
+                "stage_count": len(stages),
+                "payment_count": len(payments),
+            }
+        )
+
+        for stage in stages:
+            stage_rows.append(
+                {
+                    "contract_id": contract.id,
+                    "contract_title": contract.title,
+                    "stage_name": stage.name,
+                    "status": status_label(stage.status),
+                    "deadline": stage.end_date,
+                    "amount": stage.amount,
+                    "notes": stage.notes,
+                }
+            )
+
+        for payment in payments:
+            payment_rows.append(
+                {
+                    "contract_id": contract.id,
+                    "contract_title": contract.title,
+                    "payment_date": payment.payment_date,
+                    "amount": payment.amount,
+                }
+            )
+
+    total_debt_amount = max(total_contract_amount - total_paid_amount, 0.0)
+    total_paid_ratio = (total_paid_amount / total_contract_amount) if total_contract_amount > 0 else 0.0
+    total_debt_ratio = (total_debt_amount / total_contract_amount) if total_contract_amount > 0 else 0.0
+
+    summary_rows = [
+        ("Дата выгрузки", date.today()),
+        ("Количество контрактов", len(contracts)),
+        ("Общая сумма контрактов", total_contract_amount),
+        ("Оплачено всего", total_paid_amount),
+        ("Оплачено, %", total_paid_ratio),
+        ("Долг всего", total_debt_amount),
+        ("Долг, %", total_debt_ratio),
+    ]
+    for index, (label, value) in enumerate(summary_rows, start=1):
+        summary_sheet.cell(row=index, column=1, value=label).font = bold_font
+        summary_sheet.cell(row=index, column=2, value=value)
+    for row_index in (3, 4, 6):
+        summary_sheet.cell(row=row_index, column=2).number_format = money_format
+    for row_index in (5, 7):
+        summary_sheet.cell(row=row_index, column=2).number_format = percent_format
+
+    contracts_sheet.append(
+        [
+            "ID контракта",
+            "Контракт",
+            "Описание",
+            "Общий дедлайн",
+            "Сумма контракта",
+            "Оплачено",
+            "Оплачено, %",
+            "Долг",
+            "Кол-во этапов",
+            "Кол-во оплат",
+        ]
+    )
+    for cell in contracts_sheet[1]:
+        cell.font = bold_font
+    for row in contract_rows:
+        contracts_sheet.append(
+            [
+                row["contract_id"],
+                row["title"],
+                row["description"],
+                row["deadline"],
+                row["contract_amount"],
+                row["paid_amount"],
+                row["paid_ratio"],
+                row["debt_amount"],
+                row["stage_count"],
+                row["payment_count"],
+            ]
+        )
+    for row in contracts_sheet.iter_rows(min_row=2, max_row=contracts_sheet.max_row):
+        row[4].number_format = money_format
+        row[5].number_format = money_format
+        row[6].number_format = percent_format
+        row[7].number_format = money_format
+
+    stages_sheet.append(
+        [
+            "ID контракта",
+            "Контракт",
+            "Этап",
+            "Статус",
+            "Дедлайн этапа",
+            "Сумма этапа",
+            "Примечание",
+        ]
+    )
+    for cell in stages_sheet[1]:
+        cell.font = bold_font
+    for row in stage_rows:
+        stages_sheet.append(
+            [
+                row["contract_id"],
+                row["contract_title"],
+                row["stage_name"],
+                row["status"],
+                row["deadline"],
+                row["amount"],
+                row["notes"],
+            ]
+        )
+    for row in stages_sheet.iter_rows(min_row=2, max_row=stages_sheet.max_row):
+        row[5].number_format = money_format
+
+    payments_sheet.append(
+        [
+            "ID контракта",
+            "Контракт",
+            "Дата оплаты",
+            "Сумма оплаты",
+        ]
+    )
+    for cell in payments_sheet[1]:
+        cell.font = bold_font
+    for row in payment_rows:
+        payments_sheet.append(
+            [
+                row["contract_id"],
+                row["contract_title"],
+                row["payment_date"],
+                row["amount"],
+            ]
+        )
+    for row in payments_sheet.iter_rows(min_row=2, max_row=payments_sheet.max_row):
+        row[3].number_format = money_format
+
+    for worksheet in (summary_sheet, contracts_sheet, stages_sheet, payments_sheet):
+        autosize_worksheet(worksheet)
+        worksheet.freeze_panes = "A2"
+
+    report_file = NamedTemporaryFile(prefix="contracts_report_", suffix=".xlsx", delete=False)
+    report_path = Path(report_file.name)
+    report_file.close()
+    workbook.save(report_path)
+    return report_path
+
+
 def render_contract(contract) -> str:
     description = f"\nОписание: {escape(contract.description)}" if contract.description else ""
     return (
@@ -196,8 +401,8 @@ def main_menu_markup() -> ReplyKeyboardMarkup:
         [
             [MENU_NEW_CONTRACT, MENU_NEW_STAGE],
             [MENU_NEW_PAYMENT, MENU_CONTRACTS],
-            [MENU_UPCOMING, MENU_INVITE],
-            [MENU_ACCESS_LIST],
+            [MENU_UPCOMING, MENU_EXPORT_EXCEL],
+            [MENU_INVITE, MENU_ACCESS_LIST],
         ],
         resize_keyboard=True,
     )
@@ -218,6 +423,7 @@ def is_menu_text(raw: str) -> bool:
         MENU_NEW_CONTRACT,
         MENU_NEW_STAGE,
         MENU_NEW_PAYMENT,
+        MENU_EXPORT_EXCEL,
         MENU_CONTRACTS,
         MENU_UPCOMING,
         MENU_INVITE,
@@ -230,6 +436,7 @@ def viewer_menu_markup() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             [MENU_CONTRACTS, MENU_UPCOMING],
+            [MENU_EXPORT_EXCEL],
         ],
         resize_keyboard=True,
     )
@@ -361,6 +568,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/new_contract - добавить контракт\n"
         "/new_stage - добавить этап к контракту\n"
         "/new_payment - добавить оплату по контракту\n"
+        "/export_excel - выгрузить Excel-отчет\n"
         "/contracts - список контрактов и этапов\n"
         "/upcoming - ближайшие дедлайны\n"
         "/invite_viewer - дать ссылку на просмотр\n"
@@ -384,7 +592,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "1. /new_contract\n"
         "2. Бот сам спросит этапы, суммы и сроки\n"
         "3. /new_payment когда пришла оплата\n"
-        "4. /upcoming",
+        "4. /export_excel чтобы получить сводку в Excel\n"
+        "5. /upcoming",
         reply_markup=main_menu_markup() if can_edit else viewer_menu_markup(),
     )
 
@@ -439,6 +648,34 @@ async def access_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             reply_markup=revoke_access_markup(grant["viewer_user_id"]),
         )
     await update.message.reply_text("Список доступов показан.", reply_markup=main_menu_markup())
+
+
+async def export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    storage: Storage = context.application.bot_data["storage"]
+    scope = resolve_data_scope(update, context)
+    if scope is None or update.message is None:
+        return
+    owner_chat_id, can_edit = scope
+    report_path = build_excel_report(storage, owner_chat_id)
+    if report_path is None:
+        await update.message.reply_text(
+            "Контрактов пока нет, выгружать нечего.",
+            reply_markup=main_menu_markup() if can_edit else viewer_menu_markup(),
+        )
+        return
+    try:
+        with report_path.open("rb") as report_file:
+            await update.message.reply_document(
+                document=report_file,
+                filename=f"contracts_report_{date.today().strftime('%d-%m-%Y')}.xlsx",
+                caption="Выгрузка по контрактам готова.",
+                reply_markup=main_menu_markup() if can_edit else viewer_menu_markup(),
+            )
+    finally:
+        try:
+            report_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 async def revoke_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1427,6 +1664,10 @@ async def menu_contracts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await list_contracts(update, context)
 
 
+async def menu_export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await export_excel(update, context)
+
+
 async def menu_upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await upcoming(update, context)
 
@@ -1552,6 +1793,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("invite_viewer", invite_viewer))
     app.add_handler(CommandHandler("access_list", access_list))
+    app.add_handler(CommandHandler("export_excel", export_excel))
     app.add_handler(CommandHandler("contracts", list_contracts))
     app.add_handler(CommandHandler("upcoming", upcoming))
     app.add_handler(CommandHandler("delete_contract", delete_contract))
@@ -1565,6 +1807,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(set_stage_status, pattern=f"^{STAGE_STATUS_SET_PREFIX}"))
     app.add_handler(CallbackQueryHandler(delete_stage_callback, pattern=f"^{STAGE_DELETE_PREFIX}"))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_CONTRACTS}$"), menu_contracts))
+    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_EXPORT_EXCEL}$"), menu_export_excel))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_UPCOMING}$"), menu_upcoming))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_INVITE}$"), menu_invite))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_ACCESS_LIST}$"), menu_access_list))
