@@ -64,12 +64,14 @@ REMINDER_DAYS = (30, 20, 14, 7, 5, 3, 2, 1)
     EDIT_STAGE_AMOUNT,
     EDIT_PAYMENT_DATE,
     EDIT_PAYMENT_AMOUNT,
-) = range(19)
+    BROADCAST_TEXT,
+) = range(20)
 
 MENU_NEW_CONTRACT = "Добавить контракт"
 MENU_NEW_STAGE = "Добавить этап"
 MENU_NEW_PAYMENT = "Добавить оплату"
 MENU_EXPORT_EXCEL = "Выгрузка Excel"
+MENU_BROADCAST = "Сообщение всем"
 MENU_CONTRACTS = "Показать контракты"
 MENU_UPCOMING = "Ближайшие сроки"
 MENU_CANCEL = "Отмена"
@@ -620,6 +622,7 @@ def main_menu_markup() -> ReplyKeyboardMarkup:
             [MENU_NEW_PAYMENT, MENU_CONTRACTS],
             [MENU_UPCOMING, MENU_EXPORT_EXCEL],
             [MENU_INVITE, MENU_ACCESS_LIST],
+            [MENU_BROADCAST],
         ],
         resize_keyboard=True,
     )
@@ -641,6 +644,7 @@ def is_menu_text(raw: str) -> bool:
         MENU_NEW_STAGE,
         MENU_NEW_PAYMENT,
         MENU_EXPORT_EXCEL,
+        MENU_BROADCAST,
         MENU_CONTRACTS,
         MENU_UPCOMING,
         MENU_INVITE,
@@ -786,6 +790,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/new_stage - добавить этап к контракту\n"
         "/new_payment - добавить оплату по контракту\n"
         "/export_excel - выгрузить Excel-отчет\n"
+        "/broadcast_access - отправить сообщение всем, у кого есть доступ\n"
         "/contracts - список контрактов и этапов\n"
         "/upcoming - ближайшие дедлайны\n"
         "/invite_viewer - дать ссылку на просмотр\n"
@@ -810,7 +815,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "2. Бот сам спросит этапы, суммы и сроки\n"
         "3. /new_payment когда пришла оплата\n"
         "4. /export_excel чтобы получить сводку в Excel\n"
-        "5. /upcoming",
+        "5. /broadcast_access чтобы разослать сообщение всем зрителям\n"
+        "6. /upcoming",
         reply_markup=main_menu_markup() if can_edit else viewer_menu_markup(),
     )
 
@@ -865,6 +871,50 @@ async def access_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             reply_markup=revoke_access_markup(grant["viewer_user_id"]),
         )
     await update.message.reply_text("Список доступов показан.", reply_markup=main_menu_markup())
+
+
+async def broadcast_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None:
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "Введите сообщение, которое нужно отправить всем, у кого есть доступ.",
+        reply_markup=cancel_markup(),
+    )
+    return BROADCAST_TEXT
+
+
+async def broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    storage: Storage = context.application.bot_data["storage"]
+    owner_scope = await require_owner(update, context)
+    if owner_scope is None or update.message is None or not update.message.text:
+        return BROADCAST_TEXT
+    owner_chat_id, _ = owner_scope
+    raw = update.message.text.strip()
+    if is_menu_text(raw):
+        await update.message.reply_text("Введите текст сообщения или нажмите Отмена.", reply_markup=cancel_markup())
+        return BROADCAST_TEXT
+    viewers = storage.viewers_for_owner(owner_chat_id)
+    if not viewers:
+        await update.message.reply_text("Сейчас нет людей, которым выдали доступ.", reply_markup=main_menu_markup())
+        return ConversationHandler.END
+
+    sent_count = 0
+    for viewer_chat_id in viewers:
+        try:
+            await context.bot.send_message(
+                chat_id=viewer_chat_id,
+                text=f"Сообщение от владельца контрактов:\n\n{raw}",
+            )
+            sent_count += 1
+        except Exception:
+            LOGGER.exception("Failed to broadcast message to chat_id=%s", viewer_chat_id)
+
+    await update.message.reply_text(
+        f"Сообщение отправлено {sent_count} получателям из {len(viewers)}.",
+        reply_markup=main_menu_markup(),
+    )
+    return ConversationHandler.END
 
 
 async def export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1885,6 +1935,10 @@ async def menu_export_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await export_excel(update, context)
 
 
+async def menu_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    return await broadcast_access(update, context)
+
+
 async def menu_upcoming(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await upcoming(update, context)
 
@@ -1995,6 +2049,17 @@ def build_application() -> Application:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
+    broadcast_conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("broadcast_access", broadcast_access),
+            MessageHandler(filters.Regex(f"^{MENU_BROADCAST}$"), menu_broadcast),
+        ],
+        states={
+            BROADCAST_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_text)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     edit_payment_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(edit_payment_start, pattern=f"^{PAYMENT_EDIT_PREFIX}")],
         states={
@@ -2010,6 +2075,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("invite_viewer", invite_viewer))
     app.add_handler(CommandHandler("access_list", access_list))
+    app.add_handler(CommandHandler("broadcast_access", broadcast_access))
     app.add_handler(CommandHandler("export_excel", export_excel))
     app.add_handler(CommandHandler("contracts", list_contracts))
     app.add_handler(CommandHandler("upcoming", upcoming))
@@ -2024,6 +2090,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(set_stage_status, pattern=f"^{STAGE_STATUS_SET_PREFIX}"))
     app.add_handler(CallbackQueryHandler(delete_stage_callback, pattern=f"^{STAGE_DELETE_PREFIX}"))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_CONTRACTS}$"), menu_contracts))
+    app.add_handler(MessageHandler(filters.Regex(f"^{MENU_BROADCAST}$"), menu_broadcast))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_EXPORT_EXCEL}$"), menu_export_excel))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_UPCOMING}$"), menu_upcoming))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_INVITE}$"), menu_invite))
@@ -2031,6 +2098,7 @@ def build_application() -> Application:
     app.add_handler(contract_conv)
     app.add_handler(stage_conv)
     app.add_handler(payment_conv)
+    app.add_handler(broadcast_conv)
     app.add_handler(edit_stage_conv)
     app.add_handler(edit_payment_conv)
 
