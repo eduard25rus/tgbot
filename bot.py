@@ -10,7 +10,7 @@ from tempfile import NamedTemporaryFile
 
 from dotenv import load_dotenv
 from openpyxl import Workbook
-from openpyxl.chart import DoughnutChart, Reference
+from openpyxl.chart import BarChart, DoughnutChart, PieChart, Reference
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from telegram import (
@@ -328,25 +328,59 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
     summary_sheet["F4"].number_format = money_format
     summary_sheet["G4"].number_format = percent_format
 
-    apply_title(summary_sheet, "I3:J3", "Структура оплаты", "3D6D99")
-    summary_sheet["I4"] = "Статус"
+    apply_title(summary_sheet, "I3:J3", "Доли контрактов в общем бюджете", "3D6D99")
+    summary_sheet["I4"] = "Контракт"
     summary_sheet["J4"] = "Сумма"
-    summary_sheet["I5"] = "Оплачено"
-    summary_sheet["I6"] = "Долг"
-    summary_sheet["J5"] = total_paid_amount
-    summary_sheet["J6"] = total_debt_amount
-    summary_sheet["J4"].number_format = money_format
-    summary_sheet["J5"].number_format = money_format
-    summary_sheet["J6"].number_format = money_format
-    chart = DoughnutChart()
-    chart.holeSize = 58
-    labels = Reference(summary_sheet, min_col=9, min_row=5, max_row=6)
-    data = Reference(summary_sheet, min_col=10, min_row=4, max_row=6)
-    chart.add_data(data, titles_from_data=True)
-    chart.set_categories(labels)
-    chart.height = 7
-    chart.width = 9
-    summary_sheet.add_chart(chart, "I9")
+    for row_index, row in enumerate(contract_rows, start=5):
+        summary_sheet.cell(row=row_index, column=9, value=row["title"])
+        summary_sheet.cell(row=row_index, column=10, value=row["contract_amount"])
+        summary_sheet.cell(row=row_index, column=10).number_format = money_format
+    pie_chart = PieChart()
+    pie_chart.legend.position = "b"
+    pie_labels = Reference(summary_sheet, min_col=9, min_row=5, max_row=4 + len(contract_rows))
+    pie_data = Reference(summary_sheet, min_col=10, min_row=4, max_row=4 + len(contract_rows))
+    pie_chart.add_data(pie_data, titles_from_data=True)
+    pie_chart.set_categories(pie_labels)
+    pie_chart.height = 8
+    pie_chart.width = 10
+    summary_sheet.add_chart(pie_chart, "L3")
+
+    chart_table_start = max(14, 6 + len(contract_rows))
+    apply_title(summary_sheet, f"I{chart_table_start}:K{chart_table_start}", "Общая сумма vs оплата", "6A994E")
+    summary_sheet.cell(row=chart_table_start + 1, column=9, value="Контракт")
+    summary_sheet.cell(row=chart_table_start + 1, column=10, value="Общая сумма")
+    summary_sheet.cell(row=chart_table_start + 1, column=11, value="Оплачено")
+    for row_index, row in enumerate(contract_rows, start=chart_table_start + 2):
+        summary_sheet.cell(row=row_index, column=9, value=row["title"])
+        summary_sheet.cell(row=row_index, column=10, value=row["contract_amount"])
+        summary_sheet.cell(row=row_index, column=11, value=row["paid_amount"])
+        summary_sheet.cell(row=row_index, column=10).number_format = money_format
+        summary_sheet.cell(row=row_index, column=11).number_format = money_format
+    style_header_row(summary_sheet, chart_table_start + 1, "6A994E")
+    bar_chart = BarChart()
+    bar_chart.type = "col"
+    bar_chart.style = 10
+    bar_chart.grouping = "clustered"
+    bar_chart.overlap = 0
+    bar_chart.legend.position = "b"
+    bar_data = Reference(
+        summary_sheet,
+        min_col=10,
+        max_col=11,
+        min_row=chart_table_start + 1,
+        max_row=chart_table_start + 1 + len(contract_rows),
+    )
+    bar_labels = Reference(
+        summary_sheet,
+        min_col=9,
+        min_row=chart_table_start + 2,
+        max_row=chart_table_start + 1 + len(contract_rows),
+    )
+    bar_chart.add_data(bar_data, titles_from_data=True)
+    bar_chart.set_categories(bar_labels)
+    bar_chart.height = 9
+    bar_chart.width = 14
+    summary_sheet.add_chart(bar_chart, f"L{chart_table_start}")
 
     apply_title(contracts_sheet, "A1:J1", "Сводная таблица контрактов", "264653")
     contracts_sheet.append(
@@ -474,6 +508,7 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
         contract_sheet["O5"].number_format = money_format
         contract_chart = DoughnutChart()
         contract_chart.holeSize = 62
+        contract_chart.legend.position = "b"
         chart_labels = Reference(contract_sheet, min_col=14, min_row=4, max_row=5)
         chart_data = Reference(contract_sheet, min_col=15, min_row=3, max_row=5)
         contract_chart.add_data(chart_data, titles_from_data=True)
