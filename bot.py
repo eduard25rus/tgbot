@@ -328,24 +328,25 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
     summary_sheet["F4"].number_format = money_format
     summary_sheet["G4"].number_format = percent_format
 
-    summary_sheet["I3"] = "Статус"
-    summary_sheet["J3"] = "Сумма"
-    summary_sheet["I4"] = "Оплачено"
-    summary_sheet["I5"] = "Долг"
-    summary_sheet["J4"] = total_paid_amount
-    summary_sheet["J5"] = total_debt_amount
+    apply_title(summary_sheet, "I3:J3", "Структура оплаты", "3D6D99")
+    summary_sheet["I4"] = "Статус"
+    summary_sheet["J4"] = "Сумма"
+    summary_sheet["I5"] = "Оплачено"
+    summary_sheet["I6"] = "Долг"
+    summary_sheet["J5"] = total_paid_amount
+    summary_sheet["J6"] = total_debt_amount
     summary_sheet["J4"].number_format = money_format
     summary_sheet["J5"].number_format = money_format
+    summary_sheet["J6"].number_format = money_format
     chart = DoughnutChart()
-    chart.title = "Оплата vs долг"
     chart.holeSize = 58
-    labels = Reference(summary_sheet, min_col=9, min_row=4, max_row=5)
-    data = Reference(summary_sheet, min_col=10, min_row=3, max_row=5)
+    labels = Reference(summary_sheet, min_col=9, min_row=5, max_row=6)
+    data = Reference(summary_sheet, min_col=10, min_row=4, max_row=6)
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(labels)
     chart.height = 7
     chart.width = 9
-    summary_sheet.add_chart(chart, "I7")
+    summary_sheet.add_chart(chart, "I9")
 
     apply_title(contracts_sheet, "A1:J1", "Сводная таблица контрактов", "264653")
     contracts_sheet.append(
@@ -462,24 +463,24 @@ def build_excel_report(storage: Storage, owner_chat_id: int) -> Path | None:
         contract_sheet["F4"].number_format = percent_format
         contract_sheet["H4"].number_format = money_format
 
-        contract_sheet["N2"] = "Статус"
-        contract_sheet["O2"] = "Сумма"
-        contract_sheet["N3"] = "Оплачено"
-        contract_sheet["N4"] = "Долг"
-        contract_sheet["O3"] = contract_row["paid_amount"]
-        contract_sheet["O4"] = contract_row["debt_amount"]
-        contract_sheet["O3"].number_format = money_format
+        apply_title(contract_sheet, "N2:O2", "Структура оплаты", "3D6D99")
+        contract_sheet["N3"] = "Статус"
+        contract_sheet["O3"] = "Сумма"
+        contract_sheet["N4"] = "Оплачено"
+        contract_sheet["N5"] = "Долг"
+        contract_sheet["O4"] = contract_row["paid_amount"]
+        contract_sheet["O5"] = contract_row["debt_amount"]
         contract_sheet["O4"].number_format = money_format
+        contract_sheet["O5"].number_format = money_format
         contract_chart = DoughnutChart()
-        contract_chart.title = "Оплата по контракту"
         contract_chart.holeSize = 62
-        chart_labels = Reference(contract_sheet, min_col=14, min_row=3, max_row=4)
-        chart_data = Reference(contract_sheet, min_col=15, min_row=2, max_row=4)
+        chart_labels = Reference(contract_sheet, min_col=14, min_row=4, max_row=5)
+        chart_data = Reference(contract_sheet, min_col=15, min_row=3, max_row=5)
         contract_chart.add_data(chart_data, titles_from_data=True)
         contract_chart.set_categories(chart_labels)
         contract_chart.height = 6
         contract_chart.width = 8
-        contract_sheet.add_chart(contract_chart, "N6")
+        contract_sheet.add_chart(contract_chart, "N7")
 
         apply_title(contract_sheet, "A7:G7", "Этапы контракта", "8A5A44")
         contract_sheet.append(
