@@ -2,12 +2,14 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Iterator
+from typing import Optional
 
 
 DATE_FMT = "%Y-%m-%d"
+WEB_SECTION_IDS = ("contracts", "auctions", "expenses", "payroll", "finance", "access")
 
 
 @dataclass
@@ -44,6 +46,28 @@ class Payment:
     created_at: datetime
     contract_title: str
     chat_id: int
+
+
+@dataclass
+class Auction:
+    id: int
+    owner_chat_id: int
+    auction_number: str
+    bid_deadline: date
+    amount: float
+    title: str
+    city: str
+    source_url: str
+    max_discount_percent: Optional[float]
+    min_bid_amount: Optional[float]
+    material_cost: Optional[float]
+    estimate_status: str
+    submit_decision_status: str
+    application_status: str
+    result_status: str
+    final_bid_amount: Optional[float]
+    archived_at: Optional[datetime]
+    created_at: datetime
 
 
 class Storage:
@@ -129,6 +153,65 @@ class Storage:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS web_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    email TEXT NOT NULL,
+                    full_name TEXT NOT NULL,
+                    role_name TEXT NOT NULL DEFAULT 'Viewer',
+                    password_state TEXT NOT NULL DEFAULT 'pending_setup',
+                    password_hash TEXT NOT NULL DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    is_super_admin INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, email)
+                );
+
+                CREATE TABLE IF NOT EXISTS web_user_section_access (
+                    user_id INTEGER NOT NULL,
+                    section_id TEXT NOT NULL,
+                    can_view INTEGER NOT NULL DEFAULT 0,
+                    can_edit INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, section_id),
+                    FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS web_sessions (
+                    token TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS web_password_setup_tokens (
+                    token TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS auctions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    auction_number TEXT NOT NULL,
+                    bid_deadline TEXT NOT NULL,
+                    amount REAL NOT NULL DEFAULT 0,
+                    title TEXT NOT NULL,
+                    city TEXT NOT NULL DEFAULT '',
+                    source_url TEXT NOT NULL DEFAULT '',
+                    max_discount_percent REAL,
+                    min_bid_amount REAL,
+                    material_cost REAL,
+                    estimate_status TEXT NOT NULL DEFAULT 'pending',
+                    submit_decision_status TEXT NOT NULL DEFAULT 'pending',
+                    approval_status TEXT NOT NULL DEFAULT 'new',
+                    application_status TEXT NOT NULL DEFAULT 'not_submitted',
+                    result_status TEXT NOT NULL DEFAULT 'pending',
+                    final_bid_amount REAL,
+                    archived_at TEXT,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             columns = {
@@ -147,9 +230,82 @@ class Storage:
                 conn.execute("ALTER TABLE access_grants ADD COLUMN viewer_username TEXT NOT NULL DEFAULT ''")
             if "viewer_name" not in grant_columns:
                 conn.execute("ALTER TABLE access_grants ADD COLUMN viewer_name TEXT NOT NULL DEFAULT ''")
+            web_user_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(web_users)").fetchall()
+            }
+            if "password_state" not in web_user_columns:
+                conn.execute("ALTER TABLE web_users ADD COLUMN password_state TEXT NOT NULL DEFAULT 'pending_setup'")
+            if "password_hash" not in web_user_columns:
+                conn.execute("ALTER TABLE web_users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''")
+            if "is_active" not in web_user_columns:
+                conn.execute("ALTER TABLE web_users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+            if "is_super_admin" not in web_user_columns:
+                conn.execute("ALTER TABLE web_users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0")
+            auction_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(auctions)").fetchall()
+            }
+            if "estimate_status" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN estimate_status TEXT NOT NULL DEFAULT 'pending'")
+                conn.execute(
+                    """
+                    UPDATE auctions
+                    SET estimate_status = CASE
+                        WHEN approval_status IN ('estimate', 'approved') THEN 'approved'
+                        WHEN approval_status = 'not_interesting' THEN 'rejected'
+                        ELSE estimate_status
+                    END
+                    WHERE estimate_status = 'pending'
+                    """
+                )
+            if "submit_decision_status" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN submit_decision_status TEXT NOT NULL DEFAULT 'pending'")
+                conn.execute(
+                    """
+                    UPDATE auctions
+                    SET submit_decision_status = CASE
+                        WHEN approval_status = 'approved' THEN 'approved'
+                        WHEN approval_status = 'not_interesting' THEN 'rejected'
+                        ELSE submit_decision_status
+                    END
+                    WHERE submit_decision_status = 'pending'
+                    """
+                )
+            if "max_discount_percent" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN max_discount_percent REAL")
+            if "min_bid_amount" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN min_bid_amount REAL")
+            if "material_cost" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN material_cost REAL")
+            if "final_bid_amount" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN final_bid_amount REAL")
+            if "archived_at" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN archived_at TEXT")
+                conn.execute(
+                    """
+                    UPDATE auctions
+                    SET archived_at = created_at
+                    WHERE submit_decision_status = 'rejected' OR result_status IN ('won', 'lost', 'rejected')
+                    """
+                )
+            if "application_status" in auction_columns:
+                conn.execute(
+                    """
+                    UPDATE auctions
+                    SET submit_decision_status = 'submitted'
+                    WHERE application_status = 'submitted' AND submit_decision_status = 'approved'
+                    """
+                )
             contract_ids = [row["contract_id"] for row in conn.execute("SELECT DISTINCT contract_id FROM stages").fetchall()]
             for contract_id in contract_ids:
                 self._normalize_stage_positions(conn, int(contract_id))
+            owner_ids = {
+                int(row["chat_id"]) for row in conn.execute("SELECT DISTINCT chat_id FROM contracts").fetchall()
+            }
+            owner_ids.update(
+                int(row["owner_chat_id"]) for row in conn.execute("SELECT DISTINCT owner_chat_id FROM auctions").fetchall()
+            )
+            for owner_chat_id in owner_ids:
+                self._ensure_default_web_admin(conn, owner_chat_id)
 
     def register_chat(self, chat_id: int) -> None:
         with self.connection() as conn:
@@ -160,6 +316,627 @@ class Storage:
                 """,
                 (chat_id, datetime.utcnow().isoformat()),
             )
+            self._ensure_default_web_admin(conn, chat_id)
+
+    def ensure_default_web_admin(self, owner_chat_id: int) -> None:
+        with self.connection() as conn:
+            self._ensure_default_web_admin(conn, owner_chat_id)
+
+    def list_web_users(self, owner_chat_id: int) -> list[dict]:
+        with self.connection() as conn:
+            self._ensure_default_web_admin(conn, owner_chat_id)
+            rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, email, full_name, role_name, password_state,
+                       password_hash, is_active, is_super_admin, created_at
+                FROM web_users
+                WHERE owner_chat_id = ?
+                ORDER BY is_super_admin DESC, created_at ASC, id ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+            permission_rows = conn.execute(
+                """
+                SELECT user_id, section_id, can_view, can_edit
+                FROM web_user_section_access
+                WHERE user_id IN (
+                    SELECT id FROM web_users WHERE owner_chat_id = ?
+                )
+                ORDER BY user_id ASC, section_id ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+
+        permissions_by_user: dict[int, dict[str, dict[str, bool]]] = {}
+        for row in permission_rows:
+            user_id = int(row["user_id"])
+            permissions_by_user.setdefault(user_id, {})[row["section_id"]] = {
+                "can_view": bool(row["can_view"]),
+                "can_edit": bool(row["can_edit"]),
+            }
+
+        users: list[dict] = []
+        for row in rows:
+            user_id = int(row["id"])
+            users.append(
+                {
+                    "id": user_id,
+                    "owner_chat_id": int(row["owner_chat_id"]),
+                    "email": row["email"],
+                    "full_name": row["full_name"],
+                    "role_name": row["role_name"],
+                    "password_state": row["password_state"],
+                    "password_hash": row["password_hash"],
+                    "is_active": bool(row["is_active"]),
+                    "is_super_admin": bool(row["is_super_admin"]),
+                    "created_at": row["created_at"],
+                    "permissions": self._permissions_payload(permissions_by_user.get(user_id, {})),
+                }
+            )
+        return users
+
+    def create_web_user(
+        self,
+        owner_chat_id: int,
+        email: str,
+        full_name: str,
+        role_name: str,
+        permissions: dict[str, dict[str, bool]],
+    ) -> int:
+        with self.connection() as conn:
+            self._ensure_default_web_admin(conn, owner_chat_id)
+            cursor = conn.execute(
+                """
+                INSERT INTO web_users (
+                    owner_chat_id, email, full_name, role_name, password_state,
+                    is_active, is_super_admin, created_at
+                )
+                VALUES (?, ?, ?, ?, 'pending_setup', 1, 0, ?)
+                """,
+                (
+                    owner_chat_id,
+                    email.strip().lower(),
+                    full_name.strip(),
+                    role_name.strip() or "Viewer",
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            user_id = int(cursor.lastrowid)
+            self._replace_web_user_permissions(conn, user_id, permissions)
+            return user_id
+
+    def update_web_user(
+        self,
+        owner_chat_id: int,
+        user_id: int,
+        role_name: str,
+        permissions: dict[str, dict[str, bool]],
+    ) -> bool:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT is_super_admin
+                FROM web_users
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (user_id, owner_chat_id),
+            ).fetchone()
+            if row is None:
+                return False
+            is_super_admin = bool(row["is_super_admin"])
+            conn.execute(
+                """
+                UPDATE web_users
+                SET role_name = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (role_name.strip() or ("BigBoss" if is_super_admin else "Viewer"), user_id, owner_chat_id),
+            )
+            self._replace_web_user_permissions(
+                conn,
+                user_id,
+                self._full_access_permissions() if is_super_admin else permissions,
+            )
+            return True
+
+    def set_web_user_active(self, owner_chat_id: int, user_id: int, is_active: bool) -> bool:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT is_super_admin
+                FROM web_users
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (user_id, owner_chat_id),
+            ).fetchone()
+            if row is None or bool(row["is_super_admin"]):
+                return False
+            cursor = conn.execute(
+                """
+                UPDATE web_users
+                SET is_active = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (1 if is_active else 0, user_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def delete_web_user(self, owner_chat_id: int, user_id: int) -> bool:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT is_super_admin
+                FROM web_users
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (user_id, owner_chat_id),
+            ).fetchone()
+            if row is None or bool(row["is_super_admin"]):
+                return False
+            cursor = conn.execute(
+                """
+                DELETE FROM web_users
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (user_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def auth_hint_user(self) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, owner_chat_id, email, full_name, role_name, password_state,
+                       password_hash, is_active, is_super_admin, created_at
+                FROM web_users
+                WHERE is_super_admin = 1
+                ORDER BY created_at ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            permissions = self._full_access_permissions() if bool(row["is_super_admin"]) else self._permissions_payload()
+            return {
+                "id": int(row["id"]),
+                "owner_chat_id": int(row["owner_chat_id"]),
+                "email": row["email"],
+                "full_name": row["full_name"],
+                "role_name": row["role_name"],
+                "password_state": row["password_state"],
+                "password_hash": row["password_hash"],
+                "is_active": bool(row["is_active"]),
+                "is_super_admin": bool(row["is_super_admin"]),
+                "created_at": row["created_at"],
+                "permissions": permissions,
+            }
+
+    def get_web_user_by_email(self, email: str) -> dict | None:
+        normalized = email.strip().lower()
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, owner_chat_id, email, full_name, role_name, password_state,
+                       password_hash, is_active, is_super_admin, created_at
+                FROM web_users
+                WHERE email = ?
+                ORDER BY is_super_admin DESC, created_at ASC
+                LIMIT 1
+                """,
+                (normalized,),
+            ).fetchone()
+            if row is None:
+                return None
+            permission_rows = conn.execute(
+                """
+                SELECT section_id, can_view, can_edit
+                FROM web_user_section_access
+                WHERE user_id = ?
+                ORDER BY section_id ASC
+                """,
+                (int(row["id"]),),
+            ).fetchall()
+        permissions = {
+            item["section_id"]: {
+                "can_view": bool(item["can_view"]),
+                "can_edit": bool(item["can_edit"]),
+            }
+            for item in permission_rows
+        }
+        return {
+            "id": int(row["id"]),
+            "owner_chat_id": int(row["owner_chat_id"]),
+            "email": row["email"],
+            "full_name": row["full_name"],
+            "role_name": row["role_name"],
+            "password_state": row["password_state"],
+            "password_hash": row["password_hash"],
+            "is_active": bool(row["is_active"]),
+            "is_super_admin": bool(row["is_super_admin"]),
+            "created_at": row["created_at"],
+            "permissions": self._full_access_permissions() if bool(row["is_super_admin"]) else self._permissions_payload(permissions),
+        }
+
+    def get_web_user_by_id(self, user_id: int) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, owner_chat_id, email, full_name, role_name, password_state,
+                       password_hash, is_active, is_super_admin, created_at
+                FROM web_users
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            permission_rows = conn.execute(
+                """
+                SELECT section_id, can_view, can_edit
+                FROM web_user_section_access
+                WHERE user_id = ?
+                ORDER BY section_id ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        permissions = {
+            item["section_id"]: {
+                "can_view": bool(item["can_view"]),
+                "can_edit": bool(item["can_edit"]),
+            }
+            for item in permission_rows
+        }
+        return {
+            "id": int(row["id"]),
+            "owner_chat_id": int(row["owner_chat_id"]),
+            "email": row["email"],
+            "full_name": row["full_name"],
+            "role_name": row["role_name"],
+            "password_state": row["password_state"],
+            "password_hash": row["password_hash"],
+            "is_active": bool(row["is_active"]),
+            "is_super_admin": bool(row["is_super_admin"]),
+            "created_at": row["created_at"],
+            "permissions": self._full_access_permissions() if bool(row["is_super_admin"]) else self._permissions_payload(permissions),
+        }
+
+    def set_web_user_password(self, user_id: int, password_hash: str) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE web_users
+                SET password_hash = ?, password_state = 'password_set'
+                WHERE id = ?
+                """,
+                (password_hash, user_id),
+            )
+            return cursor.rowcount > 0
+
+    def create_web_session(self, user_id: int, token: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO web_sessions (token, user_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (token, user_id, datetime.utcnow().isoformat()),
+            )
+
+    def delete_web_session(self, token: str) -> None:
+        with self.connection() as conn:
+            conn.execute("DELETE FROM web_sessions WHERE token = ?", (token,))
+
+    def get_web_user_by_session(self, token: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT u.id, u.owner_chat_id, u.email, u.full_name, u.role_name, u.password_state,
+                       u.password_hash, u.is_active, u.is_super_admin, u.created_at
+                FROM web_sessions s
+                JOIN web_users u ON u.id = s.user_id
+                WHERE s.token = ?
+                LIMIT 1
+                """,
+                (token,),
+            ).fetchone()
+            if row is None:
+                return None
+            permission_rows = conn.execute(
+                """
+                SELECT section_id, can_view, can_edit
+                FROM web_user_section_access
+                WHERE user_id = ?
+                ORDER BY section_id ASC
+                """,
+                (int(row["id"]),),
+            ).fetchall()
+        permissions = {
+            item["section_id"]: {
+                "can_view": bool(item["can_view"]),
+                "can_edit": bool(item["can_edit"]),
+            }
+            for item in permission_rows
+        }
+        return {
+            "id": int(row["id"]),
+            "owner_chat_id": int(row["owner_chat_id"]),
+            "email": row["email"],
+            "full_name": row["full_name"],
+            "role_name": row["role_name"],
+            "password_state": row["password_state"],
+            "password_hash": row["password_hash"],
+            "is_active": bool(row["is_active"]),
+            "is_super_admin": bool(row["is_super_admin"]),
+            "created_at": row["created_at"],
+            "permissions": self._full_access_permissions() if bool(row["is_super_admin"]) else self._permissions_payload(permissions),
+        }
+
+    def ensure_password_setup_token(self, user_id: int, token: str) -> str:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT token
+                FROM web_password_setup_tokens
+                WHERE user_id = ?
+                LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            if row is not None:
+                return row["token"]
+            conn.execute(
+                """
+                INSERT INTO web_password_setup_tokens (token, user_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (token, user_id, datetime.utcnow().isoformat()),
+            )
+            return token
+
+    def get_web_user_by_setup_token(self, token: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT u.id, u.owner_chat_id, u.email, u.full_name, u.role_name, u.password_state,
+                       u.password_hash, u.is_active, u.is_super_admin, u.created_at
+                FROM web_password_setup_tokens t
+                JOIN web_users u ON u.id = t.user_id
+                WHERE t.token = ?
+                LIMIT 1
+                """,
+                (token,),
+            ).fetchone()
+            if row is None:
+                return None
+        return self.get_web_user_by_id(int(row["id"]))
+
+    def consume_password_setup_token(self, token: str) -> None:
+        with self.connection() as conn:
+            conn.execute("DELETE FROM web_password_setup_tokens WHERE token = ?", (token,))
+
+    def list_auctions(self, owner_chat_id: int) -> list[Auction]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, auction_number, bid_deadline, amount, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
+                       estimate_status, submit_decision_status, application_status, result_status, final_bid_amount, archived_at, created_at
+                FROM auctions
+                WHERE owner_chat_id = ?
+                ORDER BY bid_deadline ASC, id ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [self._auction_from_row(row) for row in rows]
+
+    def add_auction(
+        self,
+        owner_chat_id: int,
+        auction_number: str,
+        bid_deadline: date,
+        amount: float,
+        title: str,
+        city: str,
+        source_url: str,
+    ) -> int:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO chats (chat_id, created_at)
+                VALUES (?, ?)
+                """,
+                (owner_chat_id, datetime.utcnow().isoformat()),
+            )
+            self._ensure_default_web_admin(conn, owner_chat_id)
+            cursor = conn.execute(
+                """
+                INSERT INTO auctions (
+                    owner_chat_id, auction_number, bid_deadline, amount, title, city, source_url,
+                    max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status,
+                    approval_status, application_status, result_status, final_bid_amount, created_at, archived_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL)
+                """,
+                (
+                    owner_chat_id,
+                    auction_number.strip(),
+                    bid_deadline.strftime(DATE_FMT),
+                    amount,
+                    title.strip(),
+                    city.strip(),
+                    source_url.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def update_auction_statuses(
+        self,
+        owner_chat_id: int,
+        auction_id: int,
+        estimate_status: str,
+        material_cost: float | None,
+        submit_decision_status: str,
+        application_status: str,
+        result_status: str,
+        final_bid_amount: float | None,
+        archived_at: datetime | None,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE auctions
+                SET estimate_status = ?, material_cost = ?, submit_decision_status = ?, application_status = ?, result_status = ?, final_bid_amount = ?, archived_at = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (
+                    estimate_status,
+                    material_cost,
+                    submit_decision_status,
+                    application_status,
+                    result_status,
+                    final_bid_amount,
+                    archived_at.isoformat() if archived_at is not None else None,
+                    auction_id,
+                    owner_chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def update_auction_max_discount(
+        self,
+        owner_chat_id: int,
+        auction_id: int,
+        max_discount_percent: float | None,
+        min_bid_amount: float | None,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE auctions
+                SET max_discount_percent = ?, min_bid_amount = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (max_discount_percent, min_bid_amount, auction_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def update_auction_deadline(
+        self,
+        owner_chat_id: int,
+        auction_id: int,
+        bid_deadline: date,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE auctions
+                SET bid_deadline = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (bid_deadline.strftime(DATE_FMT), auction_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def update_auction_amount(
+        self,
+        owner_chat_id: int,
+        auction_id: int,
+        amount: float,
+        max_discount_percent: float | None,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE auctions
+                SET amount = ?, max_discount_percent = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (amount, max_discount_percent, auction_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def update_auction_details(
+        self,
+        owner_chat_id: int,
+        auction_id: int,
+        auction_number: str,
+        title: str,
+        city: str,
+        source_url: str,
+        created_date: date,
+    ) -> bool:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT created_at
+                FROM auctions
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (auction_id, owner_chat_id),
+            ).fetchone()
+            if row is None:
+                return False
+            existing_created_at = datetime.fromisoformat(row["created_at"])
+            updated_created_at = datetime.combine(created_date, existing_created_at.time() or time.min)
+            cursor = conn.execute(
+                """
+                UPDATE auctions
+                SET auction_number = ?, title = ?, city = ?, source_url = ?, created_at = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (
+                    auction_number.strip(),
+                    title.strip(),
+                    city.strip(),
+                    source_url.strip(),
+                    updated_created_at.isoformat(),
+                    auction_id,
+                    owner_chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def ensure_demo_auctions(self, owner_chat_id: int) -> None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS total FROM auctions WHERE owner_chat_id = ?",
+                (owner_chat_id,),
+            ).fetchone()
+            if int(row["total"]) > 0:
+                return
+            self._ensure_default_web_admin(conn, owner_chat_id)
+            demo_items = [
+                ("0145300000126000011", date(2026, 3, 27), 18_450_000.0, "Капремонт школы №8", "Хабаровск", "https://zakupki.example/auction/11", "approved", "pending", "not_submitted", "pending"),
+                ("0320300027726000048", date(2026, 3, 29), 42_900_000.0, "Реконструкция стадиона Восток", "Владивосток", "https://zakupki.example/auction/48", "approved", "approved", "submitted", "pending"),
+                ("0817200000326000005", date(2026, 4, 2), 11_780_000.0, "Благоустройство дворового пространства", "Уссурийск", "https://zakupki.example/auction/05", "rejected", "rejected", "not_submitted", "pending"),
+                ("0258200000426000039", date(2026, 4, 5), 67_300_000.0, "Строительство ФОКа в пригороде", "Находка", "https://zakupki.example/auction/39", "approved", "approved", "submitted", "won"),
+                ("0411100001126000021", date(2026, 4, 8), 23_650_000.0, "Ремонт городской поликлиники", "Артем", "https://zakupki.example/auction/21", "approved", "approved", "submitted", "lost"),
+            ]
+            for item in demo_items:
+                conn.execute(
+                    """
+                    INSERT INTO auctions (
+                        owner_chat_id, auction_number, bid_deadline, amount, title, city, source_url,
+                        max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status, approval_status, application_status, result_status, final_bid_amount, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 'new', ?, ?, NULL, ?)
+                    """,
+                    (
+                        owner_chat_id,
+                        item[0],
+                        item[1].strftime(DATE_FMT),
+                        item[2],
+                        item[3],
+                        item[4],
+                        item[5],
+                        item[6],
+                        item[7],
+                        item[8],
+                        item[9],
+                        datetime.utcnow().isoformat(),
+                    ),
+                )
 
     def create_invite_token(self, owner_chat_id: int, token: str) -> None:
         with self.connection() as conn:
@@ -739,6 +1516,29 @@ class Storage:
         )
 
     @staticmethod
+    def _auction_from_row(row: sqlite3.Row) -> Auction:
+        return Auction(
+            id=row["id"],
+            owner_chat_id=row["owner_chat_id"],
+            auction_number=row["auction_number"],
+            bid_deadline=date.fromisoformat(row["bid_deadline"]),
+            amount=float(row["amount"]),
+            title=row["title"],
+            city=row["city"],
+            source_url=row["source_url"],
+            max_discount_percent=float(row["max_discount_percent"]) if row["max_discount_percent"] is not None else None,
+            min_bid_amount=float(row["min_bid_amount"]) if row["min_bid_amount"] is not None else None,
+            material_cost=float(row["material_cost"]) if row["material_cost"] is not None else None,
+            estimate_status=row["estimate_status"],
+            submit_decision_status=row["submit_decision_status"],
+            application_status=row["application_status"],
+            result_status=row["result_status"],
+            final_bid_amount=float(row["final_bid_amount"]) if row["final_bid_amount"] is not None else None,
+            archived_at=datetime.fromisoformat(row["archived_at"]) if row["archived_at"] is not None else None,
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
     def _normalize_stage_positions(conn: sqlite3.Connection, contract_id: int) -> None:
         rows = conn.execute(
             """
@@ -758,3 +1558,77 @@ class Storage:
                 """,
                 (index, f"Этап {index}", row["id"]),
             )
+
+    def _ensure_default_web_admin(self, conn: sqlite3.Connection, owner_chat_id: int) -> int:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM web_users
+            WHERE owner_chat_id = ? AND is_super_admin = 1
+            LIMIT 1
+            """,
+            (owner_chat_id,),
+        ).fetchone()
+        if row is not None:
+            admin_id = int(row["id"])
+            self._replace_web_user_permissions(conn, admin_id, self._full_access_permissions())
+            return admin_id
+
+        cursor = conn.execute(
+            """
+            INSERT INTO web_users (
+                owner_chat_id, email, full_name, role_name, password_state,
+                is_active, is_super_admin, created_at
+            )
+            VALUES (?, ?, 'BigBoss', 'BigBoss', 'local_only', 1, 1, ?)
+            """,
+            (
+                owner_chat_id,
+                f"bigboss-{owner_chat_id}@local.crm",
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        admin_id = int(cursor.lastrowid)
+        self._replace_web_user_permissions(conn, admin_id, self._full_access_permissions())
+        return admin_id
+
+    def _replace_web_user_permissions(
+        self,
+        conn: sqlite3.Connection,
+        user_id: int,
+        permissions: dict[str, dict[str, bool]],
+    ) -> None:
+        normalized = self._permissions_payload(permissions)
+        conn.execute("DELETE FROM web_user_section_access WHERE user_id = ?", (user_id,))
+        for section_id, values in normalized.items():
+            conn.execute(
+                """
+                INSERT INTO web_user_section_access (user_id, section_id, can_view, can_edit)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    section_id,
+                    1 if values["can_view"] else 0,
+                    1 if values["can_edit"] else 0,
+                ),
+            )
+
+    def _permissions_payload(
+        self,
+        permissions: dict[str, dict[str, bool]] | None = None,
+    ) -> dict[str, dict[str, bool]]:
+        permissions = permissions or {}
+        payload: dict[str, dict[str, bool]] = {}
+        for section_id in WEB_SECTION_IDS:
+            raw = permissions.get(section_id, {})
+            can_edit = bool(raw.get("can_edit"))
+            can_view = bool(raw.get("can_view")) or can_edit
+            payload[section_id] = {"can_view": can_view, "can_edit": can_edit}
+        return payload
+
+    def _full_access_permissions(self) -> dict[str, dict[str, bool]]:
+        return {
+            section_id: {"can_view": True, "can_edit": True}
+            for section_id in WEB_SECTION_IDS
+        }
