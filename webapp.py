@@ -267,6 +267,32 @@ def permission_summary(permissions: dict[str, dict[str, bool]]) -> str:
     return ", ".join(enabled) if enabled else "Нет доступных разделов"
 
 
+def is_procurement_user(current_user: dict | None) -> bool:
+    return bool(
+        current_user
+        and not current_user.get("is_super_admin")
+        and current_user.get("role_name") == "Отдел госзакупок"
+    )
+
+
+def procurement_status_allowed(current_user: dict | None, auction, estimate_status: str, submit_decision_status: str, result_status: str) -> bool:
+    if not is_procurement_user(current_user):
+        return True
+    if estimate_status != auction.estimate_status:
+        return False
+    submit_changed = submit_decision_status != auction.submit_decision_status
+    result_changed = result_status != auction.result_status
+    if submit_changed:
+        if not (auction.submit_decision_status == "approved" and submit_decision_status == "submitted"):
+            return False
+    if not submit_changed and not result_changed:
+        return True
+    effective_submit = submit_decision_status
+    if result_changed and effective_submit != "submitted":
+        return False
+    return True
+
+
 def password_state_label(value: str) -> str:
     mapping = {
         "local_only": "Локальный вход без пароля",
@@ -611,6 +637,19 @@ def render_deadline_form(owner_chat_id: int, auction_id: int, current_date: date
     """
 
 
+def render_deadline_display(current_date: date, note: str, is_danger: bool) -> str:
+    note_block = ""
+    if note:
+        note_class = "deadline-meta danger" if is_danger else "deadline-meta"
+        note_block = f'<div class="{note_class}">{escape(note)}</div>'
+    return f"""
+    <div>
+      <div>{format_date(current_date)}</div>
+      {note_block}
+    </div>
+    """
+
+
 def render_amount_form(owner_chat_id: int, auction_id: int, current_amount: float, active_tab: str) -> str:
     return f"""
     <details class="status-menu">
@@ -626,6 +665,10 @@ def render_amount_form(owner_chat_id: int, auction_id: int, current_amount: floa
       </form>
     </details>
     """
+
+
+def render_amount_display(current_amount: float) -> str:
+    return f'<span class="amount-value">{format_amount(current_amount)}</span>'
 
 
 def render_auction_details_form(owner_chat_id: int, item, active_tab: str) -> str:
@@ -669,12 +712,69 @@ def render_auction_details_form(owner_chat_id: int, item, active_tab: str) -> st
     """
 
 
-def render_auction_row(item, owner_chat_id: int, active_tab: str) -> str:
+def render_auction_details_display(item) -> str:
+    source_link = (
+        f'<a href="{escape(item.source_url)}" target="_blank" rel="noreferrer">{escape(item.auction_number)}</a>'
+        if item.source_url
+        else escape(item.auction_number)
+    )
+    return f"""
+    <div>
+      <div class="auction-number">№ {source_link}</div>
+      <div class="timeline-title">{escape(item.title)}</div>
+    </div>
+    """
+
+
+def render_discount_display(
+    amount: float,
+    current_discount: float | None,
+    current_min_amount: float | None,
+    is_required: bool,
+) -> str:
+    if current_discount is not None and current_min_amount is not None:
+        return (
+            f'<span class="discount-value">'
+            f'<span class="discount-percent">{escape(format_discount_percent(current_discount))}</span>'
+            f'<span class="discount-amount">{escape(format_amount(current_min_amount))}</span>'
+            f'</span>'
+        )
+    if is_required:
+        return '<span class="discount-value"><span class="discount-alert">Введите<br>максимальное<br>снижение!</span></span>'
+    return '<span class="discount-value"><span class="discount-placeholder">—</span></span>'
+
+
+def render_submit_for_procurement(owner_chat_id: int, item, current_values: dict[str, str], active_tab: str) -> str:
+    if item.submit_decision_status != "approved":
+        return auction_current_chip("submit_decision_status", current_values)
+    hidden_inputs = [
+        f'<input type="hidden" name="estimate_status" value="{escape(current_values["estimate_status"])}">',
+        f'<input type="hidden" name="result_status" value="{escape(current_values["result_status"])}">',
+    ]
+    if item.material_cost is not None:
+        hidden_inputs.append(
+            f'<input type="hidden" name="material_cost" value="{escape(format_amount_input(item.material_cost))}">'
+        )
+    return f"""
+    <details class="status-menu">
+      <summary>{auction_current_chip("submit_decision_status", current_values)}</summary>
+      <form class="status-popover" method="post" action="/auctions/{item.id}/status?owner={owner_chat_id}&tab={escape(active_tab)}">
+        {''.join(hidden_inputs)}
+        <button class="{AUCTION_SUBMIT_DECISION_META['submitted'][1]} status-option" type="submit" name="submit_decision_status" value="submitted">
+          {AUCTION_SUBMIT_DECISION_META['submitted'][0]}
+        </button>
+      </form>
+    </details>
+    """
+
+
+def render_auction_row(item, owner_chat_id: int, active_tab: str, current_user: dict | None = None) -> str:
     current_values = {
         "estimate_status": item.estimate_status,
         "submit_decision_status": item.submit_decision_status,
         "result_status": item.result_status,
     }
+    procurement_user = is_procurement_user(current_user)
     days_left = (item.bid_deadline - date.today()).days
     show_deadline_note = days_left > 0
     is_deadline_danger = (
@@ -686,27 +786,34 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str) -> str:
         deadline_note = ""
     else:
         deadline_note = f"Осталось {days_left} дн."
+    lot_cell = render_auction_details_display(item) if procurement_user else render_auction_details_form(owner_chat_id, item, active_tab)
+    deadline_cell = render_deadline_display(item.bid_deadline, deadline_note, is_deadline_danger) if procurement_user else render_deadline_form(owner_chat_id, item.id, item.bid_deadline, deadline_note, is_deadline_danger, active_tab)
+    amount_cell = render_amount_display(item.amount) if procurement_user else render_amount_form(owner_chat_id, item.id, item.amount, active_tab)
+    estimate_cell = auction_current_chip("estimate_status", current_values) + estimate_summary(item) if procurement_user else render_estimate_form(owner_chat_id, item, current_values, active_tab)
+    submit_cell = render_submit_for_procurement(owner_chat_id, item, current_values, active_tab) if procurement_user else render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
+    discount_cell = render_discount_display(item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if procurement_user else render_discount_form(owner_chat_id, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
+    result_cell = render_result_form(owner_chat_id, item, current_values, active_tab)
     return f"""
     <tr id="auction-{item.id}" data-auction-row="{item.id}">
       <td>
-        {render_auction_details_form(owner_chat_id, item, active_tab)}
+        {lot_cell}
         <div class="auction-lot-meta">
           <span class="contract-meta">{escape(item.city)}</span>
           {added_date_meta(item)}
         </div>
       </td>
-      <td class="nowrap">{render_deadline_form(owner_chat_id, item.id, item.bid_deadline, deadline_note, is_deadline_danger, active_tab)}</td>
-      <td class="nowrap">{render_amount_form(owner_chat_id, item.id, item.amount, active_tab)}</td>
-      <td>{render_estimate_form(owner_chat_id, item, current_values, active_tab)}</td>
-      <td>{render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)}</td>
-      <td>{render_discount_form(owner_chat_id, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)}</td>
-      <td>{render_result_form(owner_chat_id, item, current_values, active_tab)}</td>
+      <td class="nowrap">{deadline_cell}</td>
+      <td class="nowrap">{amount_cell}</td>
+      <td>{estimate_cell}</td>
+      <td>{submit_cell}</td>
+      <td>{discount_cell}</td>
+      <td>{result_cell}</td>
     </tr>
     """
 
 
-def render_auction_rows(auctions, owner_chat_id: int, active_tab: str) -> str:
-    return "".join(render_auction_row(item, owner_chat_id, active_tab) for item in auctions)
+def render_auction_rows(auctions, owner_chat_id: int, active_tab: str, current_user: dict | None = None) -> str:
+    return "".join(render_auction_row(item, owner_chat_id, active_tab, current_user) for item in auctions)
 
 
 SECTIONS = [
@@ -2588,6 +2695,7 @@ def render_access_section(
 def render_auctions_section(
     storage: Storage,
     owner_chat_id: int,
+    current_user: dict | None,
     active_tab: str = "active",
     flash_message: str = "",
     success: bool = False,
@@ -2636,7 +2744,7 @@ def render_auctions_section(
     </section>
     """
 
-    rows_html = render_auction_rows(auctions, owner_chat_id, active_tab)
+    rows_html = render_auction_rows(auctions, owner_chat_id, active_tab, current_user)
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     tab_links = f"""
     <div class="tab-row">
@@ -2655,38 +2763,7 @@ def render_auctions_section(
         if active_tab == "active"
         else "Архив пока пуст. Как только по аукциону будет итог или решение не подавать, он окажется здесь."
     )
-    return f"""
-    {stats}
-    {flash_html}
-    <section class="card panel" id="auction-registry">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">Реестр аукционов</h2>
-          <div class="panel-sub">Любой сотрудник добавляет лот, руководство акцептует его как «считать / подавать», затем фиксируем подачу и итог. Завершенные и неактуальные лоты уходят в архив.</div>
-        </div>
-        {tab_links}
-      </div>
-      {
-        f'''
-      <table class="table auction-table">
-        <thead>
-          <tr>
-            <th>Лот</th>
-            <th class="nowrap">Подача до</th>
-            <th class="nowrap">Сумма</th>
-            <th>Считать</th>
-            <th>Заявка</th>
-            <th>Макс. снижение</th>
-            <th>Итог</th>
-          </tr>
-        </thead>
-        <tbody data-auctions-body>{rows_html}</tbody>
-      </table>
-      '''
-        if auctions
-        else f'<div class="empty">{escape(empty_message)}</div>'
-      }
-    </section>
+    add_auction_block = "" if is_procurement_user(current_user) else f"""
     <section class="card panel">
       <div class="panel-head">
         <div>
@@ -2727,6 +2804,40 @@ def render_auctions_section(
         </div>
       </form>
     </section>
+    """
+    return f"""
+    {stats}
+    {flash_html}
+    <section class="card panel" id="auction-registry">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Реестр аукционов</h2>
+          <div class="panel-sub">Любой сотрудник добавляет лот, руководство акцептует его как «считать / подавать», затем фиксируем подачу и итог. Завершенные и неактуальные лоты уходят в архив.</div>
+        </div>
+        {tab_links}
+      </div>
+      {
+        f'''
+      <table class="table auction-table">
+        <thead>
+          <tr>
+            <th>Лот</th>
+            <th class="nowrap">Подача до</th>
+            <th class="nowrap">Сумма</th>
+            <th>Считать</th>
+            <th>Заявка</th>
+            <th>Макс. снижение</th>
+            <th>Итог</th>
+          </tr>
+        </thead>
+        <tbody data-auctions-body>{rows_html}</tbody>
+      </table>
+      '''
+        if auctions
+        else f'<div class="empty">{escape(empty_message)}</div>'
+      }
+    </section>
+    {add_auction_block}
     <section class="stats">
       <section class="card panel">
         <div class="panel-head">
@@ -3019,6 +3130,11 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
+        if is_procurement_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не добавляет новые аукционы.")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
         form = read_post_data(environ)
         try:
             auction_number = form["auction_number"].strip()
@@ -3034,9 +3150,9 @@ def app(environ, start_response):
             if not city:
                 raise ValueError("Нужно указать город")
             storage.add_auction(current_owner, auction_number, bid_deadline, amount, title, city, source_url)
-            body = render_auctions_section(storage, current_owner, current_auction_tab, "Аукцион добавлен в реестр.", True)
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Аукцион добавлен в реестр.", True)
         except Exception as exc:
-            body = render_auctions_section(storage, current_owner, current_auction_tab, f"Не удалось добавить аукцион: {exc}")
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось добавить аукцион: {exc}")
         html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -3056,6 +3172,8 @@ def app(environ, start_response):
             submit_decision_status = form.get("submit_decision_status", auction.submit_decision_status)
             result_status = form.get("result_status", auction.result_status)
             final_bid_amount = auction.final_bid_amount
+            if not procurement_status_allowed(current_user, auction, estimate_status, submit_decision_status, result_status):
+                raise ValueError("Для роли «Отдел госзакупок» доступны только перевод «Подавать заявку» -> «Заявка подана» и изменение итога")
             if estimate_status == "calculated":
                 material_cost = parse_optional_number(form.get("material_cost", ""))
                 if material_cost is None:
@@ -3109,7 +3227,7 @@ def app(environ, start_response):
             target_tab = "archive" if is_auction_archived(updated_auction) else "active"
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={target_tab}")
         except Exception as exc:
-            body = render_auctions_section(storage, current_owner, current_auction_tab, f"Не удалось обновить статус аукциона: {exc}")
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось обновить статус аукциона: {exc}")
         html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -3118,6 +3236,11 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
+        if is_procurement_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не меняет максимальное снижение.")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
         form = read_post_data(environ)
         try:
             auction_id = int(path.split("/")[2])
@@ -3152,7 +3275,7 @@ def app(environ, start_response):
             target_tab = "archive" if is_auction_archived(auction) else current_auction_tab
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={target_tab}")
         except Exception as exc:
-            body = render_auctions_section(storage, current_owner, current_auction_tab, f"Не удалось обновить максимальное снижение: {exc}")
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось обновить максимальное снижение: {exc}")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3161,6 +3284,11 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
+        if is_procurement_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не меняет сумму аукциона.")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
         form = read_post_data(environ)
         try:
             auction_id = int(path.split("/")[2])
@@ -3179,7 +3307,7 @@ def app(environ, start_response):
             target_tab = "archive" if is_auction_archived(auction) else current_auction_tab
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={target_tab}")
         except Exception as exc:
-            body = render_auctions_section(storage, current_owner, current_auction_tab, f"Не удалось обновить сумму аукциона: {exc}")
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось обновить сумму аукциона: {exc}")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3188,6 +3316,11 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
+        if is_procurement_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не меняет карточку аукциона.")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
         form = read_post_data(environ)
         try:
             auction_id = int(path.split("/")[2])
@@ -3211,7 +3344,7 @@ def app(environ, start_response):
             target_tab = "archive" if is_auction_archived(auction) else current_auction_tab
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={target_tab}")
         except Exception as exc:
-            body = render_auctions_section(storage, current_owner, current_auction_tab, f"Не удалось обновить данные аукциона: {exc}")
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось обновить данные аукциона: {exc}")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3220,6 +3353,11 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
+        if is_procurement_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не меняет дедлайн аукциона.")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
         form = read_post_data(environ)
         try:
             auction_id = int(path.split("/")[2])
@@ -3233,7 +3371,7 @@ def app(environ, start_response):
             target_tab = "archive" if is_auction_archived(updated_auction) else current_auction_tab
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={target_tab}")
         except Exception as exc:
-            body = render_auctions_section(storage, current_owner, current_auction_tab, f"Не удалось обновить дату подачи: {exc}")
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось обновить дату подачи: {exc}")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3247,7 +3385,7 @@ def app(environ, start_response):
             auction = next((item for item in storage.list_auctions(current_owner) if item.id == auction_id), None)
             if auction is None:
                 raise ValueError("Аукцион не найден")
-            html = render_auction_row(auction, current_owner, current_auction_tab)
+            html = render_auction_row(auction, current_owner, current_auction_tab, current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         except Exception:
@@ -3259,7 +3397,7 @@ def app(environ, start_response):
         if denied:
             return denied
         auctions = storage.list_auctions(current_owner)
-        html = render_auction_rows(auctions, current_owner, current_auction_tab)
+        html = render_auction_rows(auctions, current_owner, current_auction_tab, current_user)
         start_response(
             "200 OK",
             [
@@ -3274,7 +3412,7 @@ def app(environ, start_response):
         denied = guard("auctions", "view")
         if denied:
             return denied
-        body = render_auctions_section(storage, current_owner, current_auction_tab)
+        body = render_auctions_section(storage, current_owner, current_user, current_auction_tab)
         html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
