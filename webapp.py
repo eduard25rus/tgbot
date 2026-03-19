@@ -3257,13 +3257,7 @@ def app(environ, start_response):
             if not any(item["can_view"] for item in permissions.values()):
                 raise ValueError("Нужно открыть хотя бы один раздел для просмотра")
             storage.create_web_user(current_owner, login, full_name, role_name, permissions)
-            body = render_access_section(
-                storage,
-                current_owner,
-                request_base_url(environ),
-                "Пользователь добавлен. Скопируйте ниже ссылку установки пароля и отправьте сотруднику.",
-                True,
-            )
+            return redirect(start_response, f"/access?owner={current_owner}")
         except Exception as exc:
             body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось добавить пользователя: {exc}")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
@@ -3280,13 +3274,7 @@ def app(environ, start_response):
             if user is None or user["owner_chat_id"] != current_owner:
                 raise ValueError("Пользователь не найден")
             storage.regenerate_password_setup_token(user_id, secrets.token_urlsafe(24))
-            body = render_access_section(
-                storage,
-                current_owner,
-                request_base_url(environ),
-                f"Новая ссылка установки пароля готова для пользователя «{user['full_name']}».",
-                True,
-            )
+            return redirect(start_response, f"/access?owner={current_owner}")
         except Exception as exc:
             body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось сбросить пароль: {exc}")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
@@ -3309,7 +3297,7 @@ def app(environ, start_response):
             )
             if not updated:
                 raise ValueError("Пользователь не найден")
-            body = render_access_section(storage, current_owner, request_base_url(environ), "Права пользователя обновлены.", True)
+            return redirect(start_response, f"/access?owner={current_owner}")
         except Exception as exc:
             body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось обновить пользователя: {exc}")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
@@ -3329,7 +3317,7 @@ def app(environ, start_response):
             updated = storage.set_web_user_active(current_owner, user_id, not target["is_active"])
             if not updated:
                 raise ValueError("Нельзя отключить главного администратора")
-            body = render_access_section(storage, current_owner, request_base_url(environ), "Статус доступа обновлен.", True)
+            return redirect(start_response, f"/access?owner={current_owner}")
         except Exception as exc:
             body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось изменить статус доступа: {exc}")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
@@ -3345,7 +3333,7 @@ def app(environ, start_response):
             deleted = storage.delete_web_user(current_owner, user_id)
             if not deleted:
                 raise ValueError("Нельзя удалить главного администратора или пользователь не найден")
-            body = render_access_section(storage, current_owner, request_base_url(environ), "Пользователь удален.", True)
+            return redirect(start_response, f"/access?owner={current_owner}")
         except Exception as exc:
             body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось удалить пользователя: {exc}")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
