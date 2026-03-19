@@ -2439,10 +2439,10 @@ def render_access_section(
                     <div class="name-popover">
                       <div class="field">
                         <label>Имя пользователя</label>
-                        <input type="text" name="full_name_visible" value="{escape(user["full_name"])}" required>
+                        <input type="text" name="full_name_visible" value="{escape(user["full_name"])}" form="user-form-{user["id"]}" required>
                       </div>
                       <div class="action-row">
-                        <button class="submit-btn" type="submit" formaction="/access/users/{user["id"]}/update?owner={owner_chat_id}" formmethod="post">Сохранить имя</button>
+                        <button class="submit-btn" type="submit" form="user-form-{user["id"]}" formaction="/access/users/{user["id"]}/update?owner={owner_chat_id}" formmethod="post">Сохранить имя</button>
                       </div>
                     </div>
                   </details>
@@ -2454,7 +2454,7 @@ def render_access_section(
                 </div>
                 <div class="badge-row">{''.join(status_badges)}</div>
               </div>
-              <form class="form-grid" method="post" action="/access/users/{user["id"]}/update?owner={owner_chat_id}">
+              <form id="user-form-{user["id"]}" class="form-grid" method="post" action="/access/users/{user["id"]}/update?owner={owner_chat_id}">
                 <input type="hidden" name="full_name" value="{escape(user["full_name"])}">
                 <div class="field">
                   <label>Роль</label>
