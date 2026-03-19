@@ -72,7 +72,7 @@ SESSION_COOKIE = "felis_session"
 PREVIEW_ROLE_COOKIE = "felis_preview_role"
 ROLE_PREVIEW_OPTIONS = [
     ("", "Обычный режим"),
-    ("Отдел госзакупок", "Отдел госзакупок"),
+    ("procurement", "Отдел госзакупок"),
 ]
 
 
@@ -276,7 +276,7 @@ def is_procurement_user(current_user: dict | None) -> bool:
     return bool(
         current_user
         and not current_user.get("is_super_admin")
-        and current_user.get("effective_role_name", current_user.get("role_name")) == "Отдел госзакупок"
+        and current_user.get("effective_role_name", current_user.get("role_name")) in {"Отдел госзакупок", "procurement"}
     )
 
 
@@ -285,6 +285,7 @@ def with_preview_role(current_user: dict | None, preview_role: str) -> dict | No
         return None
     effective_user = dict(current_user)
     effective_user["preview_role_name"] = preview_role
+    effective_user["preview_role_label"] = dict(ROLE_PREVIEW_OPTIONS).get(preview_role, "")
     effective_user["effective_role_name"] = preview_role or current_user.get("role_name", "")
     return effective_user
 
@@ -895,7 +896,7 @@ def layout(
           <div class="current-user-email">{escape(current_user["login"])}</div>
           {
             f'''
-          <div class="preview-note">Тестовый режим роли: {escape(current_user["preview_role_name"])}</div>
+          <div class="preview-note">Тестовый режим роли: {escape(current_user["preview_role_label"])}</div>
           '''
             if current_user.get("preview_role_name")
             else ""
@@ -3105,6 +3106,8 @@ def app(environ, start_response):
     cookies = parse_cookies(environ)
     current_user = storage.get_web_user_by_session(cookies.get(SESSION_COOKIE, ""))
     preview_role = cookies.get(PREVIEW_ROLE_COOKIE, "") if current_user and current_user.get("is_super_admin") else ""
+    if preview_role == "Отдел госзакупок":
+        preview_role = "procurement"
     if preview_role not in {item[0] for item in ROLE_PREVIEW_OPTIONS}:
         preview_role = ""
     current_user = with_preview_role(current_user, preview_role)
