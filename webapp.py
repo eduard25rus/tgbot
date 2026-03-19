@@ -2689,16 +2689,10 @@ def has_permission(current_user: dict | None, section_id: str, mode: str = "view
 def render_auth_body(storage: Storage, flash_message: str = "", setup_message: str = "") -> str:
     hint = storage.auth_hint_user()
     hint_html = ""
-    setup_link_html = ""
     if hint is not None:
         hint_html = (
             f"<div class=\"auth-note\">Админ по умолчанию сейчас: <strong>{escape(hint['full_name'])}</strong><br>"
             f"Логин: {escape(hint['email'])}</div>"
-        )
-        setup_token = storage.ensure_password_setup_token(hint["id"], secrets.token_urlsafe(24))
-        setup_link_html = (
-            f'<a class="submit-btn" href="/setup-password?token={escape(setup_token)}" '
-            'style="text-align:center; text-decoration:none;">Сбросить пароль BigBoss</a>'
         )
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     setup_html = f'<div class="flash ok">{escape(setup_message)}</div>' if setup_message else ""
@@ -2712,7 +2706,6 @@ def render_auth_body(storage: Storage, flash_message: str = "", setup_message: s
         {flash_html}
         {setup_html}
         {hint_html}
-        {setup_link_html}
         <form class="form-grid" method="post" action="/login">
           <div class="field">
             <label>Email</label>
