@@ -275,7 +275,6 @@ def permission_summary(permissions: dict[str, dict[str, bool]]) -> str:
 def is_procurement_user(current_user: dict | None) -> bool:
     return bool(
         current_user
-        and not current_user.get("is_super_admin")
         and current_user.get("effective_role_name", current_user.get("role_name")) in {"Отдел госзакупок", "procurement"}
     )
 
