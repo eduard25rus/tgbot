@@ -771,7 +771,7 @@ def layout(
         f"""
         <div class="current-user-card">
           <div class="current-user-name">{escape(current_user["full_name"])}</div>
-          <div class="current-user-email">{escape(current_user["email"])}</div>
+          <div class="current-user-email">{escape(current_user["login"])}</div>
           <a class="logout-link" href="/logout">Выйти</a>
         </div>
         """
@@ -2337,16 +2337,19 @@ def render_access_section(
             </div>
             """
         )
-        setup_block = ""
-        if not user["is_super_admin"]:
-            setup_token = storage.ensure_password_setup_token(user["id"], secrets.token_urlsafe(24))
-            setup_link = f"{base_setup_url}{setup_token}"
-            setup_block = f"""
-            <div class="field">
-              <label>Ссылка для установки пароля</label>
-              <input type="text" value="{escape(setup_link)}" readonly>
-            </div>
-            """
+        setup_token = storage.ensure_password_setup_token(user["id"], secrets.token_urlsafe(24))
+        setup_link = f"{base_setup_url}{setup_token}"
+        setup_block = f"""
+        <div class="field">
+          <label>Ссылка для установки пароля</label>
+          <input type="text" value="{escape(setup_link)}" readonly>
+        </div>
+        """
+        reset_button = f"""
+        <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/reset-password?owner={owner_chat_id}" formmethod="post">
+          Сбросить пароль и обновить ссылку
+        </button>
+        """
         user_cards.append(
             f"""
             <article class="user-card">
@@ -2354,7 +2357,7 @@ def render_access_section(
                 <div>
                   <div class="user-name">{escape(user["full_name"])}</div>
                   <div class="user-meta">
-                    Логин: {escape(user["email"])}<br>
+                    Логин: {escape(user["login"])}<br>
                     Создан: {escape(user["created_at"][:10])}<br>
                     Разделы: {escape(permission_summary(permissions))}
                   </div>
@@ -2369,6 +2372,7 @@ def render_access_section(
                 {setup_block}
                 <div class="permissions-grid">{''.join(permission_boxes)}</div>
                 {action_buttons}
+                <div class="action-row">{reset_button}</div>
               </form>
             </article>
             """
@@ -2397,7 +2401,7 @@ def render_access_section(
           <div class="panel-head">
             <div>
               <h2 class="panel-title">Добавить пользователя</h2>
-              <div class="panel-sub">Администратор создает пользователя по email, а затем передает ему отдельную ссылку на установку пароля.</div>
+              <div class="panel-sub">Администратор создает пользователя по логину, а затем передает ему отдельную ссылку на установку пароля.</div>
             </div>
           </div>
           <form class="form-grid" method="post" action="/access/users/new?owner={owner_chat_id}">
@@ -2406,8 +2410,8 @@ def render_access_section(
               <input type="text" name="full_name" placeholder="Например, Илья Петров" required>
             </div>
             <div class="field">
-              <label>Email / логин</label>
-              <input type="email" name="email" placeholder="user@company.ru" required>
+              <label>Логин</label>
+              <input type="text" name="login" placeholder="ivan.petrov" required>
             </div>
             <div class="field">
               <label>Роль</label>
@@ -2439,9 +2443,10 @@ def render_access_section(
           </div>
         <div class="contract-meta">
           • Вы остаетесь главным администратором BigBoss<br>
-          • Пользователю задаем email как будущий логин<br>
+          • Пользователю задаем отдельный логин для входа<br>
           • По каждому разделу отдельно отмечаем просмотр и редактирование<br>
           • После создания система дает ссылку на установку пароля<br>
+          • Администратор может в любой момент перевыпустить ссылку на пароль<br>
           • Доступ можно отключить, вернуть или полностью удалить
         </div>
       </section>
@@ -2692,7 +2697,7 @@ def render_auth_body(storage: Storage, flash_message: str = "", setup_message: s
     if hint is not None:
         hint_html = (
             f"<div class=\"auth-note\">Админ по умолчанию сейчас: <strong>{escape(hint['full_name'])}</strong><br>"
-            f"Логин: {escape(hint['email'])}</div>"
+            f"Логин: {escape(hint['login'])}</div>"
         )
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     setup_html = f'<div class="flash ok">{escape(setup_message)}</div>' if setup_message else ""
@@ -2708,8 +2713,8 @@ def render_auth_body(storage: Storage, flash_message: str = "", setup_message: s
         {hint_html}
         <form class="form-grid" method="post" action="/login">
           <div class="field">
-            <label>Email</label>
-            <input type="email" name="email" placeholder="user@company.ru" required>
+            <label>Логин</label>
+            <input type="text" name="login" placeholder="bigboss" required>
           </div>
           <div class="field">
             <label>Пароль</label>
@@ -2730,7 +2735,7 @@ def render_password_setup_body(user: dict, token: str, flash_message: str = "") 
       <section class="auth-card">
         <div>
           <h2 class="panel-title">Создайте пароль</h2>
-          <div class="panel-sub">Пользователь: {escape(user["full_name"])}<br>Email: {escape(user["email"])}</div>
+          <div class="panel-sub">Пользователь: {escape(user["full_name"])}<br>Логин: {escape(user["login"])}</div>
         </div>
         {flash_html}
         <form class="form-grid" method="post" action="/setup-password">
@@ -2780,9 +2785,9 @@ def app(environ, start_response):
 
     if path == "/login" and method == "POST":
         form = read_post_data(environ)
-        user = storage.get_web_user_by_email(form.get("email", ""))
+        user = storage.get_web_user_by_login(form.get("login", ""))
         if user is None or not user["is_active"] or not verify_password(form.get("password", ""), user.get("password_hash", "")):
-            body = render_auth_body(storage, "Неверный email или пароль.")
+            body = render_auth_body(storage, "Неверный логин или пароль.")
             html = layout("Авторизация", body, owners, current_owner, "contracts", None)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3151,16 +3156,16 @@ def app(environ, start_response):
         form = read_post_data(environ)
         try:
             full_name = form["full_name"].strip()
-            email = form["email"].strip().lower()
+            login = form["login"].strip().lower()
             role_name = form.get("role_name", "").strip() or "Viewer"
             permissions = parse_permissions(form)
             if not full_name:
                 raise ValueError("Нужно указать имя пользователя")
-            if not email:
-                raise ValueError("Нужно указать email")
+            if not login:
+                raise ValueError("Нужно указать логин")
             if not any(item["can_view"] for item in permissions.values()):
                 raise ValueError("Нужно открыть хотя бы один раздел для просмотра")
-            storage.create_web_user(current_owner, email, full_name, role_name, permissions)
+            storage.create_web_user(current_owner, login, full_name, role_name, permissions)
             body = render_access_section(
                 storage,
                 current_owner,
@@ -3170,6 +3175,29 @@ def app(environ, start_response):
             )
         except Exception as exc:
             body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось добавить пользователя: {exc}")
+        html = layout("Доступы", body, owners, current_owner, "access", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path.startswith("/access/users/") and path.endswith("/reset-password") and method == "POST":
+        denied = guard("access", "edit")
+        if denied:
+            return denied
+        try:
+            user_id = int(path.split("/")[3])
+            user = storage.get_web_user_by_id(user_id)
+            if user is None or user["owner_chat_id"] != current_owner:
+                raise ValueError("Пользователь не найден")
+            storage.regenerate_password_setup_token(user_id, secrets.token_urlsafe(24))
+            body = render_access_section(
+                storage,
+                current_owner,
+                request_base_url(environ),
+                f"Новая ссылка установки пароля готова для пользователя «{user['full_name']}».",
+                True,
+            )
+        except Exception as exc:
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось сбросить пароль: {exc}")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]

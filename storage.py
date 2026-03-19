@@ -362,6 +362,7 @@ class Storage:
                 {
                     "id": user_id,
                     "owner_chat_id": int(row["owner_chat_id"]),
+                    "login": row["email"],
                     "email": row["email"],
                     "full_name": row["full_name"],
                     "role_name": row["role_name"],
@@ -378,7 +379,7 @@ class Storage:
     def create_web_user(
         self,
         owner_chat_id: int,
-        email: str,
+        login: str,
         full_name: str,
         role_name: str,
         permissions: dict[str, dict[str, bool]],
@@ -395,7 +396,7 @@ class Storage:
                 """,
                 (
                     owner_chat_id,
-                    email.strip().lower(),
+                    login.strip().lower(),
                     full_name.strip(),
                     role_name.strip() or "Viewer",
                     datetime.utcnow().isoformat(),
@@ -500,6 +501,7 @@ class Storage:
             return {
                 "id": int(row["id"]),
                 "owner_chat_id": int(row["owner_chat_id"]),
+                "login": row["email"],
                 "email": row["email"],
                 "full_name": row["full_name"],
                 "role_name": row["role_name"],
@@ -511,8 +513,8 @@ class Storage:
                 "permissions": permissions,
             }
 
-    def get_web_user_by_email(self, email: str) -> dict | None:
-        normalized = email.strip().lower()
+    def get_web_user_by_login(self, login: str) -> dict | None:
+        normalized = login.strip().lower()
         with self.connection() as conn:
             row = conn.execute(
                 """
@@ -546,6 +548,7 @@ class Storage:
         return {
             "id": int(row["id"]),
             "owner_chat_id": int(row["owner_chat_id"]),
+            "login": row["email"],
             "email": row["email"],
             "full_name": row["full_name"],
             "role_name": row["role_name"],
@@ -590,6 +593,7 @@ class Storage:
         return {
             "id": int(row["id"]),
             "owner_chat_id": int(row["owner_chat_id"]),
+            "login": row["email"],
             "email": row["email"],
             "full_name": row["full_name"],
             "role_name": row["role_name"],
@@ -661,6 +665,7 @@ class Storage:
         return {
             "id": int(row["id"]),
             "owner_chat_id": int(row["owner_chat_id"]),
+            "login": row["email"],
             "email": row["email"],
             "full_name": row["full_name"],
             "role_name": row["role_name"],
@@ -685,6 +690,18 @@ class Storage:
             ).fetchone()
             if row is not None:
                 return row["token"]
+            conn.execute(
+                """
+                INSERT INTO web_password_setup_tokens (token, user_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (token, user_id, datetime.utcnow().isoformat()),
+            )
+            return token
+
+    def regenerate_password_setup_token(self, user_id: int, token: str) -> str:
+        with self.connection() as conn:
+            conn.execute("DELETE FROM web_password_setup_tokens WHERE user_id = ?", (user_id,))
             conn.execute(
                 """
                 INSERT INTO web_password_setup_tokens (token, user_id, created_at)
