@@ -2435,7 +2435,7 @@ def render_access_section(
               <div class="user-head">
                 <div>
                   <details class="status-menu user-name-menu">
-                    <summary><button class="user-name-trigger" type="button">{escape(user["full_name"])}</button></summary>
+                    <summary><span class="user-name-trigger">{escape(user["full_name"])}</span></summary>
                     <div class="name-popover">
                       <div class="field">
                         <label>Имя пользователя</label>
