@@ -69,6 +69,11 @@ AUCTION_RESULT_OPTIONS = [
 
 MAX_DISCOUNT_OPTIONS = [0.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 22.5, 25.0]
 SESSION_COOKIE = "felis_session"
+PREVIEW_ROLE_COOKIE = "felis_preview_role"
+ROLE_PREVIEW_OPTIONS = [
+    ("", "Обычный режим"),
+    ("Отдел госзакупок", "Отдел госзакупок"),
+]
 
 
 def format_amount(amount: float) -> str:
@@ -271,8 +276,17 @@ def is_procurement_user(current_user: dict | None) -> bool:
     return bool(
         current_user
         and not current_user.get("is_super_admin")
-        and current_user.get("role_name") == "Отдел госзакупок"
+        and current_user.get("effective_role_name", current_user.get("role_name")) == "Отдел госзакупок"
     )
+
+
+def with_preview_role(current_user: dict | None, preview_role: str) -> dict | None:
+    if current_user is None:
+        return None
+    effective_user = dict(current_user)
+    effective_user["preview_role_name"] = preview_role
+    effective_user["effective_role_name"] = preview_role or current_user.get("role_name", "")
+    return effective_user
 
 
 def procurement_status_allowed(current_user: dict | None, auction, estimate_status: str, submit_decision_status: str, result_status: str) -> bool:
@@ -879,6 +893,32 @@ def layout(
         <div class="current-user-card">
           <div class="current-user-name">{escape(current_user["full_name"])}</div>
           <div class="current-user-email">{escape(current_user["login"])}</div>
+          {
+            f'''
+          <div class="preview-note">Тестовый режим роли: {escape(current_user["preview_role_name"])}</div>
+          '''
+            if current_user.get("preview_role_name")
+            else ""
+          }
+          {
+            f'''
+          <form class="preview-form" method="post" action="/role-preview">
+            <input type="hidden" name="next_path" value="">
+            <label class="current-user-email">Режим просмотра роли</label>
+            <select name="preview_role">
+              {
+                ''.join(
+                    f'<option value="{escape(value)}" {"selected" if current_user.get("preview_role_name", "") == value else ""}>{escape(label)}</option>'
+                    for value, label in ROLE_PREVIEW_OPTIONS
+                )
+              }
+            </select>
+            <button class="preview-btn" type="submit">Применить режим</button>
+          </form>
+          '''
+            if current_user.get("is_super_admin")
+            else ""
+          }
           <a class="logout-link" href="/logout">Выйти</a>
         </div>
         """
@@ -1048,6 +1088,37 @@ def layout(
       margin-top: 4px;
       font-size: 12px;
       color: rgba(255,255,255,0.82);
+    }}
+    .preview-note {{
+      margin-top: 6px;
+      font-size: 12px;
+      color: #fff3c4;
+    }}
+    .preview-form {{
+      margin-top: 10px;
+      display: grid;
+      gap: 8px;
+    }}
+    .preview-form select {{
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.22);
+      background: rgba(255,255,255,0.12);
+      color: white;
+      padding: 8px 10px;
+      font: inherit;
+    }}
+    .preview-form option {{
+      color: var(--ink);
+    }}
+    .preview-btn {{
+      border: 1px solid rgba(255,255,255,0.22);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.12);
+      color: white;
+      padding: 8px 10px;
+      font: inherit;
+      cursor: pointer;
     }}
     .logout-link {{
       display: inline-block;
@@ -1998,6 +2069,13 @@ document.addEventListener("click", (event) => {{
 }});
 
 document.addEventListener("submit", (event) => {{
+  const previewForm = event.target.closest(".preview-form");
+  if (previewForm) {{
+    const nextInput = previewForm.querySelector('input[name="next_path"]');
+    if (nextInput) {{
+      nextInput.value = `${{window.location.pathname}}${{window.location.search}}`;
+    }}
+  }}
   if (event.target.closest(".discount-form, .amount-form, .deadline-form, .lot-form, .result-form, .estimate-form")) {{
     window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
   }}
@@ -2912,6 +2990,14 @@ def redirect_with_cookie(start_response, location: str, cookie_value: str | None
     return [b""]
 
 
+def redirect_with_cookies(start_response, location: str, cookies: list[str]):
+    headers = [("Location", location)]
+    for cookie in cookies:
+        headers.append(("Set-Cookie", cookie))
+    start_response("303 See Other", headers)
+    return [b""]
+
+
 def clear_session_cookie(start_response, location: str):
     start_response(
         "303 See Other",
@@ -3018,6 +3104,10 @@ def app(environ, start_response):
         current_auction_tab = "active"
     cookies = parse_cookies(environ)
     current_user = storage.get_web_user_by_session(cookies.get(SESSION_COOKIE, ""))
+    preview_role = cookies.get(PREVIEW_ROLE_COOKIE, "") if current_user and current_user.get("is_super_admin") else ""
+    if preview_role not in {item[0] for item in ROLE_PREVIEW_OPTIONS}:
+        preview_role = ""
+    current_user = with_preview_role(current_user, preview_role)
     current_owner = current_user["owner_chat_id"] if current_user else None
     owners = owner_options(storage)
 
@@ -3080,7 +3170,27 @@ def app(environ, start_response):
     if path == "/logout":
         if cookies.get(SESSION_COOKIE):
             storage.delete_web_session(cookies.get(SESSION_COOKIE, ""))
-        return clear_session_cookie(start_response, "/contracts")
+        return redirect_with_cookies(
+            start_response,
+            "/contracts",
+            [
+                f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+                f"{PREVIEW_ROLE_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax",
+            ],
+        )
+
+    if path == "/role-preview" and method == "POST":
+        if current_user is None or not current_user.get("is_super_admin"):
+            return redirect(start_response, "/contracts")
+        form = read_post_data(environ)
+        next_path = form.get("next_path", "").strip() or environ.get("HTTP_REFERER", "") or "/contracts"
+        preview_role = form.get("preview_role", "")
+        if preview_role not in {item[0] for item in ROLE_PREVIEW_OPTIONS}:
+            preview_role = ""
+        cookie = f"{PREVIEW_ROLE_COOKIE}={preview_role}; Path=/; SameSite=Lax"
+        if not preview_role:
+            cookie = f"{PREVIEW_ROLE_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax"
+        return redirect_with_cookies(start_response, next_path, [cookie])
 
     if current_user is None:
         body = render_auth_body(storage)
