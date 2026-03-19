@@ -1259,6 +1259,27 @@ def layout(
       min-height: 92px;
       resize: vertical;
     }}
+    .copy-field {{
+      display: flex;
+      gap: 10px;
+      align-items: stretch;
+    }}
+    .copy-field input {{
+      flex: 1;
+    }}
+    .copy-btn {{
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.82);
+      color: var(--ink);
+      min-width: 46px;
+      padding: 0 12px;
+      font-size: 18px;
+      cursor: pointer;
+    }}
+    .copy-btn:hover {{
+      background: #efe5d8;
+    }}
     .submit-btn {{
       border: 0;
       border-radius: 16px;
@@ -1684,6 +1705,25 @@ def layout(
   </div>
 </body>
 <script>
+function copyText(inputId) {{
+  const input = document.getElementById(inputId);
+  if (!input) {{
+    return;
+  }}
+  const value = input.value;
+  if (navigator.clipboard && window.isSecureContext) {{
+    navigator.clipboard.writeText(value).catch(() => {{
+      input.focus();
+      input.select();
+      document.execCommand("copy");
+    }});
+    return;
+  }}
+  input.focus();
+  input.select();
+  document.execCommand("copy");
+}}
+
 document.addEventListener("click", (event) => {{
   const estimateQuick = event.target.closest('.estimate-form .estimate-quick');
   if (estimateQuick) {{
@@ -2342,7 +2382,10 @@ def render_access_section(
         setup_block = f"""
         <div class="field">
           <label>Ссылка для установки пароля</label>
-          <input type="text" value="{escape(setup_link)}" readonly>
+          <div class="copy-field">
+            <input id="setup-link-{user["id"]}" type="text" value="{escape(setup_link)}" readonly>
+            <button class="copy-btn" type="button" onclick="copyText('setup-link-{user["id"]}')" title="Скопировать ссылку">⧉</button>
+          </div>
         </div>
         """
         reset_button = f"""
