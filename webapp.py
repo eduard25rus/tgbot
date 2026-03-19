@@ -1393,6 +1393,34 @@ def layout(
       display: grid;
       gap: 10px;
     }}
+    .permissions-menu {{
+      display: inline-block;
+    }}
+    .permissions-trigger {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.82);
+      color: var(--ink);
+      padding: 10px 14px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .permissions-popover {{
+      margin-top: 10px;
+      min-width: 320px;
+      max-width: 720px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fffaf2;
+      box-shadow: var(--card-shadow);
+      display: grid;
+      gap: 12px;
+    }}
     .permission-box strong {{
       font-size: 14px;
     }}
@@ -2461,7 +2489,12 @@ def render_access_section(
                   <input type="text" name="role_name" value="{escape(user["role_name"])}" {"readonly" if user["is_super_admin"] else ""}>
                 </div>
                 {setup_block}
-                <div class="permissions-grid">{''.join(permission_boxes)}</div>
+                <details class="status-menu permissions-menu">
+                  <summary><span class="permissions-trigger">Настроить доступы</span></summary>
+                  <div class="permissions-popover">
+                    <div class="permissions-grid">{''.join(permission_boxes)}</div>
+                  </div>
+                </details>
                 {action_buttons}
                 <div class="action-row">{reset_button}</div>
               </form>
