@@ -1393,10 +1393,10 @@ def layout(
       display: grid;
       gap: 10px;
     }}
-    .permissions-menu {{
+    .settings-menu {{
       display: inline-block;
     }}
-    .permissions-trigger {{
+    .settings-trigger {{
       display: inline-flex;
       align-items: center;
       gap: 8px;
@@ -1409,7 +1409,7 @@ def layout(
       font-weight: 600;
       cursor: pointer;
     }}
-    .permissions-popover {{
+    .settings-popover {{
       margin-top: 10px;
       min-width: 320px;
       max-width: 720px;
@@ -1420,6 +1420,11 @@ def layout(
       box-shadow: var(--card-shadow);
       display: grid;
       gap: 12px;
+    }}
+    .settings-divider {{
+      height: 1px;
+      background: var(--line);
+      opacity: 0.8;
     }}
     .permission-box strong {{
       font-size: 14px;
@@ -2443,19 +2448,27 @@ def render_access_section(
         )
         setup_token = storage.ensure_password_setup_token(user["id"], secrets.token_urlsafe(24))
         setup_link = f"{base_setup_url}{setup_token}"
-        setup_block = f"""
-        <div class="field">
-          <label>Ссылка для установки пароля</label>
-          <div class="copy-field">
-            <input id="setup-link-{user["id"]}" type="text" value="{escape(setup_link)}" readonly>
-            <button class="copy-btn" type="button" onclick="copyText('setup-link-{user["id"]}')" title="Скопировать ссылку">⧉</button>
-          </div>
-        </div>
-        """
         reset_button = f"""
         <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/reset-password?owner={owner_chat_id}" formmethod="post">
           Сбросить пароль и обновить ссылку
         </button>
+        """
+        settings_block = f"""
+        <details class="status-menu settings-menu">
+          <summary><span class="settings-trigger">Настроить доступы и пароль</span></summary>
+          <div class="settings-popover">
+            <div class="permissions-grid">{''.join(permission_boxes)}</div>
+            <div class="settings-divider"></div>
+            <div class="action-row">{reset_button}</div>
+            <div class="field">
+              <label>Ссылка для установки пароля</label>
+              <div class="copy-field">
+                <input id="setup-link-{user["id"]}" type="text" value="{escape(setup_link)}" readonly>
+                <button class="copy-btn" type="button" onclick="copyText('setup-link-{user["id"]}')" title="Скопировать ссылку">⧉</button>
+              </div>
+            </div>
+          </div>
+        </details>
         """
         user_cards.append(
             f"""
@@ -2488,15 +2501,8 @@ def render_access_section(
                   <label>Роль</label>
                   <input type="text" name="role_name" value="{escape(user["role_name"])}" {"readonly" if user["is_super_admin"] else ""}>
                 </div>
-                {setup_block}
-                <details class="status-menu permissions-menu">
-                  <summary><span class="permissions-trigger">Настроить доступы</span></summary>
-                  <div class="permissions-popover">
-                    <div class="permissions-grid">{''.join(permission_boxes)}</div>
-                  </div>
-                </details>
+                {settings_block}
                 {action_buttons}
-                <div class="action-row">{reset_button}</div>
               </form>
             </article>
             """
