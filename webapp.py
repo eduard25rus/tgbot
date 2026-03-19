@@ -1325,6 +1325,42 @@ def layout(
       font-weight: 700;
       margin-bottom: 6px;
     }}
+    .user-name-menu {{
+      display: inline-block;
+      margin-bottom: 6px;
+    }}
+    .user-name-menu summary {{
+      list-style: none;
+    }}
+    .user-name-menu summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .user-name-trigger {{
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-size: 22px;
+      font-weight: 700;
+      cursor: pointer;
+      text-align: left;
+    }}
+    .user-name-trigger:hover {{
+      color: var(--brand);
+    }}
+    .name-popover {{
+      margin-top: 10px;
+      min-width: 280px;
+      max-width: 360px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fffaf2;
+      box-shadow: var(--card-shadow);
+      display: grid;
+      gap: 10px;
+    }}
     .user-meta {{
       color: var(--muted);
       font-size: 14px;
@@ -2398,7 +2434,18 @@ def render_access_section(
             <article class="user-card">
               <div class="user-head">
                 <div>
-                  <div class="user-name">{escape(user["full_name"])}</div>
+                  <details class="status-menu user-name-menu">
+                    <summary><button class="user-name-trigger" type="button">{escape(user["full_name"])}</button></summary>
+                    <div class="name-popover">
+                      <div class="field">
+                        <label>Имя пользователя</label>
+                        <input type="text" name="full_name_visible" value="{escape(user["full_name"])}" required>
+                      </div>
+                      <div class="action-row">
+                        <button class="submit-btn" type="submit" formaction="/access/users/{user["id"]}/update?owner={owner_chat_id}" formmethod="post">Сохранить имя</button>
+                      </div>
+                    </div>
+                  </details>
                   <div class="user-meta">
                     Логин: {escape(user["login"])}<br>
                     Создан: {escape(user["created_at"][:10])}<br>
@@ -2408,6 +2455,7 @@ def render_access_section(
                 <div class="badge-row">{''.join(status_badges)}</div>
               </div>
               <form class="form-grid" method="post" action="/access/users/{user["id"]}/update?owner={owner_chat_id}">
+                <input type="hidden" name="full_name" value="{escape(user["full_name"])}">
                 <div class="field">
                   <label>Роль</label>
                   <input type="text" name="role_name" value="{escape(user["role_name"])}" {"readonly" if user["is_super_admin"] else ""}>
@@ -3255,6 +3303,7 @@ def app(environ, start_response):
             updated = storage.update_web_user(
                 current_owner,
                 user_id,
+                form.get("full_name_visible", form.get("full_name", "")),
                 form.get("role_name", ""),
                 parse_permissions(form),
             )

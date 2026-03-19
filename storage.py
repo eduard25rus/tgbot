@@ -410,6 +410,7 @@ class Storage:
         self,
         owner_chat_id: int,
         user_id: int,
+        full_name: str,
         role_name: str,
         permissions: dict[str, dict[str, bool]],
     ) -> bool:
@@ -428,10 +429,15 @@ class Storage:
             conn.execute(
                 """
                 UPDATE web_users
-                SET role_name = ?
+                SET full_name = ?, role_name = ?
                 WHERE id = ? AND owner_chat_id = ?
                 """,
-                (role_name.strip() or ("BigBoss" if is_super_admin else "Viewer"), user_id, owner_chat_id),
+                (
+                    full_name.strip() or ("BigBoss" if is_super_admin else "Пользователь"),
+                    role_name.strip() or ("BigBoss" if is_super_admin else "Viewer"),
+                    user_id,
+                    owner_chat_id,
+                ),
             )
             self._replace_web_user_permissions(
                 conn,
