@@ -365,8 +365,7 @@ def advance_summary(item) -> str:
 
 def added_date_meta(item) -> str:
     added_date = item.created_at.date()
-    days_since_added = (date.today() - added_date).days
-    css_class = "auction-added-date is-new" if days_since_added <= 1 else "auction-added-date"
+    css_class = "auction-added-date is-new" if (datetime.now() - item.created_at) <= timedelta(days=1) else "auction-added-date"
     return f'<span class="{css_class}">Добавлен: {escape(format_date(added_date))}</span>'
 
 
@@ -707,7 +706,7 @@ def render_amount_display(item) -> str:
     )
 
 
-def render_auction_details_form(owner_chat_id: int, item, active_tab: str) -> str:
+def render_auction_details_form(owner_chat_id: int, item, active_tab: str, row_number: int) -> str:
     source_link = (
         f'<a href="{escape(item.source_url)}" target="_blank" rel="noreferrer">{escape(item.auction_number)}</a>'
         if item.source_url
@@ -716,6 +715,7 @@ def render_auction_details_form(owner_chat_id: int, item, active_tab: str) -> st
     return f"""
     <details class="status-menu lot-menu">
       <summary>
+        <div class="auction-seq">#{row_number}</div>
         <div class="auction-number">№ {source_link}</div>
         <div class="timeline-title">{escape(item.title)}</div>
       </summary>
@@ -756,7 +756,7 @@ def render_auction_details_form(owner_chat_id: int, item, active_tab: str) -> st
     """
 
 
-def render_auction_details_display(item) -> str:
+def render_auction_details_display(item, row_number: int) -> str:
     source_link = (
         f'<a href="{escape(item.source_url)}" target="_blank" rel="noreferrer">{escape(item.auction_number)}</a>'
         if item.source_url
@@ -764,6 +764,7 @@ def render_auction_details_display(item) -> str:
     )
     return f"""
     <div>
+      <div class="auction-seq">#{row_number}</div>
       <div class="auction-number">№ {source_link}</div>
       <div class="timeline-title">{escape(item.title)}</div>
     </div>
@@ -835,7 +836,7 @@ def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, cur
     """
 
 
-def render_auction_row(item, owner_chat_id: int, active_tab: str, current_user: dict | None = None) -> str:
+def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: int, current_user: dict | None = None) -> str:
     current_values = {
         "estimate_status": item.estimate_status,
         "submit_decision_status": item.submit_decision_status,
@@ -853,7 +854,7 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, current_user: 
         deadline_note = ""
     else:
         deadline_note = f"Осталось {days_left} дн."
-    lot_cell = render_auction_details_display(item) if procurement_user else render_auction_details_form(owner_chat_id, item, active_tab)
+    lot_cell = render_auction_details_display(item, row_number) if procurement_user else render_auction_details_form(owner_chat_id, item, active_tab, row_number)
     deadline_cell = render_deadline_display(item.bid_deadline, deadline_note, is_deadline_danger) if procurement_user else render_deadline_form(owner_chat_id, item.id, item.bid_deadline, deadline_note, is_deadline_danger, active_tab)
     amount_cell = render_amount_display(item) if procurement_user else render_amount_form(owner_chat_id, item.id, item, active_tab)
     estimate_cell = auction_current_chip("estimate_status", current_values) + estimate_summary(item) if procurement_user else render_estimate_form(owner_chat_id, item, current_values, active_tab)
@@ -884,7 +885,10 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, current_user: 
 
 
 def render_auction_rows(auctions, owner_chat_id: int, active_tab: str, current_user: dict | None = None) -> str:
-    return "".join(render_auction_row(item, owner_chat_id, active_tab, current_user) for item in auctions)
+    return "".join(
+        render_auction_row(item, owner_chat_id, active_tab, row_number, current_user)
+        for row_number, item in enumerate(auctions, start=1)
+    )
 
 
 SECTIONS = [
@@ -1774,6 +1778,14 @@ def layout(
     .auction-added-date.is-new {{
       color: var(--ok);
       font-weight: 700;
+    }}
+    .auction-seq {{
+      margin-bottom: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
     }}
     .status-form {{
       margin: 0;
@@ -3736,7 +3748,7 @@ def app(environ, start_response):
             auction = next((item for item in storage.list_auctions(current_owner) if item.id == auction_id), None)
             if auction is None:
                 raise ValueError("Аукцион не найден")
-            html = render_auction_row(auction, current_owner, current_auction_tab, current_user)
+            html = render_auction_row(auction, current_owner, current_auction_tab, 1, current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         except Exception:
