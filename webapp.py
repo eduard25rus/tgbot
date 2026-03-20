@@ -351,6 +351,18 @@ def estimate_summary(item) -> str:
     )
 
 
+def advance_summary(item) -> str:
+    if item.advance_percent is None or item.advance_percent <= 0:
+        return ""
+    advance_amount = round(item.amount * item.advance_percent / 100, 2)
+    return (
+        '<span class="result-meta result-meta-stack">'
+        f'<span>Аванс: {escape(format_percent(item.advance_percent))}</span>'
+        f'<span>{escape(format_amount(advance_amount))}</span>'
+        '</span>'
+    )
+
+
 def added_date_meta(item) -> str:
     added_date = item.created_at.date()
     days_since_added = (date.today() - added_date).days
@@ -664,14 +676,14 @@ def render_deadline_display(current_date: date, note: str, is_danger: bool) -> s
     """
 
 
-def render_amount_form(owner_chat_id: int, auction_id: int, current_amount: float, active_tab: str) -> str:
+def render_amount_form(owner_chat_id: int, auction_id: int, item, active_tab: str) -> str:
     return f"""
     <details class="status-menu">
-      <summary><span class="amount-value">{format_amount(current_amount)}</span></summary>
+      <summary><span class="amount-value">{format_amount(item.amount)}</span>{advance_summary(item)}</summary>
       <form class="status-popover amount-form" method="post" action="/auctions/{auction_id}/amount?owner={owner_chat_id}&tab={escape(active_tab)}">
         <div class="field">
           <label>Сумма аукциона, ₽</label>
-          <input type="text" name="amount" value="{format_amount_input(current_amount)}" data-money-input="1">
+          <input type="text" name="amount" value="{format_amount_input(item.amount)}" data-money-input="1">
         </div>
         <div class="action-row">
           <button class="submit-btn" type="submit">Сохранить сумму</button>
@@ -681,8 +693,11 @@ def render_amount_form(owner_chat_id: int, auction_id: int, current_amount: floa
     """
 
 
-def render_amount_display(current_amount: float) -> str:
-    return f'<span class="amount-value">{format_amount(current_amount)}</span>'
+def render_amount_display(item) -> str:
+    return (
+        f'<span class="amount-value">{format_amount(item.amount)}</span>'
+        f'{advance_summary(item)}'
+    )
 
 
 def render_auction_details_form(owner_chat_id: int, item, active_tab: str) -> str:
@@ -713,6 +728,14 @@ def render_auction_details_form(owner_chat_id: int, item, active_tab: str) -> st
         <div class="field">
           <label>Ссылка на аукцион</label>
           <input type="text" name="source_url" value="{escape(item.source_url)}" placeholder="https://zakupki.gov.ru/...">
+        </div>
+        <label class="check-row">
+          <input type="checkbox" name="has_advance" value="1" {"checked" if item.advance_percent is not None else ""}>
+          У аукциона есть аванс
+        </label>
+        <div class="field">
+          <label>Процент аванса</label>
+          <input type="text" name="advance_percent" value="{escape('' if item.advance_percent is None else str(item.advance_percent).replace('.', ','))}" placeholder="Например, 30">
         </div>
         <div class="field">
           <label>Дата добавления в реестр</label>
@@ -802,7 +825,7 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, current_user: 
         deadline_note = f"Осталось {days_left} дн."
     lot_cell = render_auction_details_display(item) if procurement_user else render_auction_details_form(owner_chat_id, item, active_tab)
     deadline_cell = render_deadline_display(item.bid_deadline, deadline_note, is_deadline_danger) if procurement_user else render_deadline_form(owner_chat_id, item.id, item.bid_deadline, deadline_note, is_deadline_danger, active_tab)
-    amount_cell = render_amount_display(item.amount) if procurement_user else render_amount_form(owner_chat_id, item.id, item.amount, active_tab)
+    amount_cell = render_amount_display(item) if procurement_user else render_amount_form(owner_chat_id, item.id, item, active_tab)
     estimate_cell = auction_current_chip("estimate_status", current_values) + estimate_summary(item) if procurement_user else render_estimate_form(owner_chat_id, item, current_values, active_tab)
     submit_cell = render_submit_for_procurement(owner_chat_id, item, current_values, active_tab) if procurement_user else render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
     discount_cell = render_discount_display(item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if procurement_user else render_discount_form(owner_chat_id, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
@@ -2872,6 +2895,13 @@ def render_auctions_section(
             <label>Сумма лота</label>
             <input type="text" name="amount" placeholder="25000000" required>
           </div>
+          <label class="check-row">
+            <input type="checkbox" name="has_advance" value="1"> У аукциона есть аванс
+          </label>
+          <div class="field">
+            <label>Процент аванса</label>
+            <input type="text" name="advance_percent" placeholder="Например, 30">
+          </div>
           <div class="field">
             <label>Ссылка</label>
             <input type="text" name="source_url" placeholder="https://zakupki.gov.ru/...">
@@ -3255,13 +3285,20 @@ def app(environ, start_response):
             bid_deadline = parse_date(form["bid_deadline"])
             amount = parse_amount(form["amount"])
             source_url = form.get("source_url", "").strip()
+            has_advance = form.get("has_advance") == "1"
+            advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
             if not auction_number:
                 raise ValueError("Нужно указать номер аукциона")
             if not title:
                 raise ValueError("Нужно указать название аукциона")
             if not city:
                 raise ValueError("Нужно указать город")
-            storage.add_auction(current_owner, auction_number, bid_deadline, amount, title, city, source_url)
+            if has_advance:
+                if advance_percent is None:
+                    raise ValueError("Укажите процент авансирования")
+                if advance_percent <= 0 or advance_percent > 100:
+                    raise ValueError("Процент авансирования должен быть от 0,01 до 100")
+            storage.add_auction(current_owner, auction_number, bid_deadline, amount, advance_percent, title, city, source_url)
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Аукцион добавлен в реестр.", True)
         except Exception as exc:
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось добавить аукцион: {exc}")
@@ -3444,13 +3481,20 @@ def app(environ, start_response):
             city = form.get("city", "").strip()
             source_url = form.get("source_url", "").strip()
             created_date = parse_date(form.get("created_date", ""))
+            has_advance = form.get("has_advance") == "1"
+            advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
             if not auction_number:
                 raise ValueError("Нужно указать номер аукциона")
             if not title:
                 raise ValueError("Нужно указать название аукциона")
             if not city:
                 raise ValueError("Нужно указать город")
-            updated = storage.update_auction_details(current_owner, auction_id, auction_number, title, city, source_url, created_date)
+            if has_advance:
+                if advance_percent is None:
+                    raise ValueError("Укажите процент авансирования")
+                if advance_percent <= 0 or advance_percent > 100:
+                    raise ValueError("Процент авансирования должен быть от 0,01 до 100")
+            updated = storage.update_auction_details(current_owner, auction_id, auction_number, title, city, source_url, created_date, advance_percent)
             if not updated:
                 raise ValueError("Аукцион не найден")
             target_tab = "archive" if is_auction_archived(auction) else current_auction_tab

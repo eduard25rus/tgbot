@@ -55,6 +55,7 @@ class Auction:
     auction_number: str
     bid_deadline: date
     amount: float
+    advance_percent: Optional[float]
     title: str
     city: str
     source_url: str
@@ -197,6 +198,7 @@ class Storage:
                     auction_number TEXT NOT NULL,
                     bid_deadline TEXT NOT NULL,
                     amount REAL NOT NULL DEFAULT 0,
+                    advance_percent REAL,
                     title TEXT NOT NULL,
                     city TEXT NOT NULL DEFAULT '',
                     source_url TEXT NOT NULL DEFAULT '',
@@ -280,6 +282,8 @@ class Storage:
                 conn.execute("ALTER TABLE auctions ADD COLUMN final_bid_amount REAL")
             if "archived_at" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN archived_at TEXT")
+            if "advance_percent" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN advance_percent REAL")
                 conn.execute(
                     """
                     UPDATE auctions
@@ -742,7 +746,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, auction_number, bid_deadline, amount, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
+                SELECT id, owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
                        estimate_status, submit_decision_status, application_status, result_status, final_bid_amount, archived_at, created_at
                 FROM auctions
                 WHERE owner_chat_id = ?
@@ -758,6 +762,7 @@ class Storage:
         auction_number: str,
         bid_deadline: date,
         amount: float,
+        advance_percent: float | None,
         title: str,
         city: str,
         source_url: str,
@@ -774,17 +779,18 @@ class Storage:
             cursor = conn.execute(
                 """
                 INSERT INTO auctions (
-                    owner_chat_id, auction_number, bid_deadline, amount, title, city, source_url,
+                    owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
                     max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status,
                     approval_status, application_status, result_status, final_bid_amount, created_at, archived_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL)
                 """,
                 (
                     owner_chat_id,
                     auction_number.strip(),
                     bid_deadline.strftime(DATE_FMT),
                     amount,
+                    advance_percent,
                     title.strip(),
                     city.strip(),
                     source_url.strip(),
@@ -888,6 +894,7 @@ class Storage:
         city: str,
         source_url: str,
         created_date: date,
+        advance_percent: float | None,
     ) -> bool:
         with self.connection() as conn:
             row = conn.execute(
@@ -905,7 +912,7 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE auctions
-                SET auction_number = ?, title = ?, city = ?, source_url = ?, created_at = ?
+                SET auction_number = ?, title = ?, city = ?, source_url = ?, created_at = ?, advance_percent = ?
                 WHERE id = ? AND owner_chat_id = ?
                 """,
                 (
@@ -914,6 +921,7 @@ class Storage:
                     city.strip(),
                     source_url.strip(),
                     updated_created_at.isoformat(),
+                    advance_percent,
                     auction_id,
                     owner_chat_id,
                 ),
@@ -940,10 +948,10 @@ class Storage:
                 conn.execute(
                     """
                     INSERT INTO auctions (
-                        owner_chat_id, auction_number, bid_deadline, amount, title, city, source_url,
+                        owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
                         max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status, approval_status, application_status, result_status, final_bid_amount, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 'new', ?, ?, NULL, ?)
+                    VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?, 'new', ?, ?, NULL, ?)
                     """,
                     (
                         owner_chat_id,
@@ -1546,6 +1554,7 @@ class Storage:
             auction_number=row["auction_number"],
             bid_deadline=date.fromisoformat(row["bid_deadline"]),
             amount=float(row["amount"]),
+            advance_percent=float(row["advance_percent"]) if row["advance_percent"] is not None else None,
             title=row["title"],
             city=row["city"],
             source_url=row["source_url"],
