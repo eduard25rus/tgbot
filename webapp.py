@@ -354,10 +354,7 @@ def estimate_summary(item) -> str:
 def advance_summary(item) -> str:
     if item.advance_percent is None or item.advance_percent <= 0:
         return ""
-    advance_amount = round(item.amount * item.advance_percent / 100, 2)
-    return (
-        f'<div class="deadline-meta">Аванс: {escape(format_percent(item.advance_percent))} · {escape(format_amount(advance_amount))}</div>'
-    )
+    return f'<div class="deadline-meta">Аванс: {escape(format_percent(item.advance_percent))}</div>'
 
 
 def added_date_meta(item) -> str:
