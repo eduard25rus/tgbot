@@ -819,12 +819,12 @@ def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, cur
         if not current_user.get("is_super_admin"):
             return ""
         return f"""
-        <form method="post" action="/auctions/{item.id}/purge?owner={owner_chat_id}&tab={escape(active_tab)}">
+        <form class="auction-delete-form" method="post" action="/auctions/{item.id}/purge?owner={owner_chat_id}&tab={escape(active_tab)}">
           <button class="icon-btn danger" type="submit" title="Удалить навсегда">🗑</button>
         </form>
         """
     return f"""
-    <form method="post" action="/auctions/{item.id}/delete?owner={owner_chat_id}&tab={escape(active_tab)}">
+    <form class="auction-delete-form" method="post" action="/auctions/{item.id}/delete?owner={owner_chat_id}&tab={escape(active_tab)}">
       <button class="icon-btn danger" type="submit" title="Переместить в удаленные">🗑</button>
     </form>
     """
@@ -2174,7 +2174,7 @@ document.addEventListener("submit", (event) => {{
       nextInput.value = `${{window.location.pathname}}${{window.location.search}}`;
     }}
   }}
-  if (event.target.closest(".discount-form, .amount-form, .deadline-form, .lot-form, .result-form, .estimate-form")) {{
+  if (event.target.closest(".discount-form, .amount-form, .deadline-form, .lot-form, .result-form, .estimate-form, .auction-delete-form")) {{
     window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
   }}
 }});
@@ -3663,7 +3663,7 @@ def app(environ, start_response):
             deleted = storage.soft_delete_auction(current_owner, auction_id, datetime.now())
             if not deleted:
                 raise ValueError("Аукцион не найден")
-            return redirect(start_response, f"/auctions?owner={current_owner}&tab=deleted")
+            return redirect(start_response, f"/auctions?owner={current_owner}&tab={current_auction_tab}")
         except Exception as exc:
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось удалить аукцион: {exc}")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
