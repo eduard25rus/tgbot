@@ -815,17 +815,22 @@ def render_submit_for_procurement(owner_chat_id: int, item, current_values: dict
 def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, current_user: dict | None) -> str:
     if current_user is None or is_procurement_user(current_user) or not has_permission(current_user, "auctions", "edit"):
         return ""
+    delete_icon = """
+    <svg class="icon-trash" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-1 6h2v8H8V9Zm6 0h2v8h-2V9ZM6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7Z" fill="currentColor"/>
+    </svg>
+    """
     if active_tab == "deleted":
         if not current_user.get("is_super_admin"):
             return ""
         return f"""
         <form class="auction-delete-form" method="post" action="/auctions/{item.id}/purge?owner={owner_chat_id}&tab={escape(active_tab)}">
-          <button class="icon-btn danger" type="submit" title="Удалить навсегда">🗑</button>
+          <button class="icon-btn danger" type="submit" title="Удалить навсегда">{delete_icon}</button>
         </form>
         """
     return f"""
     <form class="auction-delete-form" method="post" action="/auctions/{item.id}/delete?owner={owner_chat_id}&tab={escape(active_tab)}">
-      <button class="icon-btn danger" type="submit" title="Переместить в удаленные">🗑</button>
+      <button class="icon-btn danger" type="submit" title="Переместить в удаленные">{delete_icon}</button>
     </form>
     """
 
@@ -1738,25 +1743,27 @@ def layout(
       margin-left: auto;
     }}
     .icon-btn {{
-      width: 34px;
-      height: 34px;
-      border-radius: 10px;
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,0.82);
-      color: var(--muted);
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: #111;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      font-size: 16px;
+      line-height: 1;
     }}
     .icon-btn.danger {{
-      color: var(--danger);
-      border-color: rgba(184,50,50,0.22);
-      background: #fff2f2;
+      color: #111;
     }}
     .icon-btn:hover {{
       transform: translateY(-1px);
+      opacity: 0.72;
+    }}
+    .icon-trash {{
+      width: 22px;
+      height: 22px;
+      display: block;
     }}
     .auction-added-date {{
       font-size: 12px;
