@@ -716,8 +716,10 @@ def render_auction_details_form(owner_chat_id: int, item, active_tab: str, row_n
     return f"""
     <details class="status-menu lot-menu">
       <summary>
-        <div class="auction-seq">#{row_number}</div>
-        <div class="auction-number">№ {source_link}</div>
+        <div class="auction-head">
+          <div class="auction-seq">#{row_number}</div>
+          <div class="auction-number">№ {source_link}</div>
+        </div>
         <div class="timeline-title">{escape(item.title)}</div>
       </summary>
       <form class="status-popover lot-form" method="post" action="/auctions/{item.id}/details?owner={owner_chat_id}&tab={escape(active_tab)}">
@@ -765,8 +767,10 @@ def render_auction_details_display(item, row_number: int) -> str:
     )
     return f"""
     <div>
-      <div class="auction-seq">#{row_number}</div>
-      <div class="auction-number">№ {source_link}</div>
+      <div class="auction-head">
+        <div class="auction-seq">#{row_number}</div>
+        <div class="auction-number">№ {source_link}</div>
+      </div>
       <div class="timeline-title">{escape(item.title)}</div>
     </div>
     """
@@ -1722,12 +1726,21 @@ def layout(
       border-color: rgba(184,50,50,0.22);
       background: #fff2f2;
     }}
+    .auction-head {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 6px;
+    }}
     .auction-number {{
       font-size: 12px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--muted);
-      margin-bottom: 6px;
+      margin-bottom: 0;
+      margin-left: auto;
+      text-align: right;
     }}
     .auction-number a {{
       color: inherit;
@@ -1781,12 +1794,12 @@ def layout(
       font-weight: 700;
     }}
     .auction-seq {{
-      margin-bottom: 4px;
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--muted);
+      white-space: nowrap;
     }}
     .status-form {{
       margin: 0;
