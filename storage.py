@@ -68,6 +68,7 @@ class Auction:
     result_status: str
     final_bid_amount: Optional[float]
     archived_at: Optional[datetime]
+    deleted_at: Optional[datetime]
     created_at: datetime
 
 
@@ -212,6 +213,7 @@ class Storage:
                     result_status TEXT NOT NULL DEFAULT 'pending',
                     final_bid_amount REAL,
                     archived_at TEXT,
+                    deleted_at TEXT,
                     created_at TEXT NOT NULL
                 );
                 """
@@ -282,6 +284,8 @@ class Storage:
                 conn.execute("ALTER TABLE auctions ADD COLUMN final_bid_amount REAL")
             if "archived_at" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN archived_at TEXT")
+            if "deleted_at" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN deleted_at TEXT")
             if "advance_percent" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN advance_percent REAL")
                 conn.execute(
@@ -747,7 +751,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT id, owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
-                       estimate_status, submit_decision_status, application_status, result_status, final_bid_amount, archived_at, created_at
+                       estimate_status, submit_decision_status, application_status, result_status, final_bid_amount, archived_at, deleted_at, created_at
                 FROM auctions
                 WHERE owner_chat_id = ?
                 ORDER BY bid_deadline ASC, id ASC
@@ -781,9 +785,9 @@ class Storage:
                 INSERT INTO auctions (
                     owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
                     max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status,
-                    approval_status, application_status, result_status, final_bid_amount, created_at, archived_at
+                    approval_status, application_status, result_status, final_bid_amount, created_at, archived_at, deleted_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL, NULL)
                 """,
                 (
                     owner_chat_id,
@@ -929,6 +933,29 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def soft_delete_auction(self, owner_chat_id: int, auction_id: int, deleted_at: datetime) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE auctions
+                SET deleted_at = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (deleted_at.isoformat(), auction_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def hard_delete_auction(self, owner_chat_id: int, auction_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM auctions
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (auction_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
     def ensure_demo_auctions(self, owner_chat_id: int) -> None:
         with self.connection() as conn:
             row = conn.execute(
@@ -950,9 +977,9 @@ class Storage:
                     """
                     INSERT INTO auctions (
                         owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
-                        max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status, approval_status, application_status, result_status, final_bid_amount, created_at
+                        max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status, approval_status, application_status, result_status, final_bid_amount, created_at, deleted_at
                     )
-                    VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?, 'new', ?, ?, NULL, ?)
+                    VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?, 'new', ?, ?, NULL, ?, NULL)
                     """,
                     (
                         owner_chat_id,
@@ -1568,6 +1595,7 @@ class Storage:
             result_status=row["result_status"],
             final_bid_amount=float(row["final_bid_amount"]) if row["final_bid_amount"] is not None else None,
             archived_at=datetime.fromisoformat(row["archived_at"]) if row["archived_at"] is not None else None,
+            deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] is not None else None,
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 

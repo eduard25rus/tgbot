@@ -181,9 +181,15 @@ def auction_min_amount(total_amount: float, discount_percent: float) -> float:
 
 
 def is_auction_archived(item) -> bool:
+    if is_auction_deleted(item):
+        return False
     if item.submit_decision_status == "rejected":
         return True
     return item.result_status in {"won", "lost", "rejected"}
+
+
+def is_auction_deleted(item) -> bool:
+    return item.deleted_at is not None
 
 
 def status_badge(status: str) -> str:
@@ -806,6 +812,24 @@ def render_submit_for_procurement(owner_chat_id: int, item, current_values: dict
     """
 
 
+def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, current_user: dict | None) -> str:
+    if current_user is None or is_procurement_user(current_user) or not has_permission(current_user, "auctions", "edit"):
+        return ""
+    if active_tab == "deleted":
+        if not current_user.get("is_super_admin"):
+            return ""
+        return f"""
+        <form method="post" action="/auctions/{item.id}/purge?owner={owner_chat_id}&tab={escape(active_tab)}">
+          <button class="icon-btn danger" type="submit" title="Удалить навсегда">🗑</button>
+        </form>
+        """
+    return f"""
+    <form method="post" action="/auctions/{item.id}/delete?owner={owner_chat_id}&tab={escape(active_tab)}">
+      <button class="icon-btn danger" type="submit" title="Переместить в удаленные">🗑</button>
+    </form>
+    """
+
+
 def render_auction_row(item, owner_chat_id: int, active_tab: str, current_user: dict | None = None) -> str:
     current_values = {
         "estimate_status": item.estimate_status,
@@ -831,13 +855,17 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, current_user: 
     submit_cell = render_submit_for_procurement(owner_chat_id, item, current_values, active_tab) if procurement_user else render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
     discount_cell = render_discount_display(item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if procurement_user else render_discount_form(owner_chat_id, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
     result_cell = render_result_form(owner_chat_id, item, current_values, active_tab)
+    row_actions = render_auction_delete_actions(owner_chat_id, item, active_tab, current_user)
     return f"""
     <tr id="auction-{item.id}" data-auction-row="{item.id}">
       <td>
         {lot_cell}
         <div class="auction-lot-meta">
           <span class="contract-meta">{escape(item.city)}</span>
-          {added_date_meta(item)}
+          <span class="auction-row-actions">
+            {added_date_meta(item)}
+            {row_actions}
+          </span>
         </div>
       </td>
       <td class="nowrap">{deadline_cell}</td>
@@ -1702,6 +1730,33 @@ def layout(
       justify-content: space-between;
       gap: 10px;
       margin-top: 8px;
+    }}
+    .auction-row-actions {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }}
+    .icon-btn {{
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.82);
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 16px;
+    }}
+    .icon-btn.danger {{
+      color: var(--danger);
+      border-color: rgba(184,50,50,0.22);
+      background: #fff2f2;
+    }}
+    .icon-btn:hover {{
+      transform: translateY(-1px);
     }}
     .auction-added-date {{
       font-size: 12px;
@@ -2839,8 +2894,9 @@ def render_auctions_section(
 ) -> str:
     storage.ensure_demo_auctions(owner_chat_id)
     all_auctions = storage.list_auctions(owner_chat_id)
-    active_auctions = [item for item in all_auctions if not is_auction_archived(item)]
-    archived_auctions = [item for item in all_auctions if is_auction_archived(item)]
+    active_auctions = [item for item in all_auctions if not is_auction_archived(item) and not is_auction_deleted(item)]
+    archived_auctions = [item for item in all_auctions if is_auction_archived(item) and not is_auction_deleted(item)]
+    deleted_auctions = [item for item in all_auctions if is_auction_deleted(item)]
     active_auctions.sort(key=lambda item: (item.bid_deadline, item.id))
     archived_auctions.sort(
         key=lambda item: (
@@ -2849,7 +2905,19 @@ def render_auctions_section(
         ),
         reverse=True,
     )
-    auctions = archived_auctions if active_tab == "archive" else active_auctions
+    deleted_auctions.sort(
+        key=lambda item: (
+            item.deleted_at or item.created_at,
+            item.id,
+        ),
+        reverse=True,
+    )
+    if active_tab == "archive":
+        auctions = archived_auctions
+    elif active_tab == "deleted":
+        auctions = deleted_auctions
+    else:
+        auctions = active_auctions
     total_amount = sum(item.amount for item in active_auctions)
     estimate_count = sum(1 for item in active_auctions if item.estimate_status == "approved")
     submit_decision_count = sum(1 for item in active_auctions if item.submit_decision_status == "approved")
@@ -2893,12 +2961,18 @@ def render_auctions_section(
         Архив
         <span class="tab-count">{len(archived_auctions)}</span>
       </a>
+      <a class="tab-btn{" active" if active_tab == "deleted" else ""}" href="/auctions?owner={owner_chat_id}&tab=deleted#auction-registry">
+        Удаленные
+        <span class="tab-count">{len(deleted_auctions)}</span>
+      </a>
     </div>
     """
     empty_message = (
         "Сейчас в работе нет аукционов. Все завершенные или отклоненные лоты уже ушли в архив."
         if active_tab == "active"
         else "Архив пока пуст. Как только по аукциону будет итог или решение не подавать, он окажется здесь."
+        if active_tab == "archive"
+        else "Удаленных аукционов пока нет."
     )
     add_auction_block = "" if is_procurement_user(current_user) else f"""
     <section class="card panel">
@@ -3166,7 +3240,7 @@ def app(environ, start_response):
     storage = Storage(os.getenv("DB_PATH", "contracts.db"))
     query = parse_qs(environ.get("QUERY_STRING", ""))
     current_auction_tab = query.get("tab", ["active"])[0]
-    if current_auction_tab not in {"active", "archive"}:
+    if current_auction_tab not in {"active", "archive", "deleted"}:
         current_auction_tab = "active"
     cookies = parse_cookies(environ)
     current_user = storage.get_web_user_by_session(cookies.get(SESSION_COOKIE, ""))
@@ -3571,6 +3645,48 @@ def app(environ, start_response):
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={target_tab}")
         except Exception as exc:
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось обновить дату подачи: {exc}")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/auctions/") and path.endswith("/delete") and method == "POST":
+        denied = guard("auctions", "edit")
+        if denied:
+            return denied
+        if is_procurement_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не удаляет аукционы.")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            auction_id = int(path.split("/")[2])
+            deleted = storage.soft_delete_auction(current_owner, auction_id, datetime.now())
+            if not deleted:
+                raise ValueError("Аукцион не найден")
+            return redirect(start_response, f"/auctions?owner={current_owner}&tab=deleted")
+        except Exception as exc:
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось удалить аукцион: {exc}")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/auctions/") and path.endswith("/purge") and method == "POST":
+        denied = guard("auctions", "edit")
+        if denied:
+            return denied
+        if current_user is None or not current_user.get("is_super_admin"):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Только главный пользователь может очищать аукционы навсегда.")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            auction_id = int(path.split("/")[2])
+            deleted = storage.hard_delete_auction(current_owner, auction_id)
+            if not deleted:
+                raise ValueError("Аукцион не найден")
+            return redirect(start_response, f"/auctions?owner={current_owner}&tab=deleted")
+        except Exception as exc:
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось удалить аукцион навсегда: {exc}")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
