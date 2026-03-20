@@ -354,11 +354,9 @@ def estimate_summary(item) -> str:
 def advance_summary(item) -> str:
     if item.advance_percent is None or item.advance_percent <= 0:
         return ""
-    advance_amount = round(item.amount * item.advance_percent / 100, 2)
     return (
         '<span class="result-meta result-meta-stack">'
         f'<span>Аванс: {escape(format_percent(item.advance_percent))}</span>'
-        f'<span>{escape(format_amount(advance_amount))}</span>'
         '</span>'
     )
 
@@ -729,11 +727,11 @@ def render_auction_details_form(owner_chat_id: int, item, active_tab: str) -> st
           <label>Ссылка на аукцион</label>
           <input type="text" name="source_url" value="{escape(item.source_url)}" placeholder="https://zakupki.gov.ru/...">
         </div>
-        <label class="check-row">
-          <input type="checkbox" name="has_advance" value="1" {"checked" if item.advance_percent is not None else ""}>
+        <label class="advance-toggle">
+          <input class="toggle-checkbox" type="checkbox" name="has_advance" value="1" {"checked" if item.advance_percent is not None else ""}>
           У аукциона есть аванс
         </label>
-        <div class="field">
+        <div class="field advance-field{" is-hidden" if item.advance_percent is None else ""}">
           <label>Процент аванса</label>
           <input type="text" name="advance_percent" value="{escape('' if item.advance_percent is None else str(item.advance_percent).replace('.', ','))}" placeholder="Например, 30">
         </div>
@@ -1636,12 +1634,31 @@ def layout(
       flex-wrap: wrap;
       font-size: 14px;
       color: var(--muted);
+      align-items: center;
     }}
     .check-row label {{
       display: inline-flex;
       gap: 8px;
       align-items: center;
       cursor: pointer;
+    }}
+    .toggle-checkbox {{
+      width: 18px;
+      height: 18px;
+      accent-color: var(--brand);
+      flex: 0 0 18px;
+    }}
+    .advance-toggle {{
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: var(--ink);
+      margin: 2px 0 4px;
+      cursor: pointer;
+    }}
+    .advance-field.is-hidden {{
+      display: none;
     }}
     .action-row {{
       display: flex;
@@ -2141,6 +2158,22 @@ document.addEventListener("input", (event) => {{
     }}
     const percent = ((baseAmount - minAmount) / baseAmount) * 100;
     percentInput.value = formatPercent(percent);
+  }}
+}});
+
+document.addEventListener("change", (event) => {{
+  const checkbox = event.target.closest('input[name="has_advance"]');
+  if (!checkbox) {{
+    return;
+  }}
+  const form = checkbox.closest("form");
+  const field = form ? form.querySelector(".advance-field") : null;
+  const percentInput = form ? form.querySelector('input[name="advance_percent"]') : null;
+  if (field) {{
+    field.classList.toggle("is-hidden", !checkbox.checked);
+  }}
+  if (percentInput && !checkbox.checked) {{
+    percentInput.value = "";
   }}
 }});
 
@@ -2895,10 +2928,10 @@ def render_auctions_section(
             <label>Сумма лота</label>
             <input type="text" name="amount" placeholder="25000000" required>
           </div>
-          <label class="check-row">
-            <input type="checkbox" name="has_advance" value="1"> У аукциона есть аванс
+          <label class="advance-toggle">
+            <input class="toggle-checkbox" type="checkbox" name="has_advance" value="1"> У аукциона есть аванс
           </label>
-          <div class="field">
+          <div class="field advance-field is-hidden">
             <label>Процент аванса</label>
             <input type="text" name="advance_percent" placeholder="Например, 30">
           </div>
