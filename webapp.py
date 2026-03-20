@@ -3211,13 +3211,11 @@ def has_permission(current_user: dict | None, section_id: str, mode: str = "view
     return bool(permissions.get("can_edit" if mode == "edit" else "can_view"))
 
 
-def render_auth_body(storage: Storage, flash_message: str = "", setup_message: str = "") -> str:
-    hint = storage.auth_hint_user()
+def render_auth_body(storage: Storage, flash_message: str = "", setup_message: str = "", login_hint: str = "") -> str:
     hint_html = ""
-    if hint is not None:
+    if login_hint:
         hint_html = (
-            f"<div class=\"auth-note\">Админ по умолчанию сейчас: <strong>{escape(hint['full_name'])}</strong><br>"
-            f"Логин: {escape(hint['login'])}</div>"
+            f"<div class=\"auth-note\">Ваш логин для входа: <strong>{escape(login_hint)}</strong></div>"
         )
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     setup_html = f'<div class="flash ok">{escape(setup_message)}</div>' if setup_message else ""
@@ -3234,7 +3232,7 @@ def render_auth_body(storage: Storage, flash_message: str = "", setup_message: s
         <form class="form-grid" method="post" action="/login">
           <div class="field">
             <label>Логин</label>
-            <input type="text" name="login" placeholder="bigboss" required>
+            <input type="text" name="login" placeholder="Введите ваш логин" value="{escape(login_hint)}" required>
           </div>
           <div class="field">
             <label>Пароль</label>
@@ -3344,7 +3342,7 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
         storage.set_web_user_password(user["id"], hash_password(password))
         storage.consume_password_setup_token(token)
-        body = render_auth_body(storage, "", "Пароль создан. Теперь можно войти.")
+        body = render_auth_body(storage, "", "Пароль создан. Теперь можно войти.", user["login"])
         html = layout("Авторизация", body, owners, current_owner, "contracts", None)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
