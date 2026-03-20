@@ -823,7 +823,11 @@ def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, cur
         return ""
     delete_icon = """
     <svg class="icon-trash" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-1 6h2v8H8V9Zm6 0h2v8h-2V9ZM6 7h12l-1 13a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 7Z" fill="currentColor"/>
+      <path d="M4 7h16" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M9 4h6l1 2H8l1-2Z" />
+      <path d="M7 7h10l-1 12a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2L7 7Z" />
     </svg>
     """
     if active_tab == "deleted":
@@ -1764,7 +1768,7 @@ def layout(
       padding: 0;
       border: none;
       background: transparent;
-      color: #111;
+      color: rgba(31, 38, 41, 0.62);
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1772,16 +1776,21 @@ def layout(
       line-height: 1;
     }}
     .icon-btn.danger {{
-      color: #111;
+      color: rgba(31, 38, 41, 0.62);
     }}
     .icon-btn:hover {{
       transform: translateY(-1px);
-      opacity: 0.72;
+      color: rgba(31, 38, 41, 0.92);
     }}
     .icon-trash {{
-      width: 22px;
-      height: 22px;
+      width: 20px;
+      height: 20px;
       display: block;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.7;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }}
     .auction-added-date {{
       font-size: 12px;
