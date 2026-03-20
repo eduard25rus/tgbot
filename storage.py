@@ -956,6 +956,17 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def hard_delete_all_deleted_auctions(self, owner_chat_id: int) -> int:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM auctions
+                WHERE owner_chat_id = ? AND deleted_at IS NOT NULL
+                """,
+                (owner_chat_id,),
+            )
+            return cursor.rowcount
+
     def ensure_demo_auctions(self, owner_chat_id: int) -> None:
         with self.connection() as conn:
             row = conn.execute(

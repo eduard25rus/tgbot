@@ -2974,6 +2974,16 @@ def render_auctions_section(
         if active_tab == "archive"
         else "Удаленных аукционов пока нет."
     )
+    deleted_toolbar = ""
+    if active_tab == "deleted" and current_user is not None and current_user.get("is_super_admin") and deleted_auctions:
+        deleted_count = len(deleted_auctions)
+        deleted_toolbar = f"""
+        <div class="action-row" style="justify-content: flex-end; margin-bottom: 16px;">
+          <form class="auction-delete-form" method="post" action="/auctions/purge-deleted?owner={owner_chat_id}&tab=deleted" onsubmit="return confirm('Вы точно хотите удалить {deleted_count} объектов навсегда?');">
+            <button class="secondary-btn danger" type="submit">Очистить корзину</button>
+          </form>
+        </div>
+        """
     add_auction_block = "" if is_procurement_user(current_user) else f"""
     <section class="card panel">
       <div class="panel-head">
@@ -3034,6 +3044,7 @@ def render_auctions_section(
         </div>
         {tab_links}
       </div>
+      {deleted_toolbar}
       {
         f'''
       <table class="table auction-table">
@@ -3687,6 +3698,24 @@ def app(environ, start_response):
             return redirect(start_response, f"/auctions?owner={current_owner}&tab=deleted")
         except Exception as exc:
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось удалить аукцион навсегда: {exc}")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/auctions/purge-deleted" and method == "POST":
+        denied = guard("auctions", "edit")
+        if denied:
+            return denied
+        if current_user is None or not current_user.get("is_super_admin"):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Только главный пользователь может очищать корзину.")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            storage.hard_delete_all_deleted_auctions(current_owner)
+            return redirect(start_response, f"/auctions?owner={current_owner}&tab=deleted")
+        except Exception as exc:
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось очистить корзину: {exc}")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
