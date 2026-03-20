@@ -238,6 +238,7 @@ def contract_payload(storage: Storage, owner_chat_id: int) -> list[dict]:
         paid_amount = sum(payment.amount for payment in payments)
         debt_amount = max(total_amount - paid_amount, 0.0)
         paid_ratio = (paid_amount / total_amount) if total_amount > 0 else 0.0
+        advance_amount = round(total_amount * (contract.advance_percent or 0) / 100, 2) if total_amount > 0 else 0.0
         overdue_stages = sum(1 for stage in stages if stage.end_date < date.today())
         payload.append(
             {
@@ -248,6 +249,7 @@ def contract_payload(storage: Storage, owner_chat_id: int) -> list[dict]:
                 "paid_amount": paid_amount,
                 "debt_amount": debt_amount,
                 "paid_ratio": paid_ratio,
+                "advance_amount": advance_amount,
                 "overdue_stages": overdue_stages,
             }
         )
@@ -362,6 +364,17 @@ def advance_summary(item) -> str:
     if item.advance_percent is None or item.advance_percent <= 0:
         return ""
     return f'<div class="deadline-meta">Аванс: {escape(format_percent(item.advance_percent))}</div>'
+
+
+def contract_advance_summary(advance_percent: float | None, advance_amount: float) -> str:
+    if advance_percent is None or advance_percent <= 0:
+        return '<span class="contract-table-subtle">—</span>'
+    return (
+        '<div class="contract-advance-stack">'
+        f'<span>Аванс: {escape(format_percent(advance_percent))}</span>'
+        f'<span>{escape(format_amount(advance_amount))}</span>'
+        '</div>'
+    )
 
 
 def added_date_meta(item) -> str:
@@ -1367,6 +1380,30 @@ def layout(
       color: var(--muted);
       flex-wrap: wrap;
     }}
+    .contract-table-link {{
+      color: inherit;
+      text-decoration: none;
+      display: block;
+    }}
+    .contract-table-subtle {{
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      margin-top: 4px;
+    }}
+    .contract-advance-stack {{
+      display: grid;
+      gap: 4px;
+      font-size: 13px;
+      color: var(--ink);
+    }}
+    .contract-table tbody tr:hover {{
+      background: rgba(255,255,255,0.42);
+    }}
+    .stage-builder-card {{
+      display: grid;
+      gap: 12px;
+    }}
     .info-row {{
       display: flex;
       gap: 8px;
@@ -2111,6 +2148,37 @@ function copyText(inputId) {{
   document.execCommand("copy");
 }}
 
+function buildContractStageFields(form, count) {{
+  const container = form ? form.querySelector('[data-stage-container]') : null;
+  if (!container) {{
+    return;
+  }}
+  const normalized = Math.max(1, Number(count || 1));
+  let html = '';
+  for (let index = 1; index <= normalized; index += 1) {{
+    html += `
+      <div class="permission-box stage-builder-card">
+        <strong>Этап ${{index}}</strong>
+        <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <div class="field">
+            <label>Сумма этапа</label>
+            <input type="text" name="stage_amount_${{index}}" data-money-input="1" required>
+          </div>
+          <div class="field">
+            <label>Дедлайн этапа</label>
+            <input type="date" name="stage_end_date_${{index}}" required>
+          </div>
+        </div>
+        <div class="field">
+          <label>Примечание к этапу</label>
+          <textarea name="stage_notes_${{index}}" placeholder="Что входит в этап"></textarea>
+        </div>
+      </div>
+    `;
+  }}
+  container.innerHTML = html;
+}}
+
 document.addEventListener("click", (event) => {{
   const estimateQuick = event.target.closest('.estimate-form .estimate-quick');
   if (estimateQuick) {{
@@ -2277,6 +2345,18 @@ document.addEventListener("change", (event) => {{
   }}
 }});
 
+document.addEventListener("input", (event) => {{
+  const stageCountInput = event.target.closest('[data-stage-count-input]');
+  if (!stageCountInput) {{
+    return;
+  }}
+  const form = stageCountInput.closest('.contract-create-form');
+  if (!form) {{
+    return;
+  }}
+  buildContractStageFields(form, stageCountInput.value);
+}});
+
 document.addEventListener("blur", (event) => {{
   const amountInput = event.target.closest('input[data-money-input], .discount-form input[name="min_amount"]');
   if (!amountInput) {{
@@ -2375,6 +2455,10 @@ document.addEventListener("input", (event) => {{
 }});
 
 window.addEventListener("load", () => {{
+  document.querySelectorAll('.contract-create-form').forEach((form) => {{
+    const stageCountInput = form.querySelector('[data-stage-count-input]');
+    buildContractStageFields(form, stageCountInput ? stageCountInput.value : 1);
+  }});
   const saved = window.sessionStorage.getItem("auctionScrollY");
   if (saved !== null) {{
     window.sessionStorage.removeItem("auctionScrollY");
@@ -2392,6 +2476,7 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
     total_amount = sum(item["total_amount"] for item in payload)
     total_paid = sum(item["paid_amount"] for item in payload)
     total_debt = max(total_amount - total_paid, 0.0)
+    total_advance = sum(item["advance_amount"] for item in payload)
     overdue_total = sum(item["overdue_stages"] for item in payload)
     upcoming = storage.upcoming_items(owner_chat_id, within_days=30)
     paid_ratio = (total_paid / total_amount) if total_amount > 0 else 0.0
@@ -2404,9 +2489,9 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
         <div class="stat-note">В активном контуре</div>
       </article>
       <article class="card stat-card">
-        <div class="stat-label">Общий бюджет</div>
+        <div class="stat-label">Общий объем</div>
         <div class="stat-value">{format_amount(total_amount)}</div>
-        <div class="stat-note">Сумма всех этапов</div>
+        <div class="stat-note">Сумма всех контрактов</div>
       </article>
       <article class="card stat-card">
         <div class="stat-label">Оплачено</div>
@@ -2414,49 +2499,63 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
         <div class="stat-note">{format_percent(paid_ratio * 100)} от общего объема</div>
       </article>
       <article class="card stat-card">
-        <div class="stat-label">Долг заказчиков</div>
-        <div class="stat-value">{format_amount(total_debt)}</div>
-        <div class="stat-note">Просроченных этапов: {overdue_total}</div>
+        <div class="stat-label">Аванс / долг</div>
+        <div class="stat-value">{format_amount(total_advance)}</div>
+        <div class="stat-note">Долг заказчиков: {format_amount(total_debt)}</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Просрочки</div>
+        <div class="stat-value">{overdue_total}</div>
+        <div class="stat-note">Просроченных этапов по контрактам</div>
       </article>
     </section>
     """
 
-    contracts_html_parts = []
-    for item in payload:
+    contract_rows = []
+    for index, item in enumerate(payload, start=1):
         contract = item["contract"]
         progress_width = round(item["paid_ratio"] * 100, 1)
-        contracts_html_parts.append(
+        stages_brief = "".join(
+            f'<div class="contract-table-subtle">Этап {stage.position} · {format_amount(stage.amount)} · {format_date(stage.end_date)}</div>'
+            for stage in item["stages"][:3]
+        )
+        if len(item["stages"]) > 3:
+            stages_brief += f'<div class="contract-table-subtle">Еще этапов: {len(item["stages"]) - 3}</div>'
+        contract_rows.append(
             f"""
-            <a class="contract-item" href="/contracts/{contract.id}?owner={owner_chat_id}">
-              <div class="contract-top">
-                <div>
-                  <div class="contract-name">{escape(contract.title)}</div>
-                  <div class="contract-meta">
-                    Дедлайн: {format_date(contract.end_date)}<br>
-                    {escape(contract.description) if contract.description else 'Описание пока не заполнено'}
+            <tr>
+              <td>
+                <a class="contract-table-link" href="/contracts/{contract.id}?owner={owner_chat_id}">
+                  <div class="auction-head">
+                    <div class="auction-seq">#{index}</div>
+                    <div class="auction-number">Контракт №{contract.id}</div>
                   </div>
-                </div>
-                <div class="contract-money">
-                  <div class="money-big">{format_amount(item["total_amount"])}</div>
-                  <div class="contract-meta">Оплачено {format_amount(item["paid_amount"])}</div>
-                </div>
-              </div>
-              <div class="progress-wrap">
-                <div class="progress-track"><div class="progress-bar" style="width:{progress_width}%"></div></div>
-                <div class="progress-meta">
-                  <span>{format_percent(progress_width)} оплачено</span>
-                  <span>Долг {format_amount(item["debt_amount"])}</span>
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="chip">Этапов: {len(item["stages"])}</span>
-                <span class="chip">Оплат: {len(item["payments"])}</span>
-                <span class="chip{' danger' if item['overdue_stages'] else ''}">Просрочек: {item['overdue_stages']}</span>
-              </div>
-            </a>
+                  <div class="timeline-title">{escape(contract.title)}</div>
+                </a>
+                <div class="contract-table-subtle">{escape(contract.description) if contract.description else 'Описание пока не заполнено'}</div>
+              </td>
+              <td class="nowrap">
+                <div>{format_date(contract.end_date)}</div>
+                <div class="contract-table-subtle">Этапов: {len(item["stages"])}</div>
+              </td>
+              <td class="nowrap">
+                <div class="amount-value">{format_amount(item["total_amount"])}</div>
+              </td>
+              <td class="nowrap">
+                {contract_advance_summary(contract.advance_percent, item["advance_amount"])}
+              </td>
+              <td class="nowrap">
+                <div>{format_amount(item["paid_amount"])}</div>
+                <div class="contract-table-subtle">Долг: {format_amount(item["debt_amount"])}</div>
+                <div class="contract-table-subtle">{format_percent(progress_width)} оплачено</div>
+              </td>
+              <td>
+                {stages_brief or '<span class="contract-table-subtle">Этапов пока нет</span>'}
+              </td>
+            </tr>
             """
         )
-    contracts_html = "".join(contracts_html_parts) or '<div class="empty">Контракты пока не добавлены.</div>'
+    contracts_table = "".join(contract_rows) or '<div class="empty">Контракты пока не добавлены.</div>'
 
     upcoming_items = []
     for item in upcoming[:8]:
@@ -2483,66 +2582,100 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
 
     return f"""
     {stats_html}
-    <section class="grid">
-      <section class="card panel">
-        <div class="panel-head">
-          <div>
-            <h2 class="panel-title">Контракты</h2>
-            <div class="panel-sub">Карточки уже выглядят как основа CRM. Следом можно добавить формы создания и редактирования.</div>
-          </div>
-          <div class="chip">Текущий владелец: {owner_chat_id}</div>
+    <section class="card panel" id="contract-registry">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Реестр контрактов</h2>
+          <div class="panel-sub">Контракты, этапы, оплаты и аванс в одном рабочем реестре, по той же логике аккуратной панели, что и в аукционах.</div>
         </div>
-        <div class="contract-list">{contracts_html}</div>
-      </section>
-      <aside class="section-stack">
-        <section class="card panel">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Новый контракт</h2>
-              <div class="panel-sub">Первый рабочий ввод уже из браузера</div>
-            </div>
+        <div class="chip">Рабочий контур</div>
+      </div>
+      {
+        f'''
+        <table class="table contract-table">
+          <thead>
+            <tr>
+              <th>Контракт</th>
+              <th class="nowrap">Дедлайн</th>
+              <th class="nowrap">Сумма</th>
+              <th class="nowrap">Аванс</th>
+              <th class="nowrap">Оплачено / долг</th>
+              <th>Этапы</th>
+            </tr>
+          </thead>
+          <tbody>{contracts_table}</tbody>
+        </table>
+        '''
+        if payload
+        else contracts_table
+      }
+    </section>
+    <section class="card panel" style="margin-top: 22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Добавить контракт</h2>
+          <div class="panel-sub">Сразу фиксируем общую сумму, аванс и этапы: суммы и сроки по каждому этапу.</div>
+        </div>
+        <div class="chip">Новый контракт сразу собирается по этапам</div>
+      </div>
+      <form class="form-grid contract-create-form" method="post" action="/contracts/new?owner={owner_chat_id}">
+        <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <div class="field">
+            <label>Название контракта</label>
+            <input type="text" name="title" required>
           </div>
-          <form class="form-grid" method="post" action="/contracts/new?owner={owner_chat_id}">
+          <div class="field">
+            <label>Общая сумма</label>
+            <input type="text" name="total_amount" placeholder="15000000" data-money-input="1" required>
+          </div>
+          <div class="field">
+            <label>Количество этапов</label>
+            <input type="number" name="stage_count" min="1" value="1" data-stage-count-input="1" required>
+          </div>
+          <label class="advance-toggle">
+            <input class="toggle-checkbox" type="checkbox" name="has_advance" value="1"> У контракта есть аванс
+          </label>
+          <div class="field advance-field is-hidden">
+            <label>Процент аванса</label>
+            <input type="text" name="advance_percent" placeholder="Например, 30">
+          </div>
+        </div>
+        <div class="field">
+          <label>Описание</label>
+          <textarea name="description" placeholder="Кратко о контракте"></textarea>
+        </div>
+        <div class="section-stack" data-stage-container="1">
+          <div class="permission-box">
+            <strong>Этап 1</strong>
+            <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+              <div class="field">
+                <label>Сумма этапа</label>
+                <input type="text" name="stage_amount_1" data-money-input="1" required>
+              </div>
+              <div class="field">
+                <label>Дедлайн этапа</label>
+                <input type="date" name="stage_end_date_1" required>
+              </div>
+            </div>
             <div class="field">
-              <label>Название</label>
-              <input type="text" name="title" required>
-            </div>
-            <div class="field">
-              <label>Описание</label>
-              <textarea name="description" placeholder="Кратко о контракте"></textarea>
-            </div>
-            <div class="field">
-              <label>Общий дедлайн</label>
-              <input type="text" name="end_date" placeholder="31-07-2026" required>
-            </div>
-            <button class="submit-btn" type="submit">Создать контракт</button>
-          </form>
-        </section>
-        <section class="card panel">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Ближайшие сроки</h2>
-              <div class="panel-sub">То, что сейчас уже напоминает бот, здесь может стать рабочим календарем.</div>
+              <label>Примечание к этапу</label>
+              <textarea name="stage_notes_1" placeholder="Что входит в этап"></textarea>
             </div>
           </div>
-          <div class="timeline">{upcoming_html}</div>
-        </section>
-        <section class="card panel">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Что дальше</h2>
-              <div class="panel-sub">Самый логичный следующий слой для CRM</div>
-            </div>
-          </div>
-          <div class="contract-meta">
-            1. Формы ввода контрактов, этапов и оплат<br>
-            2. Авторизация и роли сотрудников<br>
-            3. Фильтры по долгам, срокам и статусам<br>
-            4. Событийная лента и комментарии<br>
-            5. Интеграция Telegram-бота с тем же backend
-          </div>
-        </section>
-      </aside>
+        </div>
+        <div class="action-row">
+          <button class="submit-btn" type="submit">Создать контракт</button>
+        </div>
+      </form>
+    </section>
+    <section class="card panel" style="margin-top: 22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Ближайшие сроки</h2>
+          <div class="panel-sub">Контрактный календарь, который уже можно развивать дальше в полноценный контроль сроков.</div>
+        </div>
+      </div>
+      <div class="timeline">{upcoming_html}</div>
     </section>
     """
 
@@ -2596,6 +2729,11 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <div class="mini-card">
           <div class="stat-label">Общая сумма</div>
           <div class="mini-value">{format_amount(payload["total_amount"])}</div>
+        </div>
+        <div class="mini-card">
+          <div class="stat-label">Аванс</div>
+          <div class="mini-value">{format_percent(contract.advance_percent) if contract.advance_percent else '—'}</div>
+          <div class="stat-note">{format_amount(payload["advance_amount"]) if contract.advance_percent else 'Аванс не указан'}</div>
         </div>
         <div class="mini-card">
           <div class="stat-label">Оплачено</div>
@@ -3409,14 +3547,41 @@ def app(environ, start_response):
         try:
             title = form["title"].strip()
             description = form.get("description", "").strip()
-            end_date = parse_date(form["end_date"])
+            total_amount = parse_amount(form["total_amount"])
+            stage_count = int(form.get("stage_count", "1"))
+            has_advance = form.get("has_advance") == "1"
+            advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
             if not title:
                 raise ValueError("Название контракта обязательно")
-            contract_id = storage.add_contract(current_owner, title, description, end_date)
+            if total_amount <= 0:
+                raise ValueError("Общая сумма контракта должна быть больше 0")
+            if stage_count < 1:
+                raise ValueError("Нужно указать хотя бы один этап")
+            if has_advance:
+                if advance_percent is None:
+                    raise ValueError("Укажите процент аванса")
+                if advance_percent <= 0 or advance_percent > 100:
+                    raise ValueError("Процент аванса должен быть от 0,01 до 100")
+            stage_specs = []
+            stage_total = 0.0
+            for index in range(1, stage_count + 1):
+                amount = parse_amount(form.get(f"stage_amount_{index}", ""))
+                if amount <= 0:
+                    raise ValueError(f"Сумма этапа {index} должна быть больше 0")
+                end_date = parse_date(form.get(f"stage_end_date_{index}", ""))
+                notes = form.get(f"stage_notes_{index}", "").strip()
+                stage_specs.append((index, amount, end_date, notes))
+                stage_total += amount
+            if abs(stage_total - total_amount) > 0.01:
+                raise ValueError("Сумма этапов должна совпадать с общей суммой контракта")
+            contract_end_date = max(item[2] for item in stage_specs)
+            contract_id = storage.add_contract(current_owner, title, description, contract_end_date, advance_percent)
+            for index, amount, end_date, notes in stage_specs:
+                storage.add_stage(contract_id, index, notes, end_date, amount)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_dashboard(storage, current_owner) + f'<div class="flash">Не удалось создать контракт: {escape(str(exc))}</div>'
-            html = layout("CRM Draft", body, owners, current_owner, "contracts", current_user)
+            html = layout("Контракты", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
@@ -3425,7 +3590,7 @@ def app(environ, start_response):
         if denied:
             return denied
         body = render_dashboard(storage, current_owner)
-        html = layout("CRM Draft", body, owners, current_owner, "contracts", current_user)
+        html = layout("Контракты", body, owners, current_owner, "contracts", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 

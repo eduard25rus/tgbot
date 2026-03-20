@@ -19,6 +19,7 @@ class Contract:
     title: str
     description: str
     end_date: date
+    advance_percent: Optional[float]
     created_at: datetime
 
 
@@ -104,6 +105,7 @@ class Storage:
                     title TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
                     end_date TEXT NOT NULL,
+                    advance_percent REAL,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(chat_id) REFERENCES chats(chat_id)
                 );
@@ -221,12 +223,17 @@ class Storage:
             columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(stages)").fetchall()
             }
+            contract_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(contracts)").fetchall()
+            }
             if "amount" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN amount REAL NOT NULL DEFAULT 0")
             if "position" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN position INTEGER NOT NULL DEFAULT 1")
             if "status" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN status TEXT NOT NULL DEFAULT 'not_started'")
+            if "advance_percent" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN advance_percent REAL")
             grant_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(access_grants)").fetchall()
             }
@@ -1111,7 +1118,7 @@ class Storage:
                 (viewer_username, viewer_name, owner_chat_id, viewer_user_id),
             )
 
-    def add_contract(self, chat_id: int, title: str, description: str, end_date: date) -> int:
+    def add_contract(self, chat_id: int, title: str, description: str, end_date: date, advance_percent: float | None = None) -> int:
         with self.connection() as conn:
             conn.execute(
                 """
@@ -1122,10 +1129,10 @@ class Storage:
             )
             cursor = conn.execute(
                 """
-                INSERT INTO contracts (chat_id, title, description, end_date, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO contracts (chat_id, title, description, end_date, advance_percent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (chat_id, title.strip(), description.strip(), end_date.strftime(DATE_FMT), datetime.utcnow().isoformat()),
+                (chat_id, title.strip(), description.strip(), end_date.strftime(DATE_FMT), advance_percent, datetime.utcnow().isoformat()),
             )
             return int(cursor.lastrowid)
 
@@ -1388,7 +1395,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, chat_id, title, description, end_date, created_at
+                SELECT id, chat_id, title, description, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ?
                 ORDER BY end_date ASC, id ASC
@@ -1401,7 +1408,7 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT id, chat_id, title, description, end_date, created_at
+                SELECT id, chat_id, title, description, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ? AND id = ?
                 """,
@@ -1554,6 +1561,7 @@ class Storage:
             title=row["title"],
             description=row["description"],
             end_date=date.fromisoformat(row["end_date"]),
+            advance_percent=float(row["advance_percent"]) if row["advance_percent"] is not None else None,
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
