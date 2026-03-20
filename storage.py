@@ -872,16 +872,17 @@ class Storage:
         owner_chat_id: int,
         auction_id: int,
         amount: float,
+        advance_percent: float | None,
         max_discount_percent: float | None,
     ) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE auctions
-                SET amount = ?, max_discount_percent = ?
+                SET amount = ?, advance_percent = ?, max_discount_percent = ?
                 WHERE id = ? AND owner_chat_id = ?
                 """,
-                (amount, max_discount_percent, auction_id, owner_chat_id),
+                (amount, advance_percent, max_discount_percent, auction_id, owner_chat_id),
             )
             return cursor.rowcount > 0
 

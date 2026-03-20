@@ -354,10 +354,9 @@ def estimate_summary(item) -> str:
 def advance_summary(item) -> str:
     if item.advance_percent is None or item.advance_percent <= 0:
         return ""
+    advance_amount = round(item.amount * item.advance_percent / 100, 2)
     return (
-        '<span class="result-meta result-meta-stack">'
-        f'<span>Аванс: {escape(format_percent(item.advance_percent))}</span>'
-        '</span>'
+        f'<div class="deadline-meta">Аванс: {escape(format_percent(item.advance_percent))} · {escape(format_amount(advance_amount))}</div>'
     )
 
 
@@ -682,6 +681,13 @@ def render_amount_form(owner_chat_id: int, auction_id: int, item, active_tab: st
         <div class="field">
           <label>Сумма аукциона, ₽</label>
           <input type="text" name="amount" value="{format_amount_input(item.amount)}" data-money-input="1">
+        </div>
+        <label class="advance-toggle">
+          <input class="toggle-checkbox" type="checkbox" name="has_advance" value="1" {"checked" if item.advance_percent is not None else ""}> У аукциона есть аванс
+        </label>
+        <div class="field advance-field{" is-hidden" if item.advance_percent is None else ""}">
+          <label>Процент аванса</label>
+          <input type="text" name="advance_percent" value="{escape('' if item.advance_percent is None else str(item.advance_percent).replace('.', ','))}" placeholder="Например, 30">
         </div>
         <div class="action-row">
           <button class="submit-btn" type="submit">Сохранить сумму</button>
@@ -3478,12 +3484,19 @@ def app(environ, start_response):
             if auction is None:
                 raise ValueError("Аукцион не найден")
             amount = parse_amount(form["amount"])
+            has_advance = form.get("has_advance") == "1"
+            advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
             if auction.min_bid_amount is not None and amount < auction.min_bid_amount:
                 raise ValueError("Сумма аукциона не может быть меньше уже заданной минимальной суммы")
+            if has_advance:
+                if advance_percent is None:
+                    raise ValueError("Укажите процент авансирования")
+                if advance_percent <= 0 or advance_percent > 100:
+                    raise ValueError("Процент авансирования должен быть от 0,01 до 100")
             recalculated_discount = auction.max_discount_percent
             if auction.min_bid_amount is not None and amount > 0:
                 recalculated_discount = round(((amount - auction.min_bid_amount) / amount) * 100, 2)
-            updated = storage.update_auction_amount(current_owner, auction_id, amount, recalculated_discount)
+            updated = storage.update_auction_amount(current_owner, auction_id, amount, advance_percent, recalculated_discount)
             if not updated:
                 raise ValueError("Аукцион не найден")
             target_tab = "archive" if is_auction_archived(auction) else current_auction_tab
