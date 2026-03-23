@@ -2713,12 +2713,6 @@ def layout(
       transform: translateX(-50%);
       margin: 0;
     }}
-    .auction-table td:nth-child(6) > .status-menu {{
-      position: relative;
-      left: 50%;
-      transform: translateX(-52%);
-      margin: 0;
-    }}
     tr[data-auction-row].is-saving {{
       opacity: 0.55;
       transition: opacity 0.18s ease;
