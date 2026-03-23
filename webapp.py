@@ -74,6 +74,7 @@ PREVIEW_ROLE_COOKIE = "felis_preview_role"
 ROLE_PREVIEW_OPTIONS = [
     ("", "Обычный режим"),
     ("procurement", "Отдел госзакупок"),
+    ("supply", "Отдел снабжения"),
 ]
 
 
@@ -288,6 +289,13 @@ def is_procurement_user(current_user: dict | None) -> bool:
     )
 
 
+def is_supply_user(current_user: dict | None) -> bool:
+    return bool(
+        current_user
+        and current_user.get("effective_role_name", current_user.get("role_name")) in {"Отдел снабжения", "supply"}
+    )
+
+
 def with_preview_role(current_user: dict | None, preview_role: str) -> dict | None:
     if current_user is None:
         return None
@@ -314,6 +322,18 @@ def procurement_status_allowed(current_user: dict | None, auction, estimate_stat
     if result_changed and effective_submit != "submitted":
         return False
     return True
+
+
+def supply_status_allowed(current_user: dict | None, auction, estimate_status: str, submit_decision_status: str, result_status: str) -> bool:
+    if not is_supply_user(current_user):
+        return True
+    if submit_decision_status != auction.submit_decision_status or result_status != auction.result_status:
+        return False
+    if estimate_status == auction.estimate_status:
+        return True
+    if auction.estimate_status not in {"approved", "calculated", "not_calculated"}:
+        return False
+    return estimate_status in {"calculated", "not_calculated"}
 
 
 def password_state_label(value: str) -> str:
@@ -831,8 +851,47 @@ def render_submit_for_procurement(owner_chat_id: int, item, current_values: dict
     """
 
 
+def render_estimate_for_supply(owner_chat_id: int, item, current_values: dict[str, str], active_tab: str) -> str:
+    if item.estimate_status not in {"approved", "calculated", "not_calculated"}:
+        return auction_current_chip("estimate_status", current_values) + estimate_summary(item)
+    hidden_inputs = [
+        f'<input type="hidden" name="submit_decision_status" value="{escape(current_values["submit_decision_status"])}">',
+        f'<input type="hidden" name="result_status" value="{escape(current_values["result_status"])}">',
+    ]
+    if item.final_bid_amount is not None:
+        hidden_inputs.append(
+            f'<input type="hidden" name="final_bid_amount" value="{escape(format_amount_input(item.final_bid_amount))}">'
+        )
+    return f"""
+    <details class="status-menu estimate-menu">
+      <summary>
+        <span class="discount-value">
+          {auction_current_chip("estimate_status", current_values)}
+          {estimate_summary(item)}
+        </span>
+      </summary>
+      <form class="status-popover estimate-form" method="post" action="/auctions/{item.id}/status?owner={owner_chat_id}&tab={escape(active_tab)}">
+        {''.join(hidden_inputs)}
+        <input type="hidden" name="estimate_status" value="{escape(current_values["estimate_status"])}">
+        <div class="result-options">
+          <button class="estimate-picker {AUCTION_ESTIMATE_META['calculated'][1]}{' is-active' if current_values['estimate_status'] == 'calculated' else ''}" type="button" data-estimate-value="calculated">Просчитан</button>
+          <button class="estimate-picker {AUCTION_ESTIMATE_META['not_calculated'][1]}{' is-active' if current_values['estimate_status'] == 'not_calculated' else ''}" type="button" data-estimate-value="not_calculated">Не просчитан</button>
+        </div>
+        <div class="field estimate-cost-field{' is-hidden' if current_values['estimate_status'] != 'calculated' else ''}">
+          <label>Стоимость материалов, ₽</label>
+          <input type="text" name="material_cost" value="{escape(format_amount_input(item.material_cost)) if item.material_cost is not None and current_values['estimate_status'] == 'calculated' else ''}" placeholder="Введите сумму материалов" data-money-input="1" {'required' if current_values['estimate_status'] == 'calculated' else ''}>
+          <div class="result-error{' is-visible' if current_values['estimate_status'] == 'calculated' and item.material_cost is None else ''}">Введите стоимость материалов.</div>
+        </div>
+        <div class="action-row">
+          <button class="submit-btn" type="submit" {'disabled' if current_values['estimate_status'] == 'calculated' and item.material_cost is None else ''}>Сохранить расчет</button>
+        </div>
+      </form>
+    </details>
+    """
+
+
 def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, current_user: dict | None) -> str:
-    if current_user is None or is_procurement_user(current_user) or not has_permission(current_user, "auctions", "edit"):
+    if current_user is None or is_procurement_user(current_user) or is_supply_user(current_user) or not has_permission(current_user, "auctions", "edit"):
         return ""
     delete_icon = """
     <svg class="icon-trash" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -865,6 +924,8 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
         "result_status": item.result_status,
     }
     procurement_user = is_procurement_user(current_user)
+    supply_user = is_supply_user(current_user)
+    restricted_user = procurement_user or supply_user
     days_left = (item.bid_deadline - date.today()).days
     show_deadline_note = days_left > 0
     is_deadline_danger = (
@@ -876,13 +937,18 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
         deadline_note = ""
     else:
         deadline_note = f"Осталось {days_left} дн."
-    lot_cell = render_auction_details_display(item, row_number) if procurement_user else render_auction_details_form(owner_chat_id, item, active_tab, row_number)
-    deadline_cell = render_deadline_display(item.bid_deadline, deadline_note, is_deadline_danger) if procurement_user else render_deadline_form(owner_chat_id, item.id, item.bid_deadline, deadline_note, is_deadline_danger, active_tab)
-    amount_cell = render_amount_display(item) if procurement_user else render_amount_form(owner_chat_id, item.id, item, active_tab)
-    estimate_cell = auction_current_chip("estimate_status", current_values) + estimate_summary(item) if procurement_user else render_estimate_form(owner_chat_id, item, current_values, active_tab)
-    submit_cell = render_submit_for_procurement(owner_chat_id, item, current_values, active_tab) if procurement_user else render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
-    discount_cell = render_discount_display(item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if procurement_user else render_discount_form(owner_chat_id, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
-    result_cell = render_result_form(owner_chat_id, item, current_values, active_tab)
+    lot_cell = render_auction_details_display(item, row_number) if restricted_user else render_auction_details_form(owner_chat_id, item, active_tab, row_number)
+    deadline_cell = render_deadline_display(item.bid_deadline, deadline_note, is_deadline_danger) if restricted_user else render_deadline_form(owner_chat_id, item.id, item.bid_deadline, deadline_note, is_deadline_danger, active_tab)
+    amount_cell = render_amount_display(item) if restricted_user else render_amount_form(owner_chat_id, item.id, item, active_tab)
+    if procurement_user:
+        estimate_cell = auction_current_chip("estimate_status", current_values) + estimate_summary(item)
+    elif supply_user:
+        estimate_cell = render_estimate_for_supply(owner_chat_id, item, current_values, active_tab)
+    else:
+        estimate_cell = render_estimate_form(owner_chat_id, item, current_values, active_tab)
+    submit_cell = render_submit_for_procurement(owner_chat_id, item, current_values, active_tab) if procurement_user else auction_current_chip("submit_decision_status", current_values) if supply_user else render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
+    discount_cell = render_discount_display(item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if restricted_user else render_discount_form(owner_chat_id, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
+    result_cell = render_result_form(owner_chat_id, item, current_values, active_tab) if procurement_user else auction_current_chip("result_status", current_values) + result_summary(item) if supply_user else render_result_form(owner_chat_id, item, current_values, active_tab)
     row_actions = render_auction_delete_actions(owner_chat_id, item, active_tab, current_user)
     return f"""
     <tr id="auction-{item.id}" data-auction-row="{item.id}">
@@ -3164,7 +3230,7 @@ def render_auctions_section(
           </form>
         </div>
         """
-    add_auction_block = "" if is_procurement_user(current_user) else f"""
+    add_auction_block = "" if is_procurement_user(current_user) or is_supply_user(current_user) else f"""
     <section class="card panel">
       <div class="panel-head">
         <div>
@@ -3436,6 +3502,8 @@ def app(environ, start_response):
     preview_role = cookies.get(PREVIEW_ROLE_COOKIE, "") if current_user and current_user.get("is_super_admin") else ""
     if preview_role == "Отдел госзакупок":
         preview_role = "procurement"
+    if preview_role == "Отдел снабжения":
+        preview_role = "supply"
     if preview_role not in {item[0] for item in ROLE_PREVIEW_OPTIONS}:
         preview_role = ""
     current_user = with_preview_role(current_user, preview_role)
@@ -3598,8 +3666,8 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
-        if is_procurement_user(current_user):
-            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не добавляет новые аукционы.")
+        if is_procurement_user(current_user) or is_supply_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Эта роль не добавляет новые аукционы.")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3649,6 +3717,8 @@ def app(environ, start_response):
             final_bid_amount = auction.final_bid_amount
             if not procurement_status_allowed(current_user, auction, estimate_status, submit_decision_status, result_status):
                 raise ValueError("Для роли «Отдел госзакупок» доступны только перевод «Подавать заявку» -> «Заявка подана» и изменение итога")
+            if not supply_status_allowed(current_user, auction, estimate_status, submit_decision_status, result_status):
+                raise ValueError("Для роли «Отдел снабжения» доступна только колонка «Считать»")
             if estimate_status == "calculated":
                 material_cost = parse_optional_number(form.get("material_cost", ""))
                 if material_cost is None:
@@ -3711,8 +3781,8 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
-        if is_procurement_user(current_user):
-            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не меняет максимальное снижение.")
+        if is_procurement_user(current_user) or is_supply_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Эта роль не меняет максимальное снижение.")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3759,8 +3829,8 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
-        if is_procurement_user(current_user):
-            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не меняет сумму аукциона.")
+        if is_procurement_user(current_user) or is_supply_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Эта роль не меняет сумму аукциона.")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3798,8 +3868,8 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
-        if is_procurement_user(current_user):
-            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не меняет карточку аукциона.")
+        if is_procurement_user(current_user) or is_supply_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Эта роль не меняет карточку аукциона.")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3842,8 +3912,8 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
-        if is_procurement_user(current_user):
-            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не меняет дедлайн аукциона.")
+        if is_procurement_user(current_user) or is_supply_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Эта роль не меняет дедлайн аукциона.")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -3869,8 +3939,8 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
-        if is_procurement_user(current_user):
-            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Роль «Отдел госзакупок» не удаляет аукционы.")
+        if is_procurement_user(current_user) or is_supply_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Эта роль не удаляет аукционы.")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
