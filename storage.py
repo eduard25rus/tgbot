@@ -971,6 +971,18 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def restore_deleted_auction(self, owner_chat_id: int, auction_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE auctions
+                SET deleted_at = NULL
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NOT NULL
+                """,
+                (auction_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
     def hard_delete_auction(self, owner_chat_id: int, auction_id: int) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(

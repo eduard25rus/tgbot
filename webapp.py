@@ -1206,13 +1206,25 @@ def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, cur
       <path d="M7 7h10l-1 12a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2L7 7Z" />
     </svg>
     """
+    restore_icon = """
+    <svg class="icon-restore" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M9 7H5v4" />
+      <path d="M5 11a7 7 0 1 0 2-4" />
+    </svg>
+    """
     if active_tab == "deleted":
-        if not current_user.get("is_super_admin"):
-            return ""
+        purge_action = ""
+        if current_user.get("is_super_admin"):
+            purge_action = f"""
+            <form class="auction-delete-form" method="post" action="/auctions/{item.id}/purge?owner={owner_chat_id}&tab={escape(active_tab)}">
+              <button class="icon-btn danger" type="submit" title="Удалить навсегда">{delete_icon}</button>
+            </form>
+            """
         return f"""
-        <form class="auction-delete-form" method="post" action="/auctions/{item.id}/purge?owner={owner_chat_id}&tab={escape(active_tab)}">
-          <button class="icon-btn danger" type="submit" title="Удалить навсегда">{delete_icon}</button>
+        <form class="auction-delete-form" method="post" action="/auctions/{item.id}/restore?owner={owner_chat_id}&tab={escape(active_tab)}">
+          <button class="icon-btn" type="submit" title="Вернуть в реестр">{restore_icon}</button>
         </form>
+        {purge_action}
         """
     return f"""
     <form class="auction-delete-form" method="post" action="/auctions/{item.id}/delete?owner={owner_chat_id}&tab={escape(active_tab)}">
@@ -2408,6 +2420,16 @@ def layout(
       fill: none;
       stroke: currentColor;
       stroke-width: 1.7;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }}
+    .icon-restore {{
+      width: 20px;
+      height: 20px;
+      display: block;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
       stroke-linecap: round;
       stroke-linejoin: round;
     }}
@@ -4626,6 +4648,27 @@ def app(environ, start_response):
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={current_auction_tab}")
         except Exception as exc:
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось удалить аукцион: {exc}")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/auctions/") and path.endswith("/restore") and method == "POST":
+        denied = guard("auctions", "edit")
+        if denied:
+            return denied
+        if is_procurement_user(current_user) or is_supply_user(current_user) or is_management_user(current_user):
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Эта роль не восстанавливает аукционы.")
+            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            auction_id = int(path.split("/")[2])
+            restored = storage.restore_deleted_auction(current_owner, auction_id)
+            if not restored:
+                raise ValueError("Аукцион не найден")
+            return redirect(start_response, f"/auctions?owner={current_owner}&tab=deleted")
+        except Exception as exc:
+            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось вернуть аукцион: {exc}")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
