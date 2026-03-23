@@ -973,8 +973,7 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
     days_left = (item.bid_deadline - date.today()).days
     show_deadline_note = days_left > 0
     is_deadline_danger = (
-        item.submit_decision_status != "submitted"
-        and item.submit_decision_status == "approved"
+        item.submit_decision_status not in {"submitted", "rejected"}
         and 0 < days_left <= 2
     )
     if not show_deadline_note:
