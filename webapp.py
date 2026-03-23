@@ -355,9 +355,11 @@ def password_state_label(value: str) -> str:
     return mapping.get(value, value)
 
 
-def auction_chip(value: str, mapping: dict[str, tuple[str, str]]) -> str:
+def auction_chip(value: str, mapping: dict[str, tuple[str, str]], tooltip: str = "") -> str:
     label, css = mapping.get(value, ("Неизвестно", "chip"))
-    return f'<span class="{css}">{escape(label)}</span>'
+    tooltip_attr = f' data-tooltip="{escape(tooltip)}"' if tooltip else ""
+    tooltip_class = " status-chip-tooltip" if tooltip else ""
+    return f'<span class="{css}{tooltip_class}"{tooltip_attr}>{escape(label)}</span>'
 
 
 def auction_current_chip(field_name: str, current_values: dict[str, str]) -> str:
@@ -370,12 +372,18 @@ def auction_current_chip(field_name: str, current_values: dict[str, str]) -> str
     return '<span class="chip">Неизвестно</span>'
 
 
+def estimate_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
+    tooltip = ""
+    if item.estimate_status_updated_at is not None and current_values["estimate_status"] in {"calculated", "not_calculated"}:
+        tooltip = f"Установлено: {format_datetime(item.estimate_status_updated_at)}"
+    return auction_chip(current_values["estimate_status"], AUCTION_ESTIMATE_META, tooltip)
+
+
 def submit_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
-    chip_html = auction_current_chip("submit_decision_status", current_values)
-    if current_values["submit_decision_status"] != "submitted" or item.submit_status_updated_at is None:
-        return chip_html
-    tooltip = escape(f"Установлено: {format_datetime(item.submit_status_updated_at)}")
-    return f'<span class="result-meta-tooltip" data-tooltip="{tooltip}">{chip_html}</span>'
+    tooltip = ""
+    if current_values["submit_decision_status"] == "submitted" and item.submit_status_updated_at is not None:
+        tooltip = f"Установлено: {format_datetime(item.submit_status_updated_at)}"
+    return auction_chip(current_values["submit_decision_status"], AUCTION_SUBMIT_DECISION_META, tooltip)
 
 
 def result_summary(item) -> str:
@@ -391,13 +399,8 @@ def result_summary(item) -> str:
 def estimate_summary(item) -> str:
     if item.estimate_status != "calculated" or item.material_cost is None:
         return ""
-    tooltip_attr = (
-        f' class="result-meta result-meta-stack result-meta-tooltip" data-tooltip="Установлено: {escape(format_datetime(item.estimate_status_updated_at))}"'
-        if item.estimate_status_updated_at is not None
-        else ' class="result-meta result-meta-stack"'
-    )
     return (
-        f'<span{tooltip_attr}>'
+        '<span class="result-meta result-meta-stack">'
         '<span>Материалы:</span>'
         f'<span>{escape(format_amount(item.material_cost))}</span>'
         '</span>'
@@ -877,7 +880,7 @@ def render_submit_for_procurement(owner_chat_id: int, item, current_values: dict
 
 def render_estimate_for_supply(owner_chat_id: int, item, current_values: dict[str, str], active_tab: str) -> str:
     if item.estimate_status not in {"approved", "calculated", "not_calculated"}:
-        return auction_current_chip("estimate_status", current_values) + estimate_summary(item)
+        return estimate_chip_with_tooltip(item, current_values) + estimate_summary(item)
     hidden_inputs = [
         f'<input type="hidden" name="submit_decision_status" value="{escape(current_values["submit_decision_status"])}">',
         f'<input type="hidden" name="result_status" value="{escape(current_values["result_status"])}">',
@@ -890,7 +893,7 @@ def render_estimate_for_supply(owner_chat_id: int, item, current_values: dict[st
     <details class="status-menu estimate-menu">
       <summary>
         <span class="discount-value">
-          {auction_current_chip("estimate_status", current_values)}
+          {estimate_chip_with_tooltip(item, current_values)}
           {estimate_summary(item)}
         </span>
       </summary>
@@ -965,7 +968,7 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
     deadline_cell = render_deadline_display(item.bid_deadline, deadline_note, is_deadline_danger) if restricted_user else render_deadline_form(owner_chat_id, item.id, item.bid_deadline, deadline_note, is_deadline_danger, active_tab)
     amount_cell = render_amount_display(item) if restricted_user else render_amount_form(owner_chat_id, item.id, item, active_tab)
     if procurement_user:
-        estimate_cell = auction_current_chip("estimate_status", current_values) + estimate_summary(item)
+        estimate_cell = estimate_chip_with_tooltip(item, current_values) + estimate_summary(item)
     elif supply_user:
         estimate_cell = render_estimate_for_supply(owner_chat_id, item, current_values, active_tab)
     else:
@@ -2081,11 +2084,11 @@ def layout(
       text-align: center;
       line-height: 1.2;
     }}
-    .result-meta-tooltip {{
+    .status-chip-tooltip {{
       position: relative;
-      cursor: help;
+      cursor: pointer;
     }}
-    .result-meta-tooltip[data-tooltip]:hover::after {{
+    .status-chip-tooltip[data-tooltip]:hover::after {{
       content: attr(data-tooltip);
       position: absolute;
       left: 50%;
