@@ -325,6 +325,8 @@ def compute_role_notifications(storage: Storage, owner_chat_id: int | None, curr
         "primary": "Активных задач по этой роли сейчас нет.",
         "secondary": "",
         "tertiary": "",
+        "items": [],
+        "href": "",
     }
     if current_user is None or owner_chat_id is None:
         return base
@@ -332,6 +334,7 @@ def compute_role_notifications(storage: Storage, owner_chat_id: int | None, curr
     active_auctions = [item for item in all_auctions if not is_auction_archived(item) and not is_auction_deleted(item)]
     if is_procurement_user(current_user):
         tasks = [item for item in active_auctions if item.submit_decision_status == "approved"]
+        tasks.sort(key=lambda item: (item.bid_deadline, item.id))
         nearest = min(tasks, key=lambda item: item.bid_deadline, default=None)
         count = len(tasks)
         return {
@@ -349,9 +352,19 @@ def compute_role_notifications(storage: Storage, owner_chat_id: int | None, curr
                 if nearest is not None
                 else ""
             ),
+            "items": [
+                {
+                    "title": item.title,
+                    "deadline": format_date(item.bid_deadline),
+                    "days_left": (item.bid_deadline - date.today()).days,
+                }
+                for item in tasks[:3]
+            ],
+            "href": f"/auctions?owner={owner_chat_id}&tab=active&task_view=1#auction-registry",
         }
     if is_supply_user(current_user):
         tasks = [item for item in active_auctions if item.estimate_status == "approved"]
+        tasks.sort(key=lambda item: (item.bid_deadline, item.id))
         nearest = min(tasks, key=lambda item: item.bid_deadline, default=None)
         count = len(tasks)
         return {
@@ -369,6 +382,15 @@ def compute_role_notifications(storage: Storage, owner_chat_id: int | None, curr
                 if nearest is not None
                 else ""
             ),
+            "items": [
+                {
+                    "title": item.title,
+                    "deadline": format_date(item.bid_deadline),
+                    "days_left": (item.bid_deadline - date.today()).days,
+                }
+                for item in tasks[:3]
+            ],
+            "href": f"/auctions?owner={owner_chat_id}&tab=active&task_view=1#auction-registry",
         }
     return base
 
@@ -482,7 +504,7 @@ def estimate_summary(item) -> str:
 
 def advance_summary(item) -> str:
     if item.advance_percent is None or item.advance_percent <= 0:
-        return ""
+        return '<div class="deadline-meta">Без аванса</div>'
     return f'<div class="deadline-meta">Аванс: {escape(format_percent(item.advance_percent))}</div>'
 
 
@@ -1141,6 +1163,20 @@ def layout(
         notification = current_user.get("role_notifications", {})
         count = int(notification.get("count", 0) or 0)
         badge = f'<span class="notification-badge">{count}</span>' if count > 0 else ""
+        items_html = "".join(
+            f'''
+            <div class="notification-task">
+              <div class="notification-task-title">{escape(str(item.get("title", "")))}</div>
+              <div class="notification-task-meta">До {escape(str(item.get("deadline", "")))} · осталось {escape(str(item.get("days_left", "")))} дн.</div>
+            </div>
+            '''
+            for item in notification.get("items", [])
+        )
+        footer_html = (
+            f'<a class="notification-link" href="{escape(str(notification.get("href", "/auctions")))}">Перейти к задачам</a>'
+            if notification.get("href") and notification.get("count", 0)
+            else ""
+        )
         notification_panel = f"""
         <details class="notification-menu">
           <summary class="notification-btn{' active' if notification.get('active') else ''}" title="Уведомления">
@@ -1163,6 +1199,8 @@ def layout(
               if notification.get("tertiary")
               else ""
             }
+            {f'<div class="notification-task-list">{items_html}</div>' if items_html else ""}
+            {footer_html}
           </div>
         </details>
         """
@@ -1492,6 +1530,42 @@ def layout(
       font-size: 13px;
       line-height: 1.45;
       color: var(--muted);
+    }}
+    .notification-task-list {{
+      display: grid;
+      gap: 8px;
+      margin-top: 4px;
+    }}
+    .notification-task {{
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.78);
+      border: 1px solid var(--line);
+    }}
+    .notification-task-title {{
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ink);
+      line-height: 1.35;
+    }}
+    .notification-task-meta {{
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+    }}
+    .notification-link {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 4px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--brand), #18434c);
+      color: white;
+      font-size: 13px;
+      font-weight: 700;
+      text-decoration: none;
     }}
     .auth-wrap {{
       min-height: 58vh;
@@ -3379,6 +3453,7 @@ def render_auctions_section(
     active_tab: str = "active",
     flash_message: str = "",
     success: bool = False,
+    task_view: bool = False,
 ) -> str:
     storage.ensure_demo_auctions(owner_chat_id)
     all_auctions = storage.list_auctions(owner_chat_id)
@@ -3400,7 +3475,16 @@ def render_auctions_section(
         ),
         reverse=True,
     )
-    if active_tab == "archive":
+    role_tasks = []
+    if is_procurement_user(current_user):
+        role_tasks = [item for item in active_auctions if item.submit_decision_status == "approved"]
+        role_tasks.sort(key=lambda item: (item.bid_deadline, item.id))
+    elif is_supply_user(current_user):
+        role_tasks = [item for item in active_auctions if item.estimate_status == "approved"]
+        role_tasks.sort(key=lambda item: (item.bid_deadline, item.id))
+    if task_view and active_tab == "active":
+        auctions = role_tasks
+    elif active_tab == "archive":
         auctions = archived_auctions
     elif active_tab == "deleted":
         auctions = deleted_auctions
@@ -3439,9 +3523,10 @@ def render_auctions_section(
 
     rows_html = render_auction_rows(auctions, owner_chat_id, active_tab, current_user)
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    active_href = f"/auctions?owner={owner_chat_id}&tab=active{'&task_view=1' if task_view and active_tab == 'active' else ''}#auction-registry"
     tab_links = f"""
     <div class="tab-row">
-      <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/auctions?owner={owner_chat_id}&tab=active#auction-registry">
+      <a class="tab-btn{" active" if active_tab == "active" else ""}" href="{active_href}">
         В работе
         <span class="tab-count">{len(active_auctions)}</span>
       </a>
@@ -3456,12 +3541,23 @@ def render_auctions_section(
     </div>
     """
     empty_message = (
-        "Сейчас в работе нет аукционов. Все завершенные или отклоненные лоты уже ушли в архив."
+        "Сейчас у этой роли нет активных задач."
+        if active_tab == "active" and task_view
+        else "Сейчас в работе нет аукционов. Все завершенные или отклоненные лоты уже ушли в архив."
         if active_tab == "active"
         else "Архив пока пуст. Как только по аукциону будет итог или решение не подавать, он окажется здесь."
         if active_tab == "archive"
         else "Удаленных аукционов пока нет."
     )
+    task_toolbar = ""
+    if task_view and active_tab == "active":
+        task_label = "Задачи отдела госзакупок" if is_procurement_user(current_user) else "Задачи отдела снабжения" if is_supply_user(current_user) else "Задачи"
+        task_toolbar = f"""
+        <div class="action-row" style="justify-content: space-between; margin-bottom: 16px;">
+          <div class="chip warn">{task_label}</div>
+          <a class="secondary-btn" href="/auctions?owner={owner_chat_id}&tab=active#auction-registry">Показать весь реестр</a>
+        </div>
+        """
     deleted_toolbar = ""
     if active_tab == "deleted" and current_user is not None and current_user.get("is_super_admin") and deleted_auctions:
         deleted_count = len(deleted_auctions)
@@ -3532,6 +3628,7 @@ def render_auctions_section(
         </div>
         {tab_links}
       </div>
+      {task_toolbar}
       {deleted_toolbar}
       {
         f'''
@@ -3587,6 +3684,26 @@ def render_auctions_section(
       </section>
     </section>
     """
+
+
+def auctions_for_current_view(storage: Storage, owner_chat_id: int, current_user: dict | None, active_tab: str, task_view: bool) -> list:
+    auctions = storage.list_auctions(owner_chat_id)
+    active_auctions = [item for item in auctions if not is_auction_archived(item) and not is_auction_deleted(item)]
+    archived_auctions = [item for item in auctions if is_auction_archived(item) and not is_auction_deleted(item)]
+    deleted_auctions = [item for item in auctions if is_auction_deleted(item)]
+    active_auctions.sort(key=lambda item: (item.bid_deadline, item.id))
+    archived_auctions.sort(key=lambda item: (item.archived_at or item.created_at, item.id), reverse=True)
+    deleted_auctions.sort(key=lambda item: (item.deleted_at or item.created_at, item.id), reverse=True)
+    if task_view and active_tab == "active":
+        if is_procurement_user(current_user):
+            return [item for item in active_auctions if item.submit_decision_status == "approved"]
+        if is_supply_user(current_user):
+            return [item for item in active_auctions if item.estimate_status == "approved"]
+    if active_tab == "archive":
+        return archived_auctions
+    if active_tab == "deleted":
+        return deleted_auctions
+    return active_auctions
 
 
 def render_placeholder_section(title: str, subtitle: str, bullets: list[str]) -> str:
@@ -3739,6 +3856,7 @@ def app(environ, start_response):
     current_auction_tab = query.get("tab", ["active"])[0]
     if current_auction_tab not in {"active", "archive", "deleted"}:
         current_auction_tab = "active"
+    current_task_view = query.get("task_view", ["0"])[0] == "1"
     cookies = parse_cookies(environ)
     current_user = storage.get_web_user_by_session(cookies.get(SESSION_COOKIE, ""))
     preview_role = cookies.get(PREVIEW_ROLE_COOKIE, "") if current_user and current_user.get("is_super_admin") else ""
@@ -4272,7 +4390,7 @@ def app(environ, start_response):
         denied = guard("auctions", "view")
         if denied:
             return denied
-        auctions = storage.list_auctions(current_owner)
+        auctions = auctions_for_current_view(storage, current_owner, current_user, current_auction_tab, current_task_view)
         html = render_auction_rows(auctions, current_owner, current_auction_tab, current_user)
         start_response(
             "200 OK",
@@ -4288,7 +4406,7 @@ def app(environ, start_response):
         denied = guard("auctions", "view")
         if denied:
             return denied
-        body = render_auctions_section(storage, current_owner, current_user, current_auction_tab)
+        body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, task_view=current_task_view)
         html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
