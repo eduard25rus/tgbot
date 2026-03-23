@@ -2022,7 +2022,7 @@ def layout(
     .stat-card {{
       padding: 18px 18px 20px;
       position: relative;
-      overflow: hidden;
+      overflow: visible;
     }}
     .stat-card::after {{
       content: "";
