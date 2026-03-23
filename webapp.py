@@ -2024,11 +2024,16 @@ def layout(
       border-collapse: collapse;
       font-size: 14px;
     }}
+    .auction-table {{
+      table-layout: fixed;
+      width: 100%;
+    }}
     .table th, .table td {{
       padding: 12px 10px;
       border-bottom: 1px solid var(--line);
       text-align: left;
       vertical-align: middle;
+      min-width: 0;
     }}
     .nowrap {{
       white-space: nowrap;
@@ -2335,6 +2340,7 @@ def layout(
       justify-content: space-between;
       gap: 12px;
       margin-bottom: 6px;
+      min-width: 0;
     }}
     .auction-number {{
       font-size: 12px;
@@ -2344,6 +2350,8 @@ def layout(
       margin-bottom: 0;
       margin-left: auto;
       text-align: right;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }}
     .auction-number a {{
       color: inherit;
@@ -2356,12 +2364,14 @@ def layout(
       justify-content: space-between;
       gap: 10px;
       margin-top: 8px;
+      min-width: 0;
     }}
     .auction-row-actions {{
       display: inline-flex;
       align-items: center;
       gap: 8px;
       margin-left: auto;
+      min-width: 0;
     }}
     .icon-btn {{
       padding: 0;
@@ -2645,6 +2655,10 @@ def layout(
     .auction-table th:nth-child(7),
     .auction-table th:nth-child(8) {{
       text-align: center;
+    }}
+    .auction-table td:first-child,
+    .auction-table th:first-child {{
+      width: 30%;
     }}
     .auction-table td:nth-child(6) .status-popover,
     .auction-table td:nth-child(7) .status-popover {{
