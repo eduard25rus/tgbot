@@ -575,16 +575,23 @@ def auction_current_chip(field_name: str, current_values: dict[str, str]) -> str
 
 def estimate_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
     tooltip = ""
-    if item.estimate_status_updated_at is not None and current_values["estimate_status"] in {"calculated", "not_calculated"}:
-        tooltip = f"Установлено: {format_datetime(item.estimate_status_updated_at)}"
+    if item.estimate_status_updated_at is not None:
+        tooltip = status_tooltip(item.estimate_status_updated_at, item.estimate_status_updated_by_name, show_unknown_author=True)
     return auction_chip(current_values["estimate_status"], AUCTION_ESTIMATE_META, tooltip)
 
 
 def submit_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
     tooltip = ""
-    if current_values["submit_decision_status"] == "submitted" and item.submit_status_updated_at is not None:
-        tooltip = f"Установлено: {format_datetime(item.submit_status_updated_at)}"
+    if item.submit_status_updated_at is not None:
+        tooltip = status_tooltip(item.submit_status_updated_at, item.submit_status_updated_by_name, show_unknown_author=True)
     return auction_chip(current_values["submit_decision_status"], AUCTION_SUBMIT_DECISION_META, tooltip)
+
+
+def result_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
+    tooltip = ""
+    if current_values["result_status"] in {"pending", "won", "lost", "rejected"} and item.result_status_updated_at is not None:
+        tooltip = status_tooltip(item.result_status_updated_at, item.result_status_updated_by_name, show_unknown_author=True)
+    return auction_chip(current_values["result_status"], AUCTION_RESULT_META, tooltip)
 
 
 def auction_current_chip_with_tooltip(field_name: str, item, current_values: dict[str, str]) -> str:
@@ -592,6 +599,8 @@ def auction_current_chip_with_tooltip(field_name: str, item, current_values: dic
         return estimate_chip_with_tooltip(item, current_values)
     if field_name == "submit_decision_status":
         return submit_chip_with_tooltip(item, current_values)
+    if field_name == "result_status":
+        return result_chip_with_tooltip(item, current_values)
     return auction_current_chip(field_name, current_values)
 
 
@@ -645,10 +654,22 @@ def contract_advance_summary(advance_percent: float | None, advance_amount: floa
 def added_date_meta(item) -> str:
     added_date = item.created_at.date()
     css_class = "auction-added-date is-new" if (datetime.now() - item.created_at) <= timedelta(days=1) else "auction-added-date"
-    tooltip_attrs = ""
-    if item.created_by_name:
-        tooltip_attrs = f' data-tooltip="Добавил: {escape(item.created_by_name)}"'
+    creator_name = item.created_by_name or "Автор неизвестен"
+    tooltip_attrs = f' data-tooltip="Добавил: {escape(creator_name)}"'
     return f'<span class="{css_class} auction-added-tooltip"{tooltip_attrs}>Добавлен: {escape(format_date(added_date))}</span>'
+
+
+def status_tooltip(updated_at: datetime | None, author_name: str, *, show_unknown_author: bool = False) -> str:
+    if updated_at is None and not author_name and not show_unknown_author:
+        return ""
+    lines: list[str] = []
+    if updated_at is not None:
+        lines.append(f"Установлено: {format_datetime(updated_at)}")
+    if author_name:
+        lines.append(f"Автор: {author_name}")
+    elif show_unknown_author:
+        lines.append("Автор: неизвестен")
+    return "\n".join(lines)
 
 
 def render_auction_status_form(
@@ -843,7 +864,7 @@ def render_result_form(owner_chat_id: int, item, current_values: dict[str, str],
     <details class="status-menu result-menu">
       <summary>
         <span class="discount-value">
-          {auction_current_chip("result_status", current_values)}
+          {result_chip_with_tooltip(item, current_values)}
           {summary_html}
         </span>
       </summary>
@@ -1281,7 +1302,7 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
     else:
         submit_cell = render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
     discount_cell = render_discount_display(item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if (procurement_user or supply_user) else render_discount_form(owner_chat_id, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
-    result_cell = render_result_form(owner_chat_id, item, current_values, active_tab) if procurement_user else auction_current_chip("result_status", current_values) + result_summary(item) if (supply_user or management_user) else render_result_form(owner_chat_id, item, current_values, active_tab)
+    result_cell = render_result_form(owner_chat_id, item, current_values, active_tab) if procurement_user else result_chip_with_tooltip(item, current_values) + result_summary(item) if (supply_user or management_user) else render_result_form(owner_chat_id, item, current_values, active_tab)
     row_actions = render_auction_delete_actions(owner_chat_id, item, active_tab, current_user)
     return f"""
     <tr id="auction-{item.id}" data-auction-row="{item.id}">
@@ -4446,10 +4467,15 @@ def app(environ, start_response):
             estimate_status = form.get("estimate_status", auction.estimate_status)
             material_cost = auction.material_cost
             estimate_status_updated_at = auction.estimate_status_updated_at
+            estimate_status_updated_by_name = auction.estimate_status_updated_by_name
             submit_decision_status = form.get("submit_decision_status", auction.submit_decision_status)
             submit_status_updated_at = auction.submit_status_updated_at
+            submit_status_updated_by_name = auction.submit_status_updated_by_name
             result_status = form.get("result_status", auction.result_status)
+            result_status_updated_at = auction.result_status_updated_at
+            result_status_updated_by_name = auction.result_status_updated_by_name
             final_bid_amount = auction.final_bid_amount
+            actor_name = current_user.get("full_name", "").strip() if current_user else ""
             if not procurement_status_allowed(current_user, auction, estimate_status, submit_decision_status, result_status):
                 raise ValueError("Для роли «Отдел госзакупок» доступны только перевод «Подавать заявку» -> «Заявка подана» и изменение итога")
             if not supply_status_allowed(current_user, auction, estimate_status, submit_decision_status, result_status):
@@ -4464,21 +4490,25 @@ def app(environ, start_response):
                     raise ValueError("Стоимость материалов должна быть больше 0")
                 if auction.estimate_status != "calculated" or auction.material_cost != material_cost:
                     estimate_status_updated_at = datetime.utcnow()
+                    estimate_status_updated_by_name = actor_name
             else:
                 material_cost = None
                 if estimate_status != auction.estimate_status:
-                    estimate_status_updated_at = datetime.utcnow() if estimate_status == "not_calculated" else None
-            if submit_decision_status == "submitted":
-                if auction.submit_decision_status != "submitted":
-                    submit_status_updated_at = datetime.utcnow()
-            else:
-                submit_status_updated_at = None
+                    estimate_status_updated_at = datetime.utcnow()
+                    estimate_status_updated_by_name = actor_name
+            if submit_decision_status != auction.submit_decision_status:
+                submit_status_updated_at = datetime.utcnow()
+                submit_status_updated_by_name = actor_name
             application_status = "submitted" if submit_decision_status == "submitted" else "not_submitted"
             if submit_decision_status != "submitted":
                 result_status = "not_participated"
+                result_status_updated_at = None
+                result_status_updated_by_name = ""
                 final_bid_amount = None
             elif result_status == "not_participated":
                 result_status = "pending"
+                result_status_updated_at = datetime.utcnow()
+                result_status_updated_by_name = actor_name
                 final_bid_amount = None
             elif result_status in {"won", "lost"}:
                 final_bid_amount = parse_optional_number(form.get("final_bid_amount", ""))
@@ -4486,7 +4516,13 @@ def app(environ, start_response):
                     raise ValueError("Укажите сумму, за которую выиграли аукцион")
                 if final_bid_amount <= 0 or final_bid_amount > auction.amount:
                     raise ValueError("Итоговая цена должна быть больше 0 и не превышать сумму аукциона")
+                if result_status != auction.result_status or final_bid_amount != auction.final_bid_amount:
+                    result_status_updated_at = datetime.utcnow()
+                    result_status_updated_by_name = actor_name
             else:
+                if result_status != auction.result_status:
+                    result_status_updated_at = datetime.utcnow()
+                    result_status_updated_by_name = actor_name
                 final_bid_amount = None
             was_archived = is_auction_archived(auction)
             will_be_archived = (
@@ -4505,10 +4541,14 @@ def app(environ, start_response):
                 estimate_status,
                 material_cost,
                 estimate_status_updated_at,
+                estimate_status_updated_by_name,
                 submit_decision_status,
                 submit_status_updated_at,
+                submit_status_updated_by_name,
                 application_status,
                 result_status,
+                result_status_updated_at,
+                result_status_updated_by_name,
                 final_bid_amount,
                 archived_at,
             )

@@ -68,10 +68,14 @@ class Auction:
     material_cost: Optional[float]
     estimate_status: str
     estimate_status_updated_at: Optional[datetime]
+    estimate_status_updated_by_name: str
     submit_decision_status: str
     submit_status_updated_at: Optional[datetime]
+    submit_status_updated_by_name: str
     application_status: str
     result_status: str
+    result_status_updated_at: Optional[datetime]
+    result_status_updated_by_name: str
     final_bid_amount: Optional[float]
     archived_at: Optional[datetime]
     deleted_at: Optional[datetime]
@@ -218,11 +222,15 @@ class Storage:
                     material_cost REAL,
                     estimate_status TEXT NOT NULL DEFAULT 'pending',
                     estimate_status_updated_at TEXT,
+                    estimate_status_updated_by_name TEXT NOT NULL DEFAULT '',
                     submit_decision_status TEXT NOT NULL DEFAULT 'pending',
                     submit_status_updated_at TEXT,
+                    submit_status_updated_by_name TEXT NOT NULL DEFAULT '',
                     approval_status TEXT NOT NULL DEFAULT 'new',
                     application_status TEXT NOT NULL DEFAULT 'not_submitted',
                     result_status TEXT NOT NULL DEFAULT 'pending',
+                    result_status_updated_at TEXT,
+                    result_status_updated_by_name TEXT NOT NULL DEFAULT '',
                     final_bid_amount REAL,
                     archived_at TEXT,
                     deleted_at TEXT,
@@ -280,6 +288,8 @@ class Storage:
                 )
             if "estimate_status_updated_at" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN estimate_status_updated_at TEXT")
+            if "estimate_status_updated_by_name" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN estimate_status_updated_by_name TEXT NOT NULL DEFAULT ''")
             if "submit_decision_status" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN submit_decision_status TEXT NOT NULL DEFAULT 'pending'")
                 conn.execute(
@@ -295,6 +305,8 @@ class Storage:
                 )
             if "submit_status_updated_at" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN submit_status_updated_at TEXT")
+            if "submit_status_updated_by_name" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN submit_status_updated_by_name TEXT NOT NULL DEFAULT ''")
             if "max_discount_percent" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN max_discount_percent REAL")
             if "min_bid_amount" not in auction_columns:
@@ -303,6 +315,10 @@ class Storage:
                 conn.execute("ALTER TABLE auctions ADD COLUMN material_cost REAL")
             if "final_bid_amount" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN final_bid_amount REAL")
+            if "result_status_updated_at" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN result_status_updated_at TEXT")
+            if "result_status_updated_by_name" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN result_status_updated_by_name TEXT NOT NULL DEFAULT ''")
             if "archived_at" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN archived_at TEXT")
             if "deleted_at" not in auction_columns:
@@ -779,7 +795,8 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT id, owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
-                       estimate_status, estimate_status_updated_at, submit_decision_status, submit_status_updated_at, application_status, result_status, final_bid_amount, archived_at, deleted_at, created_at
+                       estimate_status, estimate_status_updated_at, estimate_status_updated_by_name, submit_decision_status, submit_status_updated_at, submit_status_updated_by_name,
+                       application_status, result_status, result_status_updated_at, result_status_updated_by_name, final_bid_amount, archived_at, deleted_at, created_at
                 FROM auctions
                 WHERE owner_chat_id = ?
                 ORDER BY registry_position ASC, id ASC
@@ -844,10 +861,14 @@ class Storage:
         estimate_status: str,
         material_cost: float | None,
         estimate_status_updated_at: datetime | None,
+        estimate_status_updated_by_name: str,
         submit_decision_status: str,
         submit_status_updated_at: datetime | None,
+        submit_status_updated_by_name: str,
         application_status: str,
         result_status: str,
+        result_status_updated_at: datetime | None,
+        result_status_updated_by_name: str,
         final_bid_amount: float | None,
         archived_at: datetime | None,
     ) -> bool:
@@ -855,17 +876,24 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE auctions
-                SET estimate_status = ?, material_cost = ?, estimate_status_updated_at = ?, submit_decision_status = ?, submit_status_updated_at = ?, application_status = ?, result_status = ?, final_bid_amount = ?, archived_at = ?
+                SET estimate_status = ?, material_cost = ?, estimate_status_updated_at = ?, estimate_status_updated_by_name = ?,
+                    submit_decision_status = ?, submit_status_updated_at = ?, submit_status_updated_by_name = ?,
+                    application_status = ?, result_status = ?, result_status_updated_at = ?, result_status_updated_by_name = ?,
+                    final_bid_amount = ?, archived_at = ?
                 WHERE id = ? AND owner_chat_id = ?
                 """,
                 (
                     estimate_status,
                     material_cost,
                     estimate_status_updated_at.isoformat() if estimate_status_updated_at is not None else None,
+                    estimate_status_updated_by_name,
                     submit_decision_status,
                     submit_status_updated_at.isoformat() if submit_status_updated_at is not None else None,
+                    submit_status_updated_by_name,
                     application_status,
                     result_status,
+                    result_status_updated_at.isoformat() if result_status_updated_at is not None else None,
+                    result_status_updated_by_name,
                     final_bid_amount,
                     archived_at.isoformat() if archived_at is not None else None,
                     auction_id,
@@ -1657,10 +1685,14 @@ class Storage:
             material_cost=float(row["material_cost"]) if row["material_cost"] is not None else None,
             estimate_status=row["estimate_status"],
             estimate_status_updated_at=datetime.fromisoformat(row["estimate_status_updated_at"]) if row["estimate_status_updated_at"] is not None else None,
+            estimate_status_updated_by_name=row["estimate_status_updated_by_name"] or "",
             submit_decision_status=row["submit_decision_status"],
             submit_status_updated_at=datetime.fromisoformat(row["submit_status_updated_at"]) if row["submit_status_updated_at"] is not None else None,
+            submit_status_updated_by_name=row["submit_status_updated_by_name"] or "",
             application_status=row["application_status"],
             result_status=row["result_status"],
+            result_status_updated_at=datetime.fromisoformat(row["result_status_updated_at"]) if row["result_status_updated_at"] is not None else None,
+            result_status_updated_by_name=row["result_status_updated_by_name"] or "",
             final_bid_amount=float(row["final_bid_amount"]) if row["final_bid_amount"] is not None else None,
             archived_at=datetime.fromisoformat(row["archived_at"]) if row["archived_at"] is not None else None,
             deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] is not None else None,
