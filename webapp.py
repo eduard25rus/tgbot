@@ -377,12 +377,12 @@ def estimate_summary(item) -> str:
     if item.estimate_status != "calculated" or item.material_cost is None:
         return ""
     tooltip_attr = (
-        f' data-tooltip="Установлено: {escape(format_datetime(item.estimate_status_updated_at))}"'
+        f' class="result-meta result-meta-stack result-meta-tooltip" data-tooltip="Установлено: {escape(format_datetime(item.estimate_status_updated_at))}"'
         if item.estimate_status_updated_at is not None
-        else ""
+        else ' class="result-meta result-meta-stack"'
     )
     return (
-        f'<span class="result-meta result-meta-stack result-meta-tooltip"{tooltip_attr}>'
+        f'<span{tooltip_attr}>'
         '<span>Материалы:</span>'
         f'<span>{escape(format_amount(item.material_cost))}</span>'
         '</span>'
@@ -2070,7 +2070,7 @@ def layout(
       position: relative;
       cursor: help;
     }}
-    .result-meta-tooltip:hover::after {{
+    .result-meta-tooltip[data-tooltip]:hover::after {{
       content: attr(data-tooltip);
       position: absolute;
       left: 50%;
