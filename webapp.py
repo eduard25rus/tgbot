@@ -394,6 +394,15 @@ def auction_current_chip_with_tooltip(field_name: str, item, current_values: dic
     return auction_current_chip(field_name, current_values)
 
 
+def normalized_auction_values(current_values: dict[str, str]) -> dict[str, str]:
+    normalized = dict(current_values)
+    if normalized["submit_decision_status"] != "submitted":
+        normalized["result_status"] = "not_participated"
+    elif normalized["result_status"] == "not_participated":
+        normalized["result_status"] = "pending"
+    return normalized
+
+
 def result_summary(item) -> str:
     if item.result_status not in {"won", "lost"} or item.final_bid_amount is None or item.amount <= 0:
         return ""
@@ -953,11 +962,11 @@ def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, cur
 
 
 def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: int, current_user: dict | None = None) -> str:
-    current_values = {
+    current_values = normalized_auction_values({
         "estimate_status": item.estimate_status,
         "submit_decision_status": item.submit_decision_status,
         "result_status": item.result_status,
-    }
+    })
     procurement_user = is_procurement_user(current_user)
     supply_user = is_supply_user(current_user)
     restricted_user = procurement_user or supply_user
