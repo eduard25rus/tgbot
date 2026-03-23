@@ -6,6 +6,7 @@ import secrets
 from datetime import datetime
 from datetime import date
 from datetime import timedelta
+from datetime import timezone
 from http.cookies import SimpleCookie
 from html import escape
 from typing import Iterable
@@ -71,6 +72,7 @@ AUCTION_RESULT_OPTIONS = [
 MAX_DISCOUNT_OPTIONS = [0.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 22.5, 25.0]
 SESSION_COOKIE = "felis_session"
 PREVIEW_ROLE_COOKIE = "felis_preview_role"
+VLADIVOSTOK_TZ = timezone(timedelta(hours=10))
 ROLE_PREVIEW_OPTIONS = [
     ("", "Обычный режим"),
     ("procurement", "Отдел госзакупок"),
@@ -133,7 +135,12 @@ def format_date(value: date) -> str:
 
 
 def format_datetime(value: datetime) -> str:
-    return value.strftime("%d-%m-%Y %H:%M")
+    localized = value
+    if value.tzinfo is None:
+        localized = value.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ)
+    else:
+        localized = value.astimezone(VLADIVOSTOK_TZ)
+    return localized.strftime("%d-%m-%Y %H:%M")
 
 
 def parse_date(raw: str) -> date:
@@ -361,6 +368,14 @@ def auction_current_chip(field_name: str, current_values: dict[str, str]) -> str
     if field_name == "result_status":
         return auction_chip(current_values[field_name], AUCTION_RESULT_META)
     return '<span class="chip">Неизвестно</span>'
+
+
+def submit_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
+    chip_html = auction_current_chip("submit_decision_status", current_values)
+    if current_values["submit_decision_status"] != "submitted" or item.submit_status_updated_at is None:
+        return chip_html
+    tooltip = escape(f"Установлено: {format_datetime(item.submit_status_updated_at)}")
+    return f'<span class="result-meta-tooltip" data-tooltip="{tooltip}">{chip_html}</span>'
 
 
 def result_summary(item) -> str:
@@ -838,7 +853,7 @@ def render_discount_display(
 
 def render_submit_for_procurement(owner_chat_id: int, item, current_values: dict[str, str], active_tab: str) -> str:
     if item.submit_decision_status != "approved":
-        return auction_current_chip("submit_decision_status", current_values)
+        return submit_chip_with_tooltip(item, current_values)
     hidden_inputs = [
         f'<input type="hidden" name="estimate_status" value="{escape(current_values["estimate_status"])}">',
         f'<input type="hidden" name="result_status" value="{escape(current_values["result_status"])}">',
@@ -849,7 +864,7 @@ def render_submit_for_procurement(owner_chat_id: int, item, current_values: dict
         )
     return f"""
     <details class="status-menu">
-      <summary>{auction_current_chip("submit_decision_status", current_values)}</summary>
+      <summary>{submit_chip_with_tooltip(item, current_values)}</summary>
       <form class="status-popover" method="post" action="/auctions/{item.id}/status?owner={owner_chat_id}&tab={escape(active_tab)}">
         {''.join(hidden_inputs)}
         <button class="{AUCTION_SUBMIT_DECISION_META['submitted'][1]} status-option" type="submit" name="submit_decision_status" value="submitted">
@@ -955,7 +970,7 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
         estimate_cell = render_estimate_for_supply(owner_chat_id, item, current_values, active_tab)
     else:
         estimate_cell = render_estimate_form(owner_chat_id, item, current_values, active_tab)
-    submit_cell = render_submit_for_procurement(owner_chat_id, item, current_values, active_tab) if procurement_user else auction_current_chip("submit_decision_status", current_values) if supply_user else render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
+    submit_cell = render_submit_for_procurement(owner_chat_id, item, current_values, active_tab) if procurement_user else submit_chip_with_tooltip(item, current_values) if supply_user else render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
     discount_cell = render_discount_display(item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if restricted_user else render_discount_form(owner_chat_id, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
     result_cell = render_result_form(owner_chat_id, item, current_values, active_tab) if procurement_user else auction_current_chip("result_status", current_values) + result_summary(item) if supply_user else render_result_form(owner_chat_id, item, current_values, active_tab)
     row_actions = render_auction_delete_actions(owner_chat_id, item, active_tab, current_user)
@@ -3747,6 +3762,7 @@ def app(environ, start_response):
             material_cost = auction.material_cost
             estimate_status_updated_at = auction.estimate_status_updated_at
             submit_decision_status = form.get("submit_decision_status", auction.submit_decision_status)
+            submit_status_updated_at = auction.submit_status_updated_at
             result_status = form.get("result_status", auction.result_status)
             final_bid_amount = auction.final_bid_amount
             if not procurement_status_allowed(current_user, auction, estimate_status, submit_decision_status, result_status):
@@ -3760,11 +3776,16 @@ def app(environ, start_response):
                 if material_cost <= 0:
                     raise ValueError("Стоимость материалов должна быть больше 0")
                 if auction.estimate_status != "calculated" or auction.material_cost != material_cost:
-                    estimate_status_updated_at = datetime.now()
+                    estimate_status_updated_at = datetime.utcnow()
             else:
                 material_cost = None
                 if estimate_status != auction.estimate_status:
-                    estimate_status_updated_at = datetime.now() if estimate_status == "not_calculated" else None
+                    estimate_status_updated_at = datetime.utcnow() if estimate_status == "not_calculated" else None
+            if submit_decision_status == "submitted":
+                if auction.submit_decision_status != "submitted":
+                    submit_status_updated_at = datetime.utcnow()
+            else:
+                submit_status_updated_at = None
             application_status = "submitted" if submit_decision_status == "submitted" else "not_submitted"
             if submit_decision_status != "submitted":
                 result_status = "not_participated"
@@ -3798,6 +3819,7 @@ def app(environ, start_response):
                 material_cost,
                 estimate_status_updated_at,
                 submit_decision_status,
+                submit_status_updated_at,
                 application_status,
                 result_status,
                 final_bid_amount,

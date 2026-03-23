@@ -66,6 +66,7 @@ class Auction:
     estimate_status: str
     estimate_status_updated_at: Optional[datetime]
     submit_decision_status: str
+    submit_status_updated_at: Optional[datetime]
     application_status: str
     result_status: str
     final_bid_amount: Optional[float]
@@ -212,6 +213,7 @@ class Storage:
                     estimate_status TEXT NOT NULL DEFAULT 'pending',
                     estimate_status_updated_at TEXT,
                     submit_decision_status TEXT NOT NULL DEFAULT 'pending',
+                    submit_status_updated_at TEXT,
                     approval_status TEXT NOT NULL DEFAULT 'new',
                     application_status TEXT NOT NULL DEFAULT 'not_submitted',
                     result_status TEXT NOT NULL DEFAULT 'pending',
@@ -285,6 +287,8 @@ class Storage:
                     WHERE submit_decision_status = 'pending'
                     """
                 )
+            if "submit_status_updated_at" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN submit_status_updated_at TEXT")
             if "max_discount_percent" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN max_discount_percent REAL")
             if "min_bid_amount" not in auction_columns:
@@ -762,7 +766,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT id, owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
-                       estimate_status, estimate_status_updated_at, submit_decision_status, application_status, result_status, final_bid_amount, archived_at, deleted_at, created_at
+                       estimate_status, estimate_status_updated_at, submit_decision_status, submit_status_updated_at, application_status, result_status, final_bid_amount, archived_at, deleted_at, created_at
                 FROM auctions
                 WHERE owner_chat_id = ?
                 ORDER BY bid_deadline ASC, id ASC
@@ -822,6 +826,7 @@ class Storage:
         material_cost: float | None,
         estimate_status_updated_at: datetime | None,
         submit_decision_status: str,
+        submit_status_updated_at: datetime | None,
         application_status: str,
         result_status: str,
         final_bid_amount: float | None,
@@ -831,7 +836,7 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE auctions
-                SET estimate_status = ?, material_cost = ?, estimate_status_updated_at = ?, submit_decision_status = ?, application_status = ?, result_status = ?, final_bid_amount = ?, archived_at = ?
+                SET estimate_status = ?, material_cost = ?, estimate_status_updated_at = ?, submit_decision_status = ?, submit_status_updated_at = ?, application_status = ?, result_status = ?, final_bid_amount = ?, archived_at = ?
                 WHERE id = ? AND owner_chat_id = ?
                 """,
                 (
@@ -839,6 +844,7 @@ class Storage:
                     material_cost,
                     estimate_status_updated_at.isoformat() if estimate_status_updated_at is not None else None,
                     submit_decision_status,
+                    submit_status_updated_at.isoformat() if submit_status_updated_at is not None else None,
                     application_status,
                     result_status,
                     final_bid_amount,
@@ -1617,6 +1623,7 @@ class Storage:
             estimate_status=row["estimate_status"],
             estimate_status_updated_at=datetime.fromisoformat(row["estimate_status_updated_at"]) if row["estimate_status_updated_at"] is not None else None,
             submit_decision_status=row["submit_decision_status"],
+            submit_status_updated_at=datetime.fromisoformat(row["submit_status_updated_at"]) if row["submit_status_updated_at"] is not None else None,
             application_status=row["application_status"],
             result_status=row["result_status"],
             final_bid_amount=float(row["final_bid_amount"]) if row["final_bid_amount"] is not None else None,
