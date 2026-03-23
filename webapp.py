@@ -2025,7 +2025,7 @@ def layout(
       gap: 14px;
     }}
     .stats-contracts {{
-      grid-template-columns: repeat(5, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }}
     .card {{
       background: var(--paper);
@@ -3392,7 +3392,7 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
       <article class="card stat-card">
         <div class="stat-label">Контрактов</div>
         <div class="stat-value">{len(payload)}</div>
-        <div class="stat-note">В активном контуре</div>
+        <div class="stat-note">В реестре контрактов</div>
       </article>
       <article class="card stat-card">
         <div class="stat-label">Общий объем</div>
@@ -3405,14 +3405,9 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
         <div class="stat-note">{format_percent(paid_ratio * 100)} от общего объема</div>
       </article>
       <article class="card stat-card">
-        <div class="stat-label">Аванс / долг</div>
-        <div class="stat-value">{format_amount(total_advance)}</div>
-        <div class="stat-note">Долг заказчиков: {format_amount(total_debt)}</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Просрочки</div>
-        <div class="stat-value">{overdue_total}</div>
-        <div class="stat-note">Просроченных этапов по контрактам</div>
+        <div class="stat-label">Долг заказчиков</div>
+        <div class="stat-value">{format_amount(total_debt)}</div>
+        <div class="stat-note">Неоплаченный остаток по контрактам</div>
       </article>
     </section>
     """
