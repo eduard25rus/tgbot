@@ -1859,6 +1859,7 @@ def layout(
       font-size: 28px;
       font-weight: 700;
       margin-bottom: 6px;
+      white-space: nowrap;
     }}
     .stat-note {{
       color: var(--muted);
