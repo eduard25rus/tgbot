@@ -2024,6 +2024,9 @@ def layout(
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 14px;
     }}
+    .stats-contracts {{
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }}
     .card {{
       background: var(--paper);
       border: 1px solid rgba(215, 204, 188, 0.9);
@@ -2980,6 +2983,16 @@ def layout(
         min-width: 0;
       }}
     }}
+    @media (max-width: 1320px) {{
+      .stats-contracts {{
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }}
+    }}
+    @media (max-width: 960px) {{
+      .stats-contracts {{
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }}
+    }}
   </style>
 </head>
 <body>
@@ -3375,7 +3388,7 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
     paid_ratio = (total_paid / total_amount) if total_amount > 0 else 0.0
 
     stats_html = f"""
-    <section class="stats">
+    <section class="stats stats-contracts">
       <article class="card stat-card">
         <div class="stat-label">Контрактов</div>
         <div class="stat-value">{len(payload)}</div>
