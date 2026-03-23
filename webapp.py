@@ -759,11 +759,16 @@ def render_stage_payment_form(owner_chat_id: int, contract_id: int, stage, curre
 
 
 def render_stage_deadline_form(owner_chat_id: int, contract_id: int, stage, current_user: dict | None, active_tab: str = "detail") -> str:
+    tooltip_attrs = ""
+    if stage.start_date is not None:
+        tooltip_attrs = f' class="deadline-value auction-added-tooltip" data-tooltip="Старт работ: {escape(format_date(stage.start_date))}"'
+    else:
+        tooltip_attrs = ' class="deadline-value"'
     if not can_edit_contract_stage_controls(current_user):
-        return f'<span class="deadline-value">{escape(format_date(stage.end_date))}</span>'
+        return f'<span{tooltip_attrs}>{escape(format_date(stage.end_date))}</span>'
     return f"""
     <details class="status-menu">
-      <summary><span class="deadline-value">{escape(format_date(stage.end_date))}</span></summary>
+      <summary><span{tooltip_attrs}>{escape(format_date(stage.end_date))}</span></summary>
       <div class="status-popover">
         <form class="form-grid" method="post" action="/contracts/stages/{stage.id}/deadline?owner={owner_chat_id}&contract_id={contract_id}">
           <input type="hidden" name="tab" value="{escape(active_tab)}">
@@ -3040,6 +3045,10 @@ function buildContractStageFields(form, count) {{
             <input type="text" name="stage_amount_${{index}}" data-money-input="1" required>
           </div>
           <div class="field">
+            <label>Старт работ по этапу</label>
+            <input type="date" name="stage_start_date_${{index}}">
+          </div>
+          <div class="field">
             <label>Дедлайн этапа</label>
             <input type="date" name="stage_end_date_${{index}}" required>
           </div>
@@ -3528,6 +3537,10 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
                 <input type="text" name="stage_amount_1" data-money-input="1" required>
               </div>
               <div class="field">
+                <label>Старт работ по этапу</label>
+                <input type="date" name="stage_start_date_1">
+              </div>
+              <div class="field">
                 <label>Дедлайн этапа</label>
                 <input type="date" name="stage_end_date_1" required>
               </div>
@@ -3572,6 +3585,10 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
               <div class="field">
                 <label>Номер этапа</label>
                 <input type="number" min="1" name="position" value="{len(payload["stages"]) + 1}" required>
+              </div>
+              <div class="field">
+                <label>Старт работ по этапу</label>
+                <input type="date" name="start_date">
               </div>
               <div class="field">
                 <label>Дедлайн этапа</label>
@@ -4527,16 +4544,20 @@ def app(environ, start_response):
                 amount = parse_amount(form.get(f"stage_amount_{index}", ""))
                 if amount <= 0:
                     raise ValueError(f"Сумма этапа {index} должна быть больше 0")
+                start_date_raw = form.get(f"stage_start_date_{index}", "")
+                start_date = parse_date(start_date_raw) if start_date_raw else None
                 end_date = parse_date(form.get(f"stage_end_date_{index}", ""))
+                if start_date is not None and start_date > end_date:
+                    raise ValueError(f"Старт работ этапа {index} не может быть позже дедлайна")
                 notes = form.get(f"stage_notes_{index}", "").strip()
-                stage_specs.append((index, amount, end_date, notes))
+                stage_specs.append((index, amount, start_date, end_date, notes))
                 stage_total += amount
             if abs(stage_total - total_amount) > 0.01:
                 raise ValueError("Сумма этапов должна совпадать с общей суммой контракта")
-            contract_end_date = max(item[2] for item in stage_specs)
+            contract_end_date = max(item[3] for item in stage_specs)
             contract_id = storage.add_contract(current_owner, title, description, contract_end_date, advance_percent)
-            for index, amount, end_date, notes in stage_specs:
-                storage.add_stage(contract_id, index, notes, end_date, amount)
+            for index, amount, start_date, end_date, notes in stage_specs:
+                storage.add_stage(contract_id, index, notes, start_date, end_date, amount)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_dashboard(storage, current_owner) + f'<div class="flash">Не удалось создать контракт: {escape(str(exc))}</div>'

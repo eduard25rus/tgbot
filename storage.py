@@ -36,6 +36,7 @@ class Stage:
     payment_status_updated_at: Optional[datetime]
     payment_status_updated_by_name: str
     notes: str
+    start_date: Optional[date]
     end_date: date
     amount: float
     created_at: datetime
@@ -136,6 +137,7 @@ class Storage:
                     payment_status_updated_at TEXT,
                     payment_status_updated_by_name TEXT NOT NULL DEFAULT '',
                     notes TEXT NOT NULL DEFAULT '',
+                    start_date TEXT,
                     end_date TEXT NOT NULL,
                     amount REAL NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
@@ -270,6 +272,8 @@ class Storage:
                 conn.execute("ALTER TABLE stages ADD COLUMN payment_status_updated_at TEXT")
             if "payment_status_updated_by_name" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN payment_status_updated_by_name TEXT NOT NULL DEFAULT ''")
+            if "start_date" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN start_date TEXT")
             conn.execute(
                 """
                 UPDATE stages
@@ -1248,7 +1252,7 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
-    def add_stage(self, contract_id: int, position: int, notes: str, end_date: date, amount: float) -> int:
+    def add_stage(self, contract_id: int, position: int, notes: str, start_date: date | None, end_date: date, amount: float) -> int:
         with self.connection() as conn:
             max_position = int(
                 conn.execute(
@@ -1269,15 +1273,16 @@ class Storage:
                 """
                 INSERT INTO stages (
                     contract_id, position, name, status, status_updated_at, status_updated_by_name,
-                    payment_status, payment_status_updated_at, payment_status_updated_by_name, notes, end_date, amount, created_at
+                    payment_status, payment_status_updated_at, payment_status_updated_by_name, notes, start_date, end_date, amount, created_at
                 )
-                VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', ?, ?, ?, ?)
+                VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', ?, ?, ?, ?, ?)
                 """,
                 (
                     contract_id,
                     normalized_position,
                     f"Этап {normalized_position}",
                     notes.strip(),
+                    start_date.strftime(DATE_FMT) if start_date is not None else None,
                     end_date.strftime(DATE_FMT),
                     amount,
                     datetime.utcnow().isoformat(),
@@ -1292,7 +1297,7 @@ class Storage:
                 """
                 SELECT s.id, s.contract_id, s.position, s.name, s.status, s.status_updated_at, s.status_updated_by_name,
                        s.payment_status, s.payment_status_updated_at, s.payment_status_updated_by_name,
-                       s.notes, s.end_date, s.amount, s.created_at,
+                       s.notes, s.start_date, s.end_date, s.amount, s.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM stages s
                 JOIN contracts c ON c.id = s.contract_id
@@ -1302,12 +1307,12 @@ class Storage:
             ).fetchone()
         return self._stage_from_row(row) if row else None
 
-    def update_stage(self, chat_id: int, stage_id: int, name: str, notes: str, end_date: date, amount: float) -> bool:
+    def update_stage(self, chat_id: int, stage_id: int, name: str, notes: str, start_date: date | None, end_date: date, amount: float) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE stages
-                SET name = ?, notes = ?, end_date = ?, amount = ?
+                SET name = ?, notes = ?, start_date = ?, end_date = ?, amount = ?
                 WHERE id = ?
                   AND contract_id IN (
                       SELECT id FROM contracts WHERE chat_id = ?
@@ -1316,6 +1321,7 @@ class Storage:
                 (
                     name.strip(),
                     notes.strip(),
+                    start_date.strftime(DATE_FMT) if start_date is not None else None,
                     end_date.strftime(DATE_FMT),
                     amount,
                     stage_id,
@@ -1451,14 +1457,15 @@ class Storage:
                     """
                     INSERT INTO stages (
                         contract_id, position, name, status, status_updated_at, status_updated_by_name,
-                        payment_status, payment_status_updated_at, payment_status_updated_by_name, notes, end_date, amount, created_at
+                        payment_status, payment_status_updated_at, payment_status_updated_by_name, notes, start_date, end_date, amount, created_at
                     )
-                    VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', '', ?, ?, ?)
+                    VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', '', ?, ?, ?, ?)
                     """,
                     (
                         contract_id,
                         index,
                         f"Этап {index}",
+                        item.get("start_date").strftime(DATE_FMT) if item.get("start_date") is not None else None,
                         item["end_date"].strftime(DATE_FMT),
                         item["amount"],
                         datetime.utcnow().isoformat(),
@@ -1635,7 +1642,7 @@ class Storage:
                 """
                 SELECT s.id, s.contract_id, s.position, s.name, s.status, s.status_updated_at, s.status_updated_by_name,
                        s.payment_status, s.payment_status_updated_at, s.payment_status_updated_by_name,
-                       s.notes, s.end_date, s.amount, s.created_at,
+                       s.notes, s.start_date, s.end_date, s.amount, s.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM stages s
                 JOIN contracts c ON c.id = s.contract_id
@@ -1794,6 +1801,7 @@ class Storage:
             payment_status_updated_at=datetime.fromisoformat(row["payment_status_updated_at"]) if row["payment_status_updated_at"] is not None else None,
             payment_status_updated_by_name=row["payment_status_updated_by_name"] or "",
             notes=row["notes"],
+            start_date=date.fromisoformat(row["start_date"]) if row["start_date"] is not None else None,
             end_date=date.fromisoformat(row["end_date"]),
             amount=float(row["amount"]),
             created_at=datetime.fromisoformat(row["created_at"]),
