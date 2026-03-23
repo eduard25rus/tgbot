@@ -687,7 +687,7 @@ def render_discount_form(
         percent_value = str(current_discount).replace(".", ",")
         min_amount_value = format_amount_input(current_min_amount)
     elif is_required:
-        current_label = '<span class="chip danger">Не установлено</span><span class="deadline-meta">Установите максимальное снижение</span>'
+        current_label = '<span class="chip danger">Не установлено</span><span class="deadline-meta">Установите максимальное<br>снижение</span>'
     if is_locked:
         return f'<span class="discount-value">{current_label}</span>'
     return f"""
@@ -867,7 +867,7 @@ def render_discount_display(
             f'</span>'
         )
     if is_required:
-        return '<span class="discount-value"><span class="chip danger">Не установлено</span><span class="deadline-meta">Установите максимальное снижение</span></span>'
+        return '<span class="discount-value"><span class="chip danger">Не установлено</span><span class="deadline-meta">Установите максимальное<br>снижение</span></span>'
     return '<span class="discount-value"><span class="chip">Не установлено</span></span>'
 
 
