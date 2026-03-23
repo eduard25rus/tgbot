@@ -1195,7 +1195,12 @@ def render_submit_for_management(owner_chat_id: int, item, current_values: dict[
 
 
 def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, current_user: dict | None) -> str:
-    if current_user is None or is_procurement_user(current_user) or is_supply_user(current_user) or is_management_user(current_user) or not has_permission(current_user, "auctions", "edit"):
+    if current_user is None:
+        return ""
+    if active_tab == "deleted":
+        if not has_permission(current_user, "auctions", "view"):
+            return ""
+    elif is_procurement_user(current_user) or is_supply_user(current_user) or is_management_user(current_user) or not has_permission(current_user, "auctions", "edit"):
         return ""
     delete_icon = """
     <svg class="icon-trash" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -4653,14 +4658,9 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
 
     if path.startswith("/auctions/") and path.endswith("/restore") and method == "POST":
-        denied = guard("auctions", "edit")
+        denied = guard("auctions", "view")
         if denied:
             return denied
-        if is_procurement_user(current_user) or is_supply_user(current_user) or is_management_user(current_user):
-            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Эта роль не восстанавливает аукционы.")
-            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
-            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
-            return [html.encode("utf-8")]
         try:
             auction_id = int(path.split("/")[2])
             restored = storage.restore_deleted_auction(current_owner, auction_id)
