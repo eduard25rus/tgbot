@@ -3572,7 +3572,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
           <td>{render_stage_status_form(owner_chat_id, contract.id, stage, current_user)}</td>
           <td>{render_stage_deadline_form(owner_chat_id, contract.id, stage, current_user)}</td>
           <td>{format_amount(stage.amount)}</td>
-          <td>{format_percent(advance_percent) if contract.advance_percent else 'Без аванса'}</td>
+          <td>{format_amount(stage.amount * advance_percent / 100) if contract.advance_percent else 'Без аванса'}</td>
           <td>{format_amount(stage.amount - (stage.amount * advance_percent / 100)) if contract.advance_percent else format_amount(stage.amount)}</td>
           <td>{render_stage_payment_form(owner_chat_id, contract.id, stage, current_user)}</td>
         </tr>
@@ -3642,7 +3642,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             <th>Статус</th>
             <th class="nowrap">Дедлайн</th>
             <th class="nowrap">Сумма этапа</th>
-            <th class="nowrap">Аванс</th>
+            <th class="nowrap">Аванс, ₽</th>
             <th class="nowrap">Остаток после аванса</th>
             <th class="nowrap">Оплата</th>
           </tr>
