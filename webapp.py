@@ -574,22 +574,18 @@ def auction_current_chip(field_name: str, current_values: dict[str, str]) -> str
 
 
 def estimate_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
-    tooltip = ""
-    if item.estimate_status_updated_at is not None:
-        tooltip = status_tooltip(item.estimate_status_updated_at, item.estimate_status_updated_by_name, show_unknown_author=True)
+    tooltip = status_tooltip(item.estimate_status_updated_at, item.estimate_status_updated_by_name, show_unknown_author=True)
     return auction_chip(current_values["estimate_status"], AUCTION_ESTIMATE_META, tooltip)
 
 
 def submit_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
-    tooltip = ""
-    if item.submit_status_updated_at is not None:
-        tooltip = status_tooltip(item.submit_status_updated_at, item.submit_status_updated_by_name, show_unknown_author=True)
+    tooltip = status_tooltip(item.submit_status_updated_at, item.submit_status_updated_by_name, show_unknown_author=True)
     return auction_chip(current_values["submit_decision_status"], AUCTION_SUBMIT_DECISION_META, tooltip)
 
 
 def result_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
     tooltip = ""
-    if current_values["result_status"] in {"pending", "won", "lost", "rejected"} and item.result_status_updated_at is not None:
+    if current_values["result_status"] in {"pending", "won", "lost", "rejected"}:
         tooltip = status_tooltip(item.result_status_updated_at, item.result_status_updated_by_name, show_unknown_author=True)
     return auction_chip(current_values["result_status"], AUCTION_RESULT_META, tooltip)
 
@@ -665,6 +661,8 @@ def status_tooltip(updated_at: datetime | None, author_name: str, *, show_unknow
     lines: list[str] = []
     if updated_at is not None:
         lines.append(f"Установлено: {format_datetime(updated_at)}")
+    elif show_unknown_author:
+        lines.append("Установлено: неизвестно")
     if author_name:
         lines.append(f"Автор: {author_name}")
     elif show_unknown_author:
