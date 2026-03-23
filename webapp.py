@@ -18,10 +18,15 @@ from storage import Storage, WEB_SECTION_IDS
 
 
 STATUS_META = {
-    "not_started": ("✖", "Не приступили"),
-    "in_progress": ("🛠️", "В работе"),
-    "waiting_payment": ("🟡", "Ждем оплату"),
-    "paid": ("✅", "Оплачен"),
+    "not_started": ("Не приступили", "chip"),
+    "in_progress": ("В работе", "chip warn"),
+    "completed": ("Выполнен", "chip ok"),
+    "closed_iis": ("Закрыт на ИИС", "chip"),
+}
+
+STAGE_PAYMENT_META = {
+    "unpaid": ("Не оплачено", "chip"),
+    "paid": ("Оплачен", "chip ok"),
 }
 
 AUCTION_ESTIMATE_META = {
@@ -217,8 +222,8 @@ def is_auction_deleted(item) -> bool:
 
 
 def status_badge(status: str) -> str:
-    emoji, label = STATUS_META.get(status, STATUS_META["not_started"])
-    return f'<span class="status-chip">{emoji} {escape(label)}</span>'
+    label, css = STATUS_META.get(status, STATUS_META["not_started"])
+    return f'<span class="{css}">{escape(label)}</span>'
 
 
 def owner_options(storage: Storage) -> list[int]:
@@ -323,6 +328,21 @@ def is_management_user(current_user: dict | None) -> bool:
         current_user
         and current_user.get("effective_role_name", current_user.get("role_name")) in {"Руководство компании", "management"}
     )
+
+
+def can_edit_contract_stage_controls(current_user: dict | None) -> bool:
+    return bool(
+        current_user
+        and (
+            has_active_admin_mode(current_user)
+            or is_management_user(current_user)
+            or is_procurement_user(current_user)
+        )
+    )
+
+
+def guard_contract_stage_controls(current_user: dict | None):
+    return can_edit_contract_stage_controls(current_user)
 
 
 def with_preview_role(current_user: dict | None, preview_role: str) -> dict | None:
@@ -672,6 +692,90 @@ def status_tooltip(updated_at: datetime | None, author_name: str, *, show_unknow
     elif show_unknown_author:
         lines.append("Автор: неизвестен")
     return "\n".join(lines)
+
+
+def stage_status_chip(stage) -> str:
+    tooltip = ""
+    if stage.status != "not_started":
+        tooltip = status_tooltip(stage.status_updated_at, stage.status_updated_by_name, show_unknown_author=True)
+    return auction_chip(stage.status, STATUS_META, tooltip)
+
+
+def stage_payment_chip(stage) -> str:
+    tooltip = ""
+    if stage.payment_status != "unpaid":
+        tooltip = status_tooltip(stage.payment_status_updated_at, stage.payment_status_updated_by_name, show_unknown_author=True)
+    return auction_chip(stage.payment_status, STAGE_PAYMENT_META, tooltip)
+
+
+def render_stage_status_form(owner_chat_id: int, contract_id: int, stage, current_user: dict | None, active_tab: str = "detail") -> str:
+    if not can_edit_contract_stage_controls(current_user):
+        return stage_status_chip(stage)
+    options = [
+        ("not_started", "Не приступили"),
+        ("in_progress", "В работе"),
+        ("completed", "Выполнен"),
+        ("closed_iis", "Закрыт на ИИС"),
+    ]
+    buttons = "".join(
+        f'<button class="status-option" type="submit" name="status" value="{value}">{escape(label)}</button>'
+        for value, label in options
+    )
+    return f"""
+    <details class="status-menu">
+      <summary>{stage_status_chip(stage)}</summary>
+      <div class="status-popover">
+        <form class="status-option-list" method="post" action="/contracts/stages/{stage.id}/status?owner={owner_chat_id}&contract_id={contract_id}">
+          <input type="hidden" name="tab" value="{escape(active_tab)}">
+          {buttons}
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_stage_payment_form(owner_chat_id: int, contract_id: int, stage, current_user: dict | None, active_tab: str = "detail") -> str:
+    if not can_edit_contract_stage_controls(current_user):
+        return stage_payment_chip(stage)
+    options = [
+        ("unpaid", "Не оплачено"),
+        ("paid", "Оплачен"),
+    ]
+    buttons = "".join(
+        f'<button class="status-option" type="submit" name="payment_status" value="{value}">{escape(label)}</button>'
+        for value, label in options
+    )
+    return f"""
+    <details class="status-menu">
+      <summary>{stage_payment_chip(stage)}</summary>
+      <div class="status-popover">
+        <form class="status-option-list" method="post" action="/contracts/stages/{stage.id}/payment-status?owner={owner_chat_id}&contract_id={contract_id}">
+          <input type="hidden" name="tab" value="{escape(active_tab)}">
+          {buttons}
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_stage_deadline_form(owner_chat_id: int, contract_id: int, stage, current_user: dict | None, active_tab: str = "detail") -> str:
+    if not can_edit_contract_stage_controls(current_user):
+        return f'<span class="deadline-value">{escape(format_date(stage.end_date))}</span>'
+    return f"""
+    <details class="status-menu">
+      <summary><span class="deadline-value">{escape(format_date(stage.end_date))}</span></summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="/contracts/stages/{stage.id}/deadline?owner={owner_chat_id}&contract_id={contract_id}">
+          <input type="hidden" name="tab" value="{escape(active_tab)}">
+          <div class="field">
+            <label>Новый дедлайн</label>
+            <input type="date" name="end_date" value="{stage.end_date.isoformat()}" required>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить дедлайн</button>
+        </form>
+      </div>
+    </details>
+    """
 
 
 def render_auction_status_form(
@@ -3406,28 +3510,31 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
     """
 
 
-def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: int, flash_message: str = "") -> str:
+def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: int, current_user: dict | None = None, flash_message: str = "") -> str:
     payload = next((item for item in contract_payload(storage, owner_chat_id) if item["contract"].id == contract_id), None)
     if payload is None:
         return '<div class="card panel"><div class="empty">Контракт не найден.</div></div>'
 
     contract = payload["contract"]
     advance_percent = contract.advance_percent or 0.0
+    can_edit_stage_controls = can_edit_contract_stage_controls(current_user)
     stages_html = "".join(
         f"""
         <tr>
-          <td>{escape(stage.name)}</td>
-          <td>{status_badge(stage.status)}</td>
-          <td>{format_date(stage.end_date)}</td>
+          <td>
+            <div class="timeline-title">{escape(stage.name)}</div>
+            {f'<div class="contract-table-subtle">{escape(stage.notes)}</div>' if stage.notes else ''}
+          </td>
+          <td>{render_stage_status_form(owner_chat_id, contract.id, stage, current_user)}</td>
+          <td>{render_stage_deadline_form(owner_chat_id, contract.id, stage, current_user)}</td>
           <td>{format_amount(stage.amount)}</td>
           <td>{format_percent(advance_percent) if contract.advance_percent else 'Без аванса'}</td>
-          <td>{format_amount(stage.amount * advance_percent / 100) if contract.advance_percent else '—'}</td>
           <td>{format_amount(stage.amount - (stage.amount * advance_percent / 100)) if contract.advance_percent else format_amount(stage.amount)}</td>
-          <td>{escape(stage.notes) if stage.notes else '—'}</td>
+          <td>{render_stage_payment_form(owner_chat_id, contract.id, stage, current_user)}</td>
         </tr>
         """
         for stage in payload["stages"]
-    ) or '<tr><td colspan="8">Этапов пока нет.</td></tr>'
+    ) or '<tr><td colspan="7">Этапов пока нет.</td></tr>'
 
     payments_html = "".join(
         f"""
@@ -3480,6 +3587,26 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <span class="chip">Этапов: {len(payload["stages"])}</span>
         <span class="chip">Оплат: {len(payload["payments"])}</span>
       </div>
+      {
+        f'''
+      <form class="form-grid" method="post" action="/contracts/{contract.id}/settings?owner={owner_chat_id}" style="margin-top:18px;">
+        <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <label class="advance-toggle">
+            <input class="toggle-checkbox" type="checkbox" name="has_advance" value="1" {"checked" if contract.advance_percent else ""}> У контракта есть аванс
+          </label>
+          <div class="field">
+            <label>Процент аванса</label>
+            <input type="text" name="advance_percent" value="{escape(format_amount_input(contract.advance_percent)) if contract.advance_percent else ''}" placeholder="Например, 30">
+          </div>
+        </div>
+        <div class="action-row">
+          <button class="submit-btn" type="submit">Сохранить параметры контракта</button>
+        </div>
+      </form>
+        '''
+        if can_edit_stage_controls
+        else ''
+      }
     </section>
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
@@ -3496,9 +3623,8 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             <th class="nowrap">Дедлайн</th>
             <th class="nowrap">Сумма этапа</th>
             <th class="nowrap">Аванс</th>
-            <th class="nowrap">Сумма аванса</th>
             <th class="nowrap">Остаток после аванса</th>
-            <th>Примечание</th>
+            <th class="nowrap">Оплата</th>
           </tr>
         </thead>
         <tbody>{stages_html}</tbody>
@@ -4950,6 +5076,107 @@ def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
+    if path.startswith("/contracts/") and path.endswith("/settings") and method == "POST":
+        if not can_edit_contract_stage_controls(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            contract_id = int(path.split("/")[2])
+            form = read_post_data(environ)
+            has_advance = form.get("has_advance") == "1"
+            advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
+            if has_advance:
+                if advance_percent is None:
+                    raise ValueError("Укажите процент аванса")
+                if advance_percent <= 0 or advance_percent > 100:
+                    raise ValueError("Процент аванса должен быть от 0,01 до 100")
+            updated = storage.update_contract_advance_percent(current_owner, contract_id, advance_percent)
+            if not updated:
+                raise ValueError("Контракт не найден")
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить контракт: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/stages/") and path.endswith("/status") and method == "POST":
+        if not can_edit_contract_stage_controls(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            stage_id = int(path.split("/")[3])
+            contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0])
+            form = read_post_data(environ)
+            status = form.get("status", "not_started")
+            if status not in STATUS_META:
+                raise ValueError("Некорректный статус этапа")
+            stage = storage.get_stage(current_owner, stage_id)
+            if stage is None:
+                raise ValueError("Этап не найден")
+            actor_name = current_user.get("full_name", "").strip() if current_user else ""
+            updated = storage.update_stage_status(current_owner, stage_id, status, datetime.utcnow(), actor_name)
+            if not updated:
+                raise ValueError("Этап не найден")
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить статус этапа: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/stages/") and path.endswith("/payment-status") and method == "POST":
+        if not can_edit_contract_stage_controls(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            stage_id = int(path.split("/")[3])
+            contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0])
+            form = read_post_data(environ)
+            payment_status = form.get("payment_status", "unpaid")
+            if payment_status not in STAGE_PAYMENT_META:
+                raise ValueError("Некорректный статус оплаты")
+            stage = storage.get_stage(current_owner, stage_id)
+            if stage is None:
+                raise ValueError("Этап не найден")
+            actor_name = current_user.get("full_name", "").strip() if current_user else ""
+            updated = storage.update_stage_payment_status(current_owner, stage_id, payment_status, datetime.utcnow(), actor_name)
+            if not updated:
+                raise ValueError("Этап не найден")
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить оплату этапа: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/stages/") and path.endswith("/deadline") and method == "POST":
+        if not can_edit_contract_stage_controls(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            stage_id = int(path.split("/")[3])
+            contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0])
+            form = read_post_data(environ)
+            end_date = parse_date(form["end_date"])
+            updated = storage.update_stage_deadline(current_owner, stage_id, end_date)
+            if not updated:
+                raise ValueError("Этап не найден")
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить дедлайн этапа: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
     if path.startswith("/contracts/") and path.endswith("/stages/new") and method == "POST":
         denied = guard("contracts", "edit")
         if denied:
@@ -4968,7 +5195,7 @@ def app(environ, start_response):
             storage.add_stage(contract_id, position, form.get("notes", ""), end_date, amount)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
-            body = render_contract_detail(storage, current_owner, contract_id, f"Не удалось добавить этап: {exc}")
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить этап: {exc}")
             html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -4987,7 +5214,7 @@ def app(environ, start_response):
                 raise ValueError("Контракт не найден")
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
-            body = render_contract_detail(storage, current_owner, contract_id, f"Не удалось добавить оплату: {exc}")
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить оплату: {exc}")
             html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -5000,7 +5227,7 @@ def app(environ, start_response):
             contract_id = int(path.rsplit("/", 1)[1])
         except ValueError:
             contract_id = -1
-        body = render_contract_detail(storage, current_owner, contract_id)
+        body = render_contract_detail(storage, current_owner, contract_id, current_user)
         html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]

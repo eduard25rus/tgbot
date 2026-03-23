@@ -30,6 +30,11 @@ class Stage:
     position: int
     name: str
     status: str
+    status_updated_at: Optional[datetime]
+    status_updated_by_name: str
+    payment_status: str
+    payment_status_updated_at: Optional[datetime]
+    payment_status_updated_by_name: str
     notes: str
     end_date: date
     amount: float
@@ -125,6 +130,11 @@ class Storage:
                     position INTEGER NOT NULL DEFAULT 1,
                     name TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'not_started',
+                    status_updated_at TEXT,
+                    status_updated_by_name TEXT NOT NULL DEFAULT '',
+                    payment_status TEXT NOT NULL DEFAULT 'unpaid',
+                    payment_status_updated_at TEXT,
+                    payment_status_updated_by_name TEXT NOT NULL DEFAULT '',
                     notes TEXT NOT NULL DEFAULT '',
                     end_date TEXT NOT NULL,
                     amount REAL NOT NULL DEFAULT 0,
@@ -250,6 +260,36 @@ class Storage:
                 conn.execute("ALTER TABLE stages ADD COLUMN position INTEGER NOT NULL DEFAULT 1")
             if "status" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN status TEXT NOT NULL DEFAULT 'not_started'")
+            if "status_updated_at" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN status_updated_at TEXT")
+            if "status_updated_by_name" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN status_updated_by_name TEXT NOT NULL DEFAULT ''")
+            if "payment_status" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'unpaid'")
+            if "payment_status_updated_at" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN payment_status_updated_at TEXT")
+            if "payment_status_updated_by_name" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN payment_status_updated_by_name TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                """
+                UPDATE stages
+                SET payment_status = CASE
+                    WHEN status = 'paid' THEN 'paid'
+                    ELSE COALESCE(payment_status, 'unpaid')
+                END
+                WHERE payment_status IS NULL OR payment_status = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE stages
+                SET status = CASE
+                    WHEN status IN ('waiting_payment', 'paid') THEN 'completed'
+                    ELSE status
+                END
+                WHERE status IN ('waiting_payment', 'paid')
+                """
+            )
             if "advance_percent" not in contract_columns:
                 conn.execute("ALTER TABLE contracts ADD COLUMN advance_percent REAL")
             grant_columns = {
@@ -1227,8 +1267,11 @@ class Storage:
             )
             cursor = conn.execute(
                 """
-                INSERT INTO stages (contract_id, position, name, status, notes, end_date, amount, created_at)
-                VALUES (?, ?, ?, 'not_started', ?, ?, ?, ?)
+                INSERT INTO stages (
+                    contract_id, position, name, status, status_updated_at, status_updated_by_name,
+                    payment_status, payment_status_updated_at, payment_status_updated_by_name, notes, end_date, amount, created_at
+                )
+                VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', ?, ?, ?, ?)
                 """,
                 (
                     contract_id,
@@ -1247,7 +1290,9 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT s.id, s.contract_id, s.position, s.name, s.status, s.notes, s.end_date, s.amount, s.created_at,
+                SELECT s.id, s.contract_id, s.position, s.name, s.status, s.status_updated_at, s.status_updated_by_name,
+                       s.payment_status, s.payment_status_updated_at, s.payment_status_updated_by_name,
+                       s.notes, s.end_date, s.amount, s.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM stages s
                 JOIN contracts c ON c.id = s.contract_id
@@ -1279,18 +1324,111 @@ class Storage:
             )
             return cursor.rowcount > 0
 
-    def update_stage_status(self, chat_id: int, stage_id: int, status: str) -> bool:
+    def update_stage_status(
+        self,
+        chat_id: int,
+        stage_id: int,
+        status: str,
+        status_updated_at: datetime | None,
+        status_updated_by_name: str,
+    ) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE stages
-                SET status = ?
+                SET status = ?, status_updated_at = ?, status_updated_by_name = ?
                 WHERE id = ?
                   AND contract_id IN (
                       SELECT id FROM contracts WHERE chat_id = ?
                   )
                 """,
-                (status, stage_id, chat_id),
+                (
+                    status,
+                    status_updated_at.isoformat() if status_updated_at is not None else None,
+                    status_updated_by_name,
+                    stage_id,
+                    chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def update_stage_payment_status(
+        self,
+        chat_id: int,
+        stage_id: int,
+        payment_status: str,
+        payment_status_updated_at: datetime | None,
+        payment_status_updated_by_name: str,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE stages
+                SET payment_status = ?, payment_status_updated_at = ?, payment_status_updated_by_name = ?
+                WHERE id = ?
+                  AND contract_id IN (
+                      SELECT id FROM contracts WHERE chat_id = ?
+                  )
+                """,
+                (
+                    payment_status,
+                    payment_status_updated_at.isoformat() if payment_status_updated_at is not None else None,
+                    payment_status_updated_by_name,
+                    stage_id,
+                    chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def update_stage_deadline(self, chat_id: int, stage_id: int, end_date: date) -> bool:
+        with self.connection() as conn:
+            stage = conn.execute(
+                """
+                SELECT s.contract_id
+                FROM stages s
+                JOIN contracts c ON c.id = s.contract_id
+                WHERE s.id = ? AND c.chat_id = ?
+                """,
+                (stage_id, chat_id),
+            ).fetchone()
+            if stage is None:
+                return False
+            cursor = conn.execute(
+                """
+                UPDATE stages
+                SET end_date = ?
+                WHERE id = ?
+                  AND contract_id IN (
+                      SELECT id FROM contracts WHERE chat_id = ?
+                  )
+                """,
+                (
+                    end_date.strftime(DATE_FMT),
+                    stage_id,
+                    chat_id,
+                ),
+            )
+            if cursor.rowcount > 0:
+                max_stage_date = conn.execute(
+                    "SELECT MAX(end_date) AS max_end_date FROM stages WHERE contract_id = ?",
+                    (stage["contract_id"],),
+                ).fetchone()["max_end_date"]
+                if max_stage_date is not None:
+                    conn.execute(
+                        "UPDATE contracts SET end_date = ? WHERE id = ? AND chat_id = ?",
+                        (max_stage_date, stage["contract_id"], chat_id),
+                    )
+            return cursor.rowcount > 0
+
+    def update_contract_advance_percent(self, chat_id: int, contract_id: int, advance_percent: float | None) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE contracts
+                SET advance_percent = ?
+                WHERE id = ? AND chat_id = ?
+                """,
+                (advance_percent, contract_id, chat_id),
             )
             return cursor.rowcount > 0
 
@@ -1311,8 +1449,11 @@ class Storage:
             for index, item in enumerate(stage_items, start=1):
                 conn.execute(
                     """
-                    INSERT INTO stages (contract_id, position, name, status, notes, end_date, amount, created_at)
-                    VALUES (?, ?, ?, 'not_started', '', ?, ?, ?)
+                    INSERT INTO stages (
+                        contract_id, position, name, status, status_updated_at, status_updated_by_name,
+                        payment_status, payment_status_updated_at, payment_status_updated_by_name, notes, end_date, amount, created_at
+                    )
+                    VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', '', ?, ?, ?)
                     """,
                     (
                         contract_id,
@@ -1492,7 +1633,9 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT s.id, s.contract_id, s.position, s.name, s.status, s.notes, s.end_date, s.amount, s.created_at,
+                SELECT s.id, s.contract_id, s.position, s.name, s.status, s.status_updated_at, s.status_updated_by_name,
+                       s.payment_status, s.payment_status_updated_at, s.payment_status_updated_by_name,
+                       s.notes, s.end_date, s.amount, s.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM stages s
                 JOIN contracts c ON c.id = s.contract_id
@@ -1645,6 +1788,11 @@ class Storage:
             position=row["position"],
             name=row["name"],
             status=row["status"],
+            status_updated_at=datetime.fromisoformat(row["status_updated_at"]) if row["status_updated_at"] is not None else None,
+            status_updated_by_name=row["status_updated_by_name"] or "",
+            payment_status=row["payment_status"] or "unpaid",
+            payment_status_updated_at=datetime.fromisoformat(row["payment_status_updated_at"]) if row["payment_status_updated_at"] is not None else None,
+            payment_status_updated_by_name=row["payment_status_updated_by_name"] or "",
             notes=row["notes"],
             end_date=date.fromisoformat(row["end_date"]),
             amount=float(row["amount"]),
