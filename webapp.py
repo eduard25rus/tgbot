@@ -1117,6 +1117,37 @@ def render_estimate_for_supply(owner_chat_id: int, item, current_values: dict[st
 
 
 def render_estimate_for_management(owner_chat_id: int, item, current_values: dict[str, str], active_tab: str) -> str:
+    if item.estimate_status == "calculated":
+        hidden_inputs = [
+            f'<input type="hidden" name="submit_decision_status" value="{escape(current_values["submit_decision_status"])}">',
+            f'<input type="hidden" name="result_status" value="{escape(current_values["result_status"])}">',
+            '<input type="hidden" name="estimate_status" value="calculated">',
+        ]
+        if item.final_bid_amount is not None:
+            hidden_inputs.append(
+                f'<input type="hidden" name="final_bid_amount" value="{escape(format_amount_input(item.final_bid_amount))}">'
+            )
+        material_value = format_amount_input(item.material_cost) if item.material_cost is not None else ""
+        return f"""
+        <details class="status-menu estimate-menu">
+          <summary>
+            <span class="discount-value">
+              {estimate_chip_with_tooltip(item, current_values)}
+              {estimate_summary(item)}
+            </span>
+          </summary>
+          <form class="status-popover estimate-form" method="post" action="/auctions/{item.id}/status?owner={owner_chat_id}&tab={escape(active_tab)}">
+            {''.join(hidden_inputs)}
+            <div class="field estimate-cost-field">
+              <label>Стоимость материалов, ₽</label>
+              <input type="text" name="material_cost" value="{escape(material_value)}" placeholder="Введите сумму материалов" data-money-input="1" required>
+            </div>
+            <div class="action-row">
+              <button class="submit-btn" type="submit">Сохранить сумму материалов</button>
+            </div>
+          </form>
+        </details>
+        """
     return render_auction_status_form(
         owner_chat_id,
         item.id,
