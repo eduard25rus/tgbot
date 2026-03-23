@@ -77,6 +77,7 @@ ROLE_PREVIEW_OPTIONS = [
     ("", "Обычный режим"),
     ("procurement", "Отдел госзакупок"),
     ("supply", "Отдел снабжения"),
+    ("management", "Руководство компании"),
 ]
 
 
@@ -311,10 +312,46 @@ def with_preview_role(current_user: dict | None, preview_role: str) -> dict | No
     if current_user is None:
         return None
     effective_user = dict(current_user)
+    preview_labels = dict(effective_user.get("preview_role_options", ROLE_PREVIEW_OPTIONS))
     effective_user["preview_role_name"] = preview_role
-    effective_user["preview_role_label"] = dict(ROLE_PREVIEW_OPTIONS).get(preview_role, "")
+    effective_user["preview_role_label"] = preview_labels.get(preview_role, "")
     effective_user["effective_role_name"] = preview_role or current_user.get("role_name", "")
     return effective_user
+
+
+def preview_role_code(label: str) -> str:
+    normalized = label.strip()
+    if not normalized:
+        return ""
+    if normalized in {"Отдел госзакупок", "procurement"}:
+        return "procurement"
+    if normalized in {"Отдел снабжения", "supply"}:
+        return "supply"
+    if normalized in {"Руководство компании", "management"}:
+        return "management"
+    return f"role_{hashlib.sha1(normalized.encode('utf-8')).hexdigest()[:10]}"
+
+
+def preview_role_options(storage: Storage, owner_chat_id: int | None, current_user: dict | None) -> list[tuple[str, str]]:
+    options: list[tuple[str, str]] = [("", "Обычный режим")]
+    if current_user is None or owner_chat_id is None or not current_user.get("is_super_admin"):
+        return options
+    seen = {""}
+    for code, label in (
+        ("management", "Руководство компании"),
+        ("procurement", "Отдел госзакупок"),
+        ("supply", "Отдел снабжения"),
+    ):
+        options.append((code, label))
+        seen.add(code)
+    for user in storage.list_web_users(owner_chat_id):
+        label = (user.get("role_name") or "").strip()
+        code = preview_role_code(label)
+        if not code or code in seen:
+            continue
+        options.append((code, label))
+        seen.add(code)
+    return options
 
 
 def compute_role_notifications(storage: Storage, owner_chat_id: int | None, current_user: dict | None) -> dict[str, str | int | bool]:
@@ -1183,6 +1220,7 @@ def layout(
     active_section: str,
     current_user: dict | None = None,
 ) -> str:
+    current_preview_options = current_user.get("preview_role_options", ROLE_PREVIEW_OPTIONS) if current_user else ROLE_PREVIEW_OPTIONS
     visible_sections = [
         (section_id, label, href)
         for section_id, label, href in SECTIONS
@@ -1268,7 +1306,7 @@ def layout(
               {
                 ''.join(
                     f'<option value="{escape(value)}" {"selected" if current_user.get("preview_role_name", "") == value else ""}>{escape(label)}</option>'
-                    for value, label in ROLE_PREVIEW_OPTIONS
+                    for value, label in current_preview_options
                 )
               }
             </select>
@@ -3941,12 +3979,19 @@ def app(environ, start_response):
     cookies = parse_cookies(environ)
     current_user = storage.get_web_user_by_session(cookies.get(SESSION_COOKIE, ""))
     preview_role = cookies.get(PREVIEW_ROLE_COOKIE, "") if current_user and current_user.get("is_super_admin") else ""
+    current_owner = current_user["owner_chat_id"] if current_user else None
+    current_preview_options = preview_role_options(storage, current_owner, current_user)
+    valid_preview_roles = {item[0] for item in current_preview_options}
     if preview_role == "Отдел госзакупок":
         preview_role = "procurement"
     if preview_role == "Отдел снабжения":
         preview_role = "supply"
-    if preview_role not in {item[0] for item in ROLE_PREVIEW_OPTIONS}:
+    if preview_role == "Руководство компании":
+        preview_role = "management"
+    if preview_role not in valid_preview_roles:
         preview_role = ""
+    if current_user is not None:
+        current_user["preview_role_options"] = current_preview_options
     current_user = with_preview_role(current_user, preview_role)
     current_owner = current_user["owner_chat_id"] if current_user else None
     if current_user is not None:
@@ -4027,7 +4072,7 @@ def app(environ, start_response):
         form = read_post_data(environ)
         next_path = form.get("next_path", "").strip() or environ.get("HTTP_REFERER", "") or "/contracts"
         preview_role = form.get("preview_role", "")
-        if preview_role not in {item[0] for item in ROLE_PREVIEW_OPTIONS}:
+        if preview_role not in {item[0] for item in current_user.get("preview_role_options", ROLE_PREVIEW_OPTIONS)}:
             preview_role = ""
         cookie = f"{PREVIEW_ROLE_COOKIE}={preview_role}; Path=/; SameSite=Lax"
         if not preview_role:
