@@ -3412,6 +3412,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         return '<div class="card panel"><div class="empty">Контракт не найден.</div></div>'
 
     contract = payload["contract"]
+    advance_percent = contract.advance_percent or 0.0
     stages_html = "".join(
         f"""
         <tr>
@@ -3419,11 +3420,14 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
           <td>{status_badge(stage.status)}</td>
           <td>{format_date(stage.end_date)}</td>
           <td>{format_amount(stage.amount)}</td>
+          <td>{format_percent(advance_percent) if contract.advance_percent else 'Без аванса'}</td>
+          <td>{format_amount(stage.amount * advance_percent / 100) if contract.advance_percent else '—'}</td>
+          <td>{format_amount(stage.amount - (stage.amount * advance_percent / 100)) if contract.advance_percent else format_amount(stage.amount)}</td>
           <td>{escape(stage.notes) if stage.notes else '—'}</td>
         </tr>
         """
         for stage in payload["stages"]
-    ) or '<tr><td colspan="5">Этапов пока нет.</td></tr>'
+    ) or '<tr><td colspan="8">Этапов пока нет.</td></tr>'
 
     payments_html = "".join(
         f"""
@@ -3437,82 +3441,88 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
 
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     return f"""
-    <div class="detail-hero">
-      <section class="detail-box">
-        <div class="eyebrow">Карточка контракта</div>
-        <h1 style="font-size:40px; margin-bottom:12px;">{escape(contract.title)}</h1>
-        <div class="hero-copy">
-          {escape(contract.description) if contract.description else 'Описание пока не заполнено. В следующем шаге можно сделать редактирование прямо из web-интерфейса.'}
-        </div>
-        <div class="info-row" style="margin-top:18px;">
-          <span class="chip">ID: {contract.id}</span>
-          <span class="chip">Дедлайн: {format_date(contract.end_date)}</span>
-          <span class="chip">Этапов: {len(payload["stages"])}</span>
-          <span class="chip">Оплат: {len(payload["payments"])}</span>
-        </div>
-      </section>
-      <aside class="detail-side">
-        <div class="mini-card">
-          <div class="stat-label">Общая сумма</div>
-          <div class="mini-value">{format_amount(payload["total_amount"])}</div>
-        </div>
-        <div class="mini-card">
-          <div class="stat-label">Аванс</div>
-          <div class="mini-value">{format_percent(contract.advance_percent) if contract.advance_percent else '—'}</div>
-          <div class="stat-note">{format_amount(payload["advance_amount"]) if contract.advance_percent else 'Аванс не указан'}</div>
-        </div>
-        <div class="mini-card">
-          <div class="stat-label">Оплачено</div>
-          <div class="mini-value">{format_amount(payload["paid_amount"])}</div>
-          <div class="stat-note">{format_percent(payload["paid_ratio"] * 100)} от общего бюджета</div>
-        </div>
-        <div class="mini-card">
-          <div class="stat-label">Долг</div>
-          <div class="mini-value">{format_amount(payload["debt_amount"])}</div>
-        </div>
-      </aside>
-    </div>
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Общая сумма</div>
+        <div class="stat-value">{format_amount(payload["total_amount"])}</div>
+        <div class="stat-note">Полная сумма контракта</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Аванс</div>
+        <div class="stat-value">{format_percent(contract.advance_percent) if contract.advance_percent else '—'}</div>
+        <div class="stat-note">{format_amount(payload["advance_amount"]) if contract.advance_percent else 'Аванс не указан'}</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Оплачено</div>
+        <div class="stat-value">{format_amount(payload["paid_amount"])}</div>
+        <div class="stat-note">{format_percent(payload["paid_ratio"] * 100)} от суммы контракта</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Долг</div>
+        <div class="stat-value">{format_amount(payload["debt_amount"])}</div>
+        <div class="stat-note">Неоплаченный остаток</div>
+      </article>
+    </section>
     {flash_html}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">{escape(contract.title)}</h2>
+          <div class="panel-sub">
+            {escape(contract.description) if contract.description else 'Описание пока не заполнено.'}
+          </div>
+        </div>
+        <a class="chip" href="/?owner={owner_chat_id}">← Назад к дашборду</a>
+      </div>
+      <div class="info-row">
+        <span class="chip">ID: {contract.id}</span>
+        <span class="chip">Дедлайн: {format_date(contract.end_date)}</span>
+        <span class="chip">Этапов: {len(payload["stages"])}</span>
+        <span class="chip">Оплат: {len(payload["payments"])}</span>
+      </div>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Этапы контракта</h2>
+          <div class="panel-sub">Рабочий реестр этапов по той же логике, что и в аукционах.</div>
+        </div>
+      </div>
+      <table class="table contract-table">
+        <thead>
+          <tr>
+            <th>Этап</th>
+            <th>Статус</th>
+            <th class="nowrap">Дедлайн</th>
+            <th class="nowrap">Сумма этапа</th>
+            <th class="nowrap">Аванс</th>
+            <th class="nowrap">Сумма аванса</th>
+            <th class="nowrap">Остаток после аванса</th>
+            <th>Примечание</th>
+          </tr>
+        </thead>
+        <tbody>{stages_html}</tbody>
+      </table>
+    </section>
     <section class="grid" style="margin-top:22px;">
       <section class="card panel">
         <div class="panel-head">
           <div>
-            <h2 class="panel-title">Этапы контракта</h2>
-            <div class="panel-sub">Здесь дальше удобно сделать inline-редактирование статусов, дедлайнов и сумм.</div>
+            <h2 class="panel-title">Оплаты</h2>
+            <div class="panel-sub">Все платежи по контракту в одном месте</div>
           </div>
-          <a class="chip" href="/?owner={owner_chat_id}">← Назад к дашборду</a>
         </div>
         <table class="table">
           <thead>
             <tr>
-              <th>Этап</th>
-              <th>Статус</th>
-              <th>Дедлайн</th>
+              <th>Дата</th>
               <th>Сумма</th>
-              <th>Примечание</th>
             </tr>
           </thead>
-          <tbody>{stages_html}</tbody>
+          <tbody>{payments_html}</tbody>
         </table>
       </section>
       <aside class="section-stack">
-        <section class="card panel">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Оплаты</h2>
-              <div class="panel-sub">Все платежи по контракту в одном месте</div>
-            </div>
-          </div>
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Дата</th>
-                <th>Сумма</th>
-              </tr>
-            </thead>
-            <tbody>{payments_html}</tbody>
-          </table>
-        </section>
         <section class="card panel">
           <div class="panel-head">
             <div>
@@ -3558,20 +3568,6 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             </div>
             <button class="submit-btn" type="submit">Добавить оплату</button>
           </form>
-        </section>
-        <section class="card panel">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Что можно докрутить</h2>
-              <div class="panel-sub">Уже следующим шагом</div>
-            </div>
-          </div>
-          <div class="contract-meta">
-            • Создание оплаты и этапа прямо из браузера<br>
-            • Редактирование статуса этапа в один клик<br>
-            • История изменений по контракту<br>
-            • Отдельная страница должников и просрочек
-          </div>
         </section>
       </aside>
     </section>
