@@ -2430,6 +2430,9 @@ def layout(
     }}
     .status-form {{
       margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
     }}
     .status-menu {{
       position: relative;
@@ -2438,6 +2441,8 @@ def layout(
     .status-menu summary {{
       list-style: none;
       cursor: pointer;
+      display: inline-flex;
+      justify-content: center;
     }}
     .status-menu summary::-webkit-details-marker {{
       display: none;
