@@ -3562,6 +3562,34 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
 
     contract = payload["contract"]
     advance_percent = contract.advance_percent or 0.0
+    add_stage_button = ""
+    if can_edit_contract_stage_controls(current_user):
+        add_stage_button = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Добавить этап</span></summary>
+          <div class="status-popover">
+            <form class="form-grid" method="post" action="/contracts/{contract.id}/stages/new?owner={owner_chat_id}">
+              <div class="field">
+                <label>Номер этапа</label>
+                <input type="number" min="1" name="position" value="{len(payload["stages"]) + 1}" required>
+              </div>
+              <div class="field">
+                <label>Дедлайн этапа</label>
+                <input type="date" name="end_date" required>
+              </div>
+              <div class="field">
+                <label>Сумма этапа</label>
+                <input type="text" name="amount" placeholder="1500000" required>
+              </div>
+              <div class="field">
+                <label>Примечание</label>
+                <textarea name="notes" placeholder="Что входит в этап"></textarea>
+              </div>
+              <button class="submit-btn" type="submit">Добавить этап</button>
+            </form>
+          </div>
+        </details>
+        """
     stages_html = "".join(
         f"""
         <tr>
@@ -3634,6 +3662,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
           <h2 class="panel-title">Этапы контракта</h2>
           <div class="panel-sub">Рабочий реестр этапов по той же логике, что и в аукционах.</div>
         </div>
+        {add_stage_button}
       </div>
       <table class="table contract-table">
         <thead>
@@ -3669,33 +3698,6 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         </table>
       </section>
       <aside class="section-stack">
-        <section class="card panel">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Добавить этап</h2>
-              <div class="panel-sub">Быстрый ввод следующего этапа</div>
-            </div>
-          </div>
-          <form class="form-grid" method="post" action="/contracts/{contract.id}/stages/new?owner={owner_chat_id}">
-            <div class="field">
-              <label>Номер этапа</label>
-              <input type="number" min="1" name="position" value="{len(payload["stages"]) + 1}" required>
-            </div>
-            <div class="field">
-              <label>Дедлайн этапа</label>
-              <input type="text" name="end_date" placeholder="31-07-2026" required>
-            </div>
-            <div class="field">
-              <label>Сумма этапа</label>
-              <input type="text" name="amount" placeholder="1500000" required>
-            </div>
-            <div class="field">
-              <label>Примечание</label>
-              <textarea name="notes" placeholder="Что входит в этап"></textarea>
-            </div>
-            <button class="submit-btn" type="submit">Добавить этап</button>
-          </form>
-        </section>
         <section class="card panel">
           <div class="panel-head">
             <div>
