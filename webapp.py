@@ -1277,10 +1277,10 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
       </td>
       <td class="nowrap">{deadline_cell}</td>
       <td class="nowrap">{amount_cell}</td>
-      <td>{estimate_cell}</td>
-      <td>{submit_cell}</td>
-      <td>{discount_cell}</td>
-      <td>{result_cell}</td>
+      <td><div class="auction-cell-center">{estimate_cell}</div></td>
+      <td><div class="auction-cell-center">{submit_cell}</div></td>
+      <td><div class="auction-cell-center">{discount_cell}</div></td>
+      <td><div class="auction-cell-center">{result_cell}</div></td>
     </tr>
     """
 
@@ -2699,25 +2699,20 @@ def layout(
       left: auto;
       right: 0;
     }}
-    .auction-table td:nth-child(4) > .status-menu,
-    .auction-table td:nth-child(5) > .status-menu,
-    .auction-table td:nth-child(7) > .status-menu {{
+    .auction-cell-center {{
+      width: 100%;
+      display: grid;
+      justify-items: center;
+      align-content: center;
+      gap: 2px;
+      text-align: center;
+    }}
+    .auction-cell-center > .status-menu {{
       display: block;
       width: fit-content;
       margin: 0 auto;
     }}
-    .auction-table td:nth-child(5) > .status-menu {{
-      position: relative;
-      left: 50%;
-      transform: translateX(-50%);
-      margin: 0;
-    }}
-    .auction-table td:nth-child(6) > .status-menu {{
-      display: block;
-      width: 100%;
-      margin: 0;
-    }}
-    .auction-table td:nth-child(6) .discount-value {{
+    .auction-cell-center .discount-value {{
       display: grid;
       width: 100%;
       justify-items: center;
