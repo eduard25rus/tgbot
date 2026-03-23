@@ -773,10 +773,14 @@ def render_stage_deadline_form(owner_chat_id: int, contract_id: int, stage, curr
         <form class="form-grid" method="post" action="/contracts/stages/{stage.id}/deadline?owner={owner_chat_id}&contract_id={contract_id}">
           <input type="hidden" name="tab" value="{escape(active_tab)}">
           <div class="field">
+            <label>Старт работ</label>
+            <input type="date" name="start_date" value="{stage.start_date.isoformat() if stage.start_date is not None else ''}">
+          </div>
+          <div class="field">
             <label>Новый дедлайн</label>
             <input type="date" name="end_date" value="{stage.end_date.isoformat()}" required>
           </div>
-          <button class="submit-btn" type="submit">Сохранить дедлайн</button>
+          <button class="submit-btn" type="submit">Сохранить сроки</button>
         </form>
       </div>
     </details>
@@ -5209,8 +5213,12 @@ def app(environ, start_response):
             stage_id = int(path.split("/")[3])
             contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0])
             form = read_post_data(environ)
+            start_date_raw = form.get("start_date", "")
+            start_date = parse_date(start_date_raw) if start_date_raw else None
             end_date = parse_date(form["end_date"])
-            updated = storage.update_stage_deadline(current_owner, stage_id, end_date)
+            if start_date is not None and start_date > end_date:
+                raise ValueError("Старт работ не может быть позже дедлайна этапа")
+            updated = storage.update_stage_deadline(current_owner, stage_id, start_date, end_date)
             if not updated:
                 raise ValueError("Этап не найден")
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")

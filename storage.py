@@ -1386,7 +1386,7 @@ class Storage:
             )
             return cursor.rowcount > 0
 
-    def update_stage_deadline(self, chat_id: int, stage_id: int, end_date: date) -> bool:
+    def update_stage_deadline(self, chat_id: int, stage_id: int, start_date: date | None, end_date: date) -> bool:
         with self.connection() as conn:
             stage = conn.execute(
                 """
@@ -1402,13 +1402,14 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE stages
-                SET end_date = ?
+                SET start_date = ?, end_date = ?
                 WHERE id = ?
                   AND contract_id IN (
                       SELECT id FROM contracts WHERE chat_id = ?
                   )
                 """,
                 (
+                    start_date.strftime(DATE_FMT) if start_date is not None else None,
                     end_date.strftime(DATE_FMT),
                     stage_id,
                     chat_id,
