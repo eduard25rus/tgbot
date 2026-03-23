@@ -676,7 +676,7 @@ def render_discount_form(
     is_required: bool,
     active_tab: str,
 ) -> str:
-    current_label = '<span class="discount-placeholder">—</span>'
+    current_label = '<span class="chip">Не установлено</span>'
     percent_value = ""
     min_amount_value = ""
     if current_discount is not None and current_min_amount is not None:
@@ -689,7 +689,7 @@ def render_discount_form(
     elif is_required:
         current_label = '<span class="discount-alert">Введите<br>максимальное<br>снижение!</span>'
     if is_locked:
-        return '<span class="discount-value"><span class="discount-placeholder">—</span></span>'
+        return f'<span class="discount-value">{current_label}</span>'
     return f"""
     <details class="status-menu discount-menu">
       <summary><span class="discount-value">{current_label}</span></summary>
@@ -868,7 +868,7 @@ def render_discount_display(
         )
     if is_required:
         return '<span class="discount-value"><span class="discount-alert">Введите<br>максимальное<br>снижение!</span></span>'
-    return '<span class="discount-value"><span class="discount-placeholder">—</span></span>'
+    return '<span class="discount-value"><span class="chip">Не установлено</span></span>'
 
 
 def render_submit_for_procurement(owner_chat_id: int, item, current_values: dict[str, str], active_tab: str) -> str:
