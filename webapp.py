@@ -2694,6 +2694,10 @@ def layout(
     .auction-table th:nth-child(7) {{
       width: 13%;
     }}
+    .auction-table th:nth-child(6) .column-heading-adjust {{
+      display: inline-block;
+      transform: translateX(-8px);
+    }}
     .auction-table td:nth-child(6) .status-popover,
     .auction-table td:nth-child(7) .status-popover {{
       left: auto;
@@ -3931,7 +3935,7 @@ def render_auctions_section(
             <th class="nowrap">Сумма</th>
             <th>Считать</th>
             <th>Заявка</th>
-            <th>Макс. снижение</th>
+            <th><span class="column-heading-adjust">Макс. снижение</span></th>
             <th>Итог</th>
           </tr>
         </thead>
