@@ -2712,6 +2712,10 @@ def layout(
       width: fit-content;
       margin: 0 auto;
     }}
+    .auction-cell-center .chip {{
+      width: min(170px, 100%);
+      box-sizing: border-box;
+    }}
     .auction-cell-center .discount-value {{
       display: grid;
       width: 100%;
