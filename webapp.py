@@ -574,12 +574,16 @@ def auction_current_chip(field_name: str, current_values: dict[str, str]) -> str
 
 
 def estimate_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
-    tooltip = status_tooltip(item.estimate_status_updated_at, item.estimate_status_updated_by_name, show_unknown_author=True)
+    tooltip = ""
+    if current_values["estimate_status"] != "pending":
+        tooltip = status_tooltip(item.estimate_status_updated_at, item.estimate_status_updated_by_name, show_unknown_author=True)
     return auction_chip(current_values["estimate_status"], AUCTION_ESTIMATE_META, tooltip)
 
 
 def submit_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
-    tooltip = status_tooltip(item.submit_status_updated_at, item.submit_status_updated_by_name, show_unknown_author=True)
+    tooltip = ""
+    if current_values["submit_decision_status"] != "pending":
+        tooltip = status_tooltip(item.submit_status_updated_at, item.submit_status_updated_by_name, show_unknown_author=True)
     return auction_chip(current_values["submit_decision_status"], AUCTION_SUBMIT_DECISION_META, tooltip)
 
 
