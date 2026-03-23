@@ -317,6 +317,62 @@ def with_preview_role(current_user: dict | None, preview_role: str) -> dict | No
     return effective_user
 
 
+def compute_role_notifications(storage: Storage, owner_chat_id: int | None, current_user: dict | None) -> dict[str, str | int | bool]:
+    base = {
+        "active": False,
+        "count": 0,
+        "title": "Уведомления",
+        "primary": "Активных задач по этой роли сейчас нет.",
+        "secondary": "",
+        "tertiary": "",
+    }
+    if current_user is None or owner_chat_id is None:
+        return base
+    all_auctions = storage.list_auctions(owner_chat_id)
+    active_auctions = [item for item in all_auctions if not is_auction_archived(item) and not is_auction_deleted(item)]
+    if is_procurement_user(current_user):
+        tasks = [item for item in active_auctions if item.submit_decision_status == "approved"]
+        nearest = min(tasks, key=lambda item: item.bid_deadline, default=None)
+        count = len(tasks)
+        return {
+            "active": count > 0,
+            "count": count,
+            "title": "Уведомления закупок",
+            "primary": f"Необходимо подать заявок: {count}",
+            "secondary": (
+                f"Ближайший дедлайн подачи: {format_date(nearest.bid_deadline)}"
+                if nearest is not None
+                else "Сейчас нет активных задач по подаче."
+            ),
+            "tertiary": (
+                f"До ближайшей подачи заявки осталось: {(nearest.bid_deadline - date.today()).days} дн."
+                if nearest is not None
+                else ""
+            ),
+        }
+    if is_supply_user(current_user):
+        tasks = [item for item in active_auctions if item.estimate_status == "approved"]
+        nearest = min(tasks, key=lambda item: item.bid_deadline, default=None)
+        count = len(tasks)
+        return {
+            "active": count > 0,
+            "count": count,
+            "title": "Уведомления снабжения",
+            "primary": f"Необходимо просчитать аукционов: {count}",
+            "secondary": (
+                f"Ближайший дедлайн просчета: {format_date(nearest.bid_deadline)}"
+                if nearest is not None
+                else "Сейчас нет активных задач по просчету."
+            ),
+            "tertiary": (
+                f"До ближайшего дедлайна по просчету осталось: {(nearest.bid_deadline - date.today()).days} дн."
+                if nearest is not None
+                else ""
+            ),
+        }
+    return base
+
+
 def procurement_status_allowed(current_user: dict | None, auction, estimate_status: str, submit_decision_status: str, result_status: str) -> bool:
     if not is_procurement_user(current_user):
         return True
@@ -1080,10 +1136,43 @@ def layout(
         for section_id, label, href in visible_sections
     )
     hero_title, hero_copy = SECTION_HERO.get(active_section, SECTION_HERO["contracts"])
+    notification_panel = ""
+    if current_user:
+        notification = current_user.get("role_notifications", {})
+        count = int(notification.get("count", 0) or 0)
+        badge = f'<span class="notification-badge">{count}</span>' if count > 0 else ""
+        notification_panel = f"""
+        <details class="notification-menu">
+          <summary class="notification-btn{' active' if notification.get('active') else ''}" title="Уведомления">
+            <svg class="notification-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 4a4 4 0 0 0-4 4v1.3c0 .8-.24 1.58-.68 2.24L6 13.5V15h12v-1.5l-1.32-1.96A4 4 0 0 1 16 9.3V8a4 4 0 0 0-4-4Z" />
+              <path d="M10 18a2 2 0 0 0 4 0" />
+            </svg>
+            {badge}
+          </summary>
+          <div class="notification-popover">
+            <div class="notification-title">{escape(str(notification.get("title", "Уведомления")))}</div>
+            <div class="notification-line">{escape(str(notification.get("primary", "")))}</div>
+            {
+              f'<div class="notification-line">{escape(str(notification.get("secondary", "")))}</div>'
+              if notification.get("secondary")
+              else ""
+            }
+            {
+              f'<div class="notification-line">{escape(str(notification.get("tertiary", "")))}</div>'
+              if notification.get("tertiary")
+              else ""
+            }
+          </div>
+        </details>
+        """
     user_panel = (
         f"""
         <div class="current-user-card">
-          <div class="current-user-name">{escape(current_user["full_name"])}</div>
+          <div class="current-user-top">
+            <div class="current-user-name">{escape(current_user["full_name"])}</div>
+            {notification_panel}
+          </div>
           <div class="current-user-email">{escape(current_user["login"])}</div>
           {
             f'''
@@ -1272,6 +1361,12 @@ def layout(
       text-align: right;
       backdrop-filter: blur(10px);
     }}
+    .current-user-top {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }}
     .current-user-name {{
       font-size: 15px;
       font-weight: 700;
@@ -1317,6 +1412,86 @@ def layout(
       margin-top: 10px;
       font-size: 12px;
       border-bottom: 1px dashed rgba(255,255,255,0.45);
+    }}
+    .notification-menu {{
+      position: relative;
+      display: inline-block;
+      flex: 0 0 auto;
+    }}
+    .notification-menu summary {{
+      list-style: none;
+    }}
+    .notification-menu summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .notification-btn {{
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.10);
+      color: white;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      cursor: pointer;
+    }}
+    .notification-btn.active {{
+      background: rgba(255, 214, 102, 0.22);
+      border-color: rgba(255, 214, 102, 0.6);
+      color: #fff6cc;
+      box-shadow: 0 0 0 3px rgba(255, 214, 102, 0.14);
+    }}
+    .notification-icon {{
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }}
+    .notification-badge {{
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: #ffd666;
+      color: #5f4300;
+      font-size: 11px;
+      font-weight: 800;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      position: absolute;
+      top: -4px;
+      right: -4px;
+    }}
+    .notification-popover {{
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      width: 290px;
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255,250,242,0.98);
+      box-shadow: var(--card-shadow);
+      display: grid;
+      gap: 8px;
+      text-align: left;
+      color: var(--ink);
+      z-index: 30;
+    }}
+    .notification-title {{
+      font-size: 14px;
+      font-weight: 800;
+    }}
+    .notification-line {{
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--muted);
     }}
     .auth-wrap {{
       min-height: 58vh;
@@ -3575,6 +3750,8 @@ def app(environ, start_response):
         preview_role = ""
     current_user = with_preview_role(current_user, preview_role)
     current_owner = current_user["owner_chat_id"] if current_user else None
+    if current_user is not None:
+        current_user["role_notifications"] = compute_role_notifications(storage, current_owner, current_user)
     owners = owner_options(storage)
 
     path = environ.get("PATH_INFO", "/")
