@@ -392,6 +392,41 @@ def compute_role_notifications(storage: Storage, owner_chat_id: int | None, curr
             ],
             "href": f"/auctions?owner={owner_chat_id}&tab=active&task_view=1#auction-registry",
         }
+    if has_permission(current_user, "auctions", "edit"):
+        decision_tasks = [item for item in active_auctions if item.submit_decision_status == "pending"]
+        discount_tasks = [
+            item
+            for item in active_auctions
+            if item.submit_decision_status == "approved" and item.max_discount_percent is None
+        ]
+        decision_tasks.sort(key=lambda item: (item.bid_deadline, item.id))
+        discount_tasks.sort(key=lambda item: (item.bid_deadline, item.id))
+        ordered_tasks = [("Требует решения", item) for item in decision_tasks] + [
+            ("Нужно установить снижение", item) for item in discount_tasks
+        ]
+        nearest = min((item for _, item in ordered_tasks), key=lambda item: item.bid_deadline, default=None)
+        return {
+            "active": bool(ordered_tasks),
+            "count": len(ordered_tasks),
+            "title": "Уведомления руководства",
+            "primary": f"Аукционов, требующих решения по подаче: {len(decision_tasks)}",
+            "secondary": f"Аукционов, где нужно установить максимальное снижение: {len(discount_tasks)}",
+            "tertiary": (
+                f"До ближайшего дедлайна осталось: {(nearest.bid_deadline - date.today()).days} дн."
+                if nearest is not None
+                else ""
+            ),
+            "items": [
+                {
+                    "title": item.title,
+                    "deadline": format_date(item.bid_deadline),
+                    "days_left": (item.bid_deadline - date.today()).days,
+                    "kind": kind,
+                }
+                for kind, item in ordered_tasks[:3]
+            ],
+            "href": f"/auctions?owner={owner_chat_id}&tab=active&task_view=1#auction-registry",
+        }
     return base
 
 
@@ -1167,6 +1202,11 @@ def layout(
             f'''
             <div class="notification-task">
               <div class="notification-task-title">{escape(str(item.get("title", "")))}</div>
+              {
+                f'<div class="notification-task-kind">{escape(str(item.get("kind", "")))}</div>'
+                if item.get("kind")
+                else ""
+              }
               <div class="notification-task-meta">До {escape(str(item.get("deadline", "")))} · осталось {escape(str(item.get("days_left", "")))} дн.</div>
             </div>
             '''
@@ -1554,6 +1594,14 @@ def layout(
       font-weight: 700;
       color: var(--ink);
       line-height: 1.35;
+    }}
+    .notification-task-kind {{
+      margin-top: 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--brand);
+      font-weight: 700;
     }}
     .notification-task-meta {{
       margin-top: 4px;
@@ -3489,6 +3537,16 @@ def render_auctions_section(
     elif is_supply_user(current_user):
         role_tasks = [item for item in active_auctions if item.estimate_status == "approved"]
         role_tasks.sort(key=lambda item: (item.bid_deadline, item.id))
+    elif has_permission(current_user, "auctions", "edit"):
+        decision_tasks = [item for item in active_auctions if item.submit_decision_status == "pending"]
+        discount_tasks = [
+            item
+            for item in active_auctions
+            if item.submit_decision_status == "approved" and item.max_discount_percent is None
+        ]
+        decision_tasks.sort(key=lambda item: (item.bid_deadline, item.id))
+        discount_tasks.sort(key=lambda item: (item.bid_deadline, item.id))
+        role_tasks = decision_tasks + discount_tasks
     if task_view and active_tab == "active":
         auctions = role_tasks
     elif active_tab == "archive":
@@ -3558,7 +3616,13 @@ def render_auctions_section(
     )
     task_toolbar = ""
     if task_view and active_tab == "active":
-        task_label = "Задачи отдела госзакупок" if is_procurement_user(current_user) else "Задачи отдела снабжения" if is_supply_user(current_user) else "Задачи"
+        task_label = (
+            "Задачи отдела госзакупок"
+            if is_procurement_user(current_user)
+            else "Задачи отдела снабжения"
+            if is_supply_user(current_user)
+            else "Задачи руководства"
+        )
         task_toolbar = f"""
         <div class="action-row" style="justify-content: space-between; margin-bottom: 16px;">
           <div class="chip warn">{task_label}</div>
@@ -3706,6 +3770,16 @@ def auctions_for_current_view(storage: Storage, owner_chat_id: int, current_user
             return [item for item in active_auctions if item.submit_decision_status == "approved"]
         if is_supply_user(current_user):
             return [item for item in active_auctions if item.estimate_status == "approved"]
+        if has_permission(current_user, "auctions", "edit"):
+            decision_tasks = [item for item in active_auctions if item.submit_decision_status == "pending"]
+            discount_tasks = [
+                item
+                for item in active_auctions
+                if item.submit_decision_status == "approved" and item.max_discount_percent is None
+            ]
+            decision_tasks.sort(key=lambda item: (item.bid_deadline, item.id))
+            discount_tasks.sort(key=lambda item: (item.bid_deadline, item.id))
+            return decision_tasks + discount_tasks
     if active_tab == "archive":
         return archived_auctions
     if active_tab == "deleted":
