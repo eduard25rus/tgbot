@@ -386,6 +386,14 @@ def submit_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
     return auction_chip(current_values["submit_decision_status"], AUCTION_SUBMIT_DECISION_META, tooltip)
 
 
+def auction_current_chip_with_tooltip(field_name: str, item, current_values: dict[str, str]) -> str:
+    if field_name == "estimate_status":
+        return estimate_chip_with_tooltip(item, current_values)
+    if field_name == "submit_decision_status":
+        return submit_chip_with_tooltip(item, current_values)
+    return auction_current_chip(field_name, current_values)
+
+
 def result_summary(item) -> str:
     if item.result_status not in {"won", "lost"} or item.final_bid_amount is None or item.amount <= 0:
         return ""
@@ -483,7 +491,7 @@ def render_auction_status_form(
         )
     return f"""
     <details class="status-menu">
-      <summary>{auction_current_chip(active_field, current_values)}</summary>
+      <summary>{auction_current_chip_with_tooltip(active_field, item, current_values)}</summary>
       <form class="status-popover" method="post" action="/auctions/{auction_id}/status?owner={owner_chat_id}&tab={escape(active_tab)}">
         {''.join(hidden_inputs)}
         {''.join(option_buttons)}
@@ -534,7 +542,7 @@ def render_estimate_form(owner_chat_id: int, item, current_values: dict[str, str
     <details class="status-menu result-menu">
       <summary>
         <span class="discount-value">
-          {auction_current_chip("estimate_status", current_values)}
+          {estimate_chip_with_tooltip(item, current_values)}
           {estimate_summary(item)}
         </span>
       </summary>
