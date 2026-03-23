@@ -325,11 +325,12 @@ def preview_role_code(label: str) -> str:
     if not normalized:
         return ""
     folded = re.sub(r"[^a-zA-Zа-яА-Я0-9]+", " ", normalized).strip().lower()
-    if folded in {"отдел госзакупок", "procurement"}:
+    compact = folded.replace(" ", "")
+    if folded in {"отдел госзакупок", "отдел гос закупок", "procurement"} or compact in {"отделгосзакупок", "procurement"}:
         return "procurement"
-    if folded in {"отдел снабжения", "supply"}:
+    if folded in {"отдел снабжения", "supply"} or compact in {"отделснабжения", "supply"}:
         return "supply"
-    if folded in {"руководство компании", "management"}:
+    if folded in {"руководство компании", "management"} or compact in {"руководствокомпании", "management"}:
         return "management"
     if folded in {"админ", "bigboss", "admin"}:
         return ""
