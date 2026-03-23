@@ -132,6 +132,10 @@ def format_date(value: date) -> str:
     return value.strftime("%d-%m-%Y")
 
 
+def format_datetime(value: datetime) -> str:
+    return value.strftime("%d-%m-%Y %H:%M")
+
+
 def parse_date(raw: str) -> date:
     raw = raw.strip()
     for fmt in ("%d-%m-%Y", "%Y-%m-%d"):
@@ -372,8 +376,13 @@ def result_summary(item) -> str:
 def estimate_summary(item) -> str:
     if item.estimate_status != "calculated" or item.material_cost is None:
         return ""
+    tooltip = (
+        f' title="Установлено: {escape(format_datetime(item.estimate_status_updated_at))}"'
+        if item.estimate_status_updated_at is not None
+        else ""
+    )
     return (
-        '<span class="result-meta result-meta-stack">'
+        f'<span class="result-meta result-meta-stack"{tooltip}>'
         '<span>Материалы:</span>'
         f'<span>{escape(format_amount(item.material_cost))}</span>'
         '</span>'
@@ -3712,6 +3721,7 @@ def app(environ, start_response):
                 raise ValueError("Аукцион не найден")
             estimate_status = form.get("estimate_status", auction.estimate_status)
             material_cost = auction.material_cost
+            estimate_status_updated_at = auction.estimate_status_updated_at
             submit_decision_status = form.get("submit_decision_status", auction.submit_decision_status)
             result_status = form.get("result_status", auction.result_status)
             final_bid_amount = auction.final_bid_amount
@@ -3725,8 +3735,12 @@ def app(environ, start_response):
                     raise ValueError("Укажите стоимость материалов")
                 if material_cost <= 0:
                     raise ValueError("Стоимость материалов должна быть больше 0")
+                if auction.estimate_status != "calculated" or auction.material_cost != material_cost:
+                    estimate_status_updated_at = datetime.now()
             else:
                 material_cost = None
+                if estimate_status != auction.estimate_status:
+                    estimate_status_updated_at = datetime.now() if estimate_status == "not_calculated" else None
             application_status = "submitted" if submit_decision_status == "submitted" else "not_submitted"
             if submit_decision_status != "submitted":
                 result_status = "not_participated"
@@ -3758,6 +3772,7 @@ def app(environ, start_response):
                 auction_id,
                 estimate_status,
                 material_cost,
+                estimate_status_updated_at,
                 submit_decision_status,
                 application_status,
                 result_status,
