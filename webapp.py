@@ -1383,7 +1383,6 @@ def layout(
     active_section: str,
     current_user: dict | None = None,
 ) -> str:
-    admin_mode = has_active_admin_mode(current_user)
     current_preview_options = current_user.get("preview_role_options", ROLE_PREVIEW_OPTIONS) if current_user else ROLE_PREVIEW_OPTIONS
     visible_sections = [
         (section_id, label, href)
@@ -1491,19 +1490,6 @@ def layout(
         </div>
         """
     )
-    sidebar_notes = (
-        """
-      <div class="sidebar-note">
-        Контракты уже рабочие. Доступы тоже начинаем собирать всерьез, чтобы дальше не городить роли поверх хаоса.
-      </div>
-      <div class="sidebar-note">
-        Локальный прототип. Дальше можно вынести это в общий backend и подключить вместе с Telegram.
-      </div>
-        """
-        if admin_mode
-        else ""
-    )
-    next_step_cta = '<span class="ghost-btn">Следующий шаг: связать разделы в единую систему</span>' if admin_mode else ""
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -2844,7 +2830,12 @@ def layout(
         </div>
       </div>
       <nav class="nav">{nav_links}</nav>
-      {sidebar_notes}
+      <div class="sidebar-note">
+        Контракты уже рабочие. Доступы тоже начинаем собирать всерьез, чтобы дальше не городить роли поверх хаоса.
+      </div>
+      <div class="sidebar-note">
+        Локальный прототип. Дальше можно вынести это в общий backend и подключить вместе с Telegram.
+      </div>
     </aside>
     <div class="content">
       <header class="hero">
@@ -2857,11 +2848,6 @@ def layout(
         <div class="owner-switch">
           {user_panel}
         </div>
-      </div>
-      <div class="cta-row">
-        <a class="ghost-btn" href="/contracts">Контракты</a>
-        {f'<a class="ghost-btn" href="/contracts?owner={current_owner}">Обновить данные</a>' if current_owner is not None else ''}
-        {next_step_cta}
       </div>
       </header>
       <main class="page">{body}</main>
@@ -3991,43 +3977,6 @@ def render_auctions_section(
       </form>
     </section>
     """
-    admin_notes = (
-        """
-    <section class="stats">
-      <section class="card panel">
-        <div class="panel-head">
-          <div>
-            <h2 class="panel-title">Логика статусов</h2>
-            <div class="panel-sub">Именно так сейчас лучше собирать цепочку.</div>
-          </div>
-        </div>
-        <div class="contract-meta">
-          • Считать: отдельное решение руководства, нужно ли вообще считать смету по лоту<br>
-          • Заявка: теперь это одна колонка, где желтый статус означает «подавать заявку», а зеленый — «заявка подана»<br>
-          • Макс. снижение: управленческий предел по проценту и минимальной сумме, ниже которой не идем<br>
-          • Пока заявка не подана, итог автоматически остается в логике «Не участвовали»<br>
-          • После статуса «Заявка подана» доступны варианты: «Ждем итог», «Выигран», «Проигран», «Заявка отклонена»
-        </div>
-      </section>
-      <section class="card panel">
-        <div class="panel-head">
-          <div>
-            <h2 class="panel-title">Следующий шаг</h2>
-            <div class="panel-sub">Что логично добавить в следующей итерации</div>
-          </div>
-        </div>
-        <div class="contract-meta">
-          • Inline-переключение статусов прямо в таблице<br>
-          • Ответственный сотрудник по каждому аукциону<br>
-          • Комментарии и история работы по лоту<br>
-          • Просроченные дедлайны подачи отдельным списком
-        </div>
-      </section>
-    </section>
-        """
-        if has_active_admin_mode(current_user)
-        else ""
-    )
     return f"""
     {stats}
     {flash_html}
@@ -4063,7 +4012,37 @@ def render_auctions_section(
       }
     </section>
     {add_auction_block}
-    {admin_notes}
+    <section class="stats">
+      <section class="card panel">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title">Логика статусов</h2>
+            <div class="panel-sub">Именно так сейчас лучше собирать цепочку.</div>
+          </div>
+        </div>
+        <div class="contract-meta">
+          • Считать: отдельное решение руководства, нужно ли вообще считать смету по лоту<br>
+          • Заявка: теперь это одна колонка, где желтый статус означает «подавать заявку», а зеленый — «заявка подана»<br>
+          • Макс. снижение: управленческий предел по проценту и минимальной сумме, ниже которой не идем<br>
+          • Пока заявка не подана, итог автоматически остается в логике «Не участвовали»<br>
+          • После статуса «Заявка подана» доступны варианты: «Ждем итог», «Выигран», «Проигран», «Заявка отклонена»
+        </div>
+      </section>
+      <section class="card panel">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title">Следующий шаг</h2>
+            <div class="panel-sub">Что логично добавить в следующей итерации</div>
+          </div>
+        </div>
+        <div class="contract-meta">
+          • Inline-переключение статусов прямо в таблице<br>
+          • Ответственный сотрудник по каждому аукциону<br>
+          • Комментарии и история работы по лоту<br>
+          • Просроченные дедлайны подачи отдельным списком
+        </div>
+      </section>
+    </section>
     """
 
 
