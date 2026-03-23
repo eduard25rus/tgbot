@@ -456,8 +456,8 @@ class Storage:
                 WHERE id = ? AND owner_chat_id = ?
                 """,
                 (
-                    full_name.strip() or ("BigBoss" if is_super_admin else "Пользователь"),
-                    role_name.strip() or ("BigBoss" if is_super_admin else "Viewer"),
+                    full_name.strip() or ("Админ" if is_super_admin else "Пользователь"),
+                    role_name.strip() or ("Админ" if is_super_admin else "Viewer"),
                     user_id,
                     owner_chat_id,
                 ),
@@ -1665,6 +1665,14 @@ class Storage:
         ).fetchone()
         if row is not None:
             admin_id = int(row["id"])
+            conn.execute(
+                """
+                UPDATE web_users
+                SET role_name = CASE WHEN role_name IN ('BigBoss', '', 'Admin') THEN 'Админ' ELSE role_name END
+                WHERE id = ?
+                """,
+                (admin_id,),
+            )
             self._replace_web_user_permissions(conn, admin_id, self._full_access_permissions())
             return admin_id
 
@@ -1674,7 +1682,7 @@ class Storage:
                 owner_chat_id, email, full_name, role_name, password_state,
                 is_active, is_super_admin, created_at
             )
-            VALUES (?, ?, 'BigBoss', 'BigBoss', 'local_only', 1, 1, ?)
+            VALUES (?, ?, 'Админ', 'Админ', 'local_only', 1, 1, ?)
             """,
             (
                 owner_chat_id,

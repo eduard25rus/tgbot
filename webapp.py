@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import hashlib
 import secrets
+import re
 from datetime import datetime
 from datetime import date
 from datetime import timedelta
@@ -74,7 +75,7 @@ SESSION_COOKIE = "felis_session"
 PREVIEW_ROLE_COOKIE = "felis_preview_role"
 VLADIVOSTOK_TZ = timezone(timedelta(hours=10))
 ROLE_PREVIEW_OPTIONS = [
-    ("", "Обычный режим"),
+    ("", "Админ"),
     ("procurement", "Отдел госзакупок"),
     ("supply", "Отдел снабжения"),
     ("management", "Руководство компании"),
@@ -323,17 +324,20 @@ def preview_role_code(label: str) -> str:
     normalized = label.strip()
     if not normalized:
         return ""
-    if normalized in {"Отдел госзакупок", "procurement"}:
+    folded = re.sub(r"[^a-zA-Zа-яА-Я0-9]+", " ", normalized).strip().lower()
+    if folded in {"отдел госзакупок", "procurement"}:
         return "procurement"
-    if normalized in {"Отдел снабжения", "supply"}:
+    if folded in {"отдел снабжения", "supply"}:
         return "supply"
-    if normalized in {"Руководство компании", "management"}:
+    if folded in {"руководство компании", "management"}:
         return "management"
+    if folded in {"админ", "bigboss", "admin"}:
+        return ""
     return f"role_{hashlib.sha1(normalized.encode('utf-8')).hexdigest()[:10]}"
 
 
 def preview_role_options(storage: Storage, owner_chat_id: int | None, current_user: dict | None) -> list[tuple[str, str]]:
-    options: list[tuple[str, str]] = [("", "Обычный режим")]
+    options: list[tuple[str, str]] = [("", "Админ")]
     if current_user is None or owner_chat_id is None or not current_user.get("is_super_admin"):
         return options
     seen = {""}
@@ -345,6 +349,8 @@ def preview_role_options(storage: Storage, owner_chat_id: int | None, current_us
         options.append((code, label))
         seen.add(code)
     for user in storage.list_web_users(owner_chat_id):
+        if user.get("is_super_admin"):
+            continue
         label = (user.get("role_name") or "").strip()
         code = preview_role_code(label)
         if not code or code in seen:
@@ -3355,7 +3361,7 @@ def render_access_section(
       </article>
       <article class="card stat-card">
         <div class="stat-label">Главный доступ</div>
-        <div class="stat-value">BigBoss</div>
+        <div class="stat-value">Админ</div>
         <div class="stat-note">Полные права закреплены за вами</div>
       </article>
     </section>
@@ -3526,7 +3532,7 @@ def render_access_section(
             </div>
           </div>
         <div class="contract-meta">
-          • Вы остаетесь главным администратором BigBoss<br>
+          • Вы остаетесь главным администратором системы<br>
           • Пользователю задаем отдельный логин для входа<br>
           • По каждому разделу отдельно отмечаем просмотр и редактирование<br>
           • После создания система дает ссылку на установку пароля<br>
