@@ -18,6 +18,7 @@ class Contract:
     chat_id: int
     title: str
     description: str
+    signed_date: date
     end_date: date
     advance_percent: Optional[float]
     created_at: datetime
@@ -119,6 +120,7 @@ class Storage:
                     chat_id INTEGER NOT NULL,
                     title TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
+                    signed_date TEXT,
                     end_date TEXT NOT NULL,
                     advance_percent REAL,
                     created_at TEXT NOT NULL,
@@ -296,6 +298,15 @@ class Storage:
             )
             if "advance_percent" not in contract_columns:
                 conn.execute("ALTER TABLE contracts ADD COLUMN advance_percent REAL")
+            if "signed_date" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN signed_date TEXT")
+            conn.execute(
+                """
+                UPDATE contracts
+                SET signed_date = substr(created_at, 1, 10)
+                WHERE signed_date IS NULL OR signed_date = ''
+                """
+            )
             grant_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(access_grants)").fetchall()
             }
@@ -1234,7 +1245,7 @@ class Storage:
                 (viewer_username, viewer_name, owner_chat_id, viewer_user_id),
             )
 
-    def add_contract(self, chat_id: int, title: str, description: str, end_date: date, advance_percent: float | None = None) -> int:
+    def add_contract(self, chat_id: int, title: str, description: str, signed_date: date, end_date: date, advance_percent: float | None = None) -> int:
         with self.connection() as conn:
             conn.execute(
                 """
@@ -1245,10 +1256,10 @@ class Storage:
             )
             cursor = conn.execute(
                 """
-                INSERT INTO contracts (chat_id, title, description, end_date, advance_percent, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO contracts (chat_id, title, description, signed_date, end_date, advance_percent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (chat_id, title.strip(), description.strip(), end_date.strftime(DATE_FMT), advance_percent, datetime.utcnow().isoformat()),
+                (chat_id, title.strip(), description.strip(), signed_date.strftime(DATE_FMT), end_date.strftime(DATE_FMT), advance_percent, datetime.utcnow().isoformat()),
             )
             return int(cursor.lastrowid)
 
@@ -1616,7 +1627,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, chat_id, title, description, end_date, advance_percent, created_at
+                SELECT id, chat_id, title, description, signed_date, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ?
                 ORDER BY end_date ASC, id ASC
@@ -1629,7 +1640,7 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT id, chat_id, title, description, end_date, advance_percent, created_at
+                SELECT id, chat_id, title, description, signed_date, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ? AND id = ?
                 """,
@@ -1783,6 +1794,7 @@ class Storage:
             chat_id=row["chat_id"],
             title=row["title"],
             description=row["description"],
+            signed_date=date.fromisoformat(row["signed_date"]) if row["signed_date"] is not None else datetime.fromisoformat(row["created_at"]).date(),
             end_date=date.fromisoformat(row["end_date"]),
             advance_percent=float(row["advance_percent"]) if row["advance_percent"] is not None else None,
             created_at=datetime.fromisoformat(row["created_at"]),

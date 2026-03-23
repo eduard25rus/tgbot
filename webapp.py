@@ -268,6 +268,7 @@ def contract_payload(storage: Storage, owner_chat_id: int) -> list[dict]:
         paid_ratio = (paid_amount / total_amount) if total_amount > 0 else 0.0
         advance_amount = round(total_amount * (contract.advance_percent or 0) / 100, 2) if total_amount > 0 else 0.0
         overdue_stages = sum(1 for stage in stages if stage.end_date < date.today())
+        first_stage_start_date = next((stage.start_date for stage in stages if stage.start_date is not None), None)
         payload.append(
             {
                 "contract": contract,
@@ -279,6 +280,7 @@ def contract_payload(storage: Storage, owner_chat_id: int) -> list[dict]:
                 "paid_ratio": paid_ratio,
                 "advance_amount": advance_amount,
                 "overdue_stages": overdue_stages,
+                "first_stage_start_date": first_stage_start_date,
             }
         )
     return payload
@@ -3403,12 +3405,9 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
     for index, item in enumerate(payload, start=1):
         contract = item["contract"]
         progress_width = round(item["paid_ratio"] * 100, 1)
-        stages_brief = "".join(
-            f'<div class="contract-table-subtle">Этап {stage.position} · {format_amount(stage.amount)} · {format_date(stage.end_date)}</div>'
-            for stage in item["stages"][:3]
-        )
-        if len(item["stages"]) > 3:
-            stages_brief += f'<div class="contract-table-subtle">Еще этапов: {len(item["stages"]) - 3}</div>'
+        deadline_tooltip = ""
+        if item["first_stage_start_date"] is not None:
+            deadline_tooltip = f' class="auction-added-tooltip" data-tooltip="Старт работ: {escape(format_date(item["first_stage_start_date"]))}"'
         contract_rows.append(
             f"""
             <tr>
@@ -3416,29 +3415,25 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
                 <a class="contract-table-link" href="/contracts/{contract.id}?owner={owner_chat_id}">
                   <div class="auction-head">
                     <div class="auction-seq">#{index}</div>
-                    <div class="auction-number">Контракт №{contract.id}</div>
                   </div>
                   <div class="timeline-title">{escape(contract.title)}</div>
                 </a>
                 <div class="contract-table-subtle">{escape(contract.description) if contract.description else 'Описание пока не заполнено'}</div>
+                <div class="contract-table-subtle" style="text-align:right;">Заключен: {format_date(contract.signed_date)}</div>
               </td>
-              <td class="nowrap">
-                <div>{format_date(contract.end_date)}</div>
-                <div class="contract-table-subtle">Этапов: {len(item["stages"])}</div>
+              <td class="nowrap" style="text-align:center;">
+                <div{deadline_tooltip}>{format_date(contract.end_date)}</div>
               </td>
               <td class="nowrap">
                 <div class="amount-value">{format_amount(item["total_amount"])}</div>
               </td>
-              <td class="nowrap">
-                {contract_advance_summary(contract.advance_percent, item["advance_amount"])}
+              <td class="nowrap" style="text-align:center;">
+                {format_percent(contract.advance_percent) if contract.advance_percent else '—'}
               </td>
-              <td class="nowrap">
+              <td class="nowrap" style="text-align:center;">
                 <div>{format_amount(item["paid_amount"])}</div>
                 <div class="contract-table-subtle">Долг: {format_amount(item["debt_amount"])}</div>
                 <div class="contract-table-subtle">{format_percent(progress_width)} оплачено</div>
-              </td>
-              <td>
-                {stages_brief or '<span class="contract-table-subtle">Этапов пока нет</span>'}
               </td>
             </tr>
             """
@@ -3488,7 +3483,6 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
               <th class="nowrap">Сумма</th>
               <th class="nowrap">Аванс</th>
               <th class="nowrap">Оплачено / долг</th>
-              <th>Этапы</th>
             </tr>
           </thead>
           <tbody>{contracts_table}</tbody>
@@ -3515,6 +3509,10 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
           <div class="field">
             <label>Общая сумма</label>
             <input type="text" name="total_amount" placeholder="15000000" data-money-input="1" required>
+          </div>
+          <div class="field">
+            <label>Дата заключения контракта</label>
+            <input type="date" name="signed_date" required>
           </div>
           <div class="field">
             <label>Количество этапов</label>
@@ -4528,6 +4526,7 @@ def app(environ, start_response):
             title = form["title"].strip()
             description = form.get("description", "").strip()
             total_amount = parse_amount(form["total_amount"])
+            signed_date = parse_date(form["signed_date"])
             stage_count = int(form.get("stage_count", "1"))
             has_advance = form.get("has_advance") == "1"
             advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
@@ -4559,7 +4558,7 @@ def app(environ, start_response):
             if abs(stage_total - total_amount) > 0.01:
                 raise ValueError("Сумма этапов должна совпадать с общей суммой контракта")
             contract_end_date = max(item[3] for item in stage_specs)
-            contract_id = storage.add_contract(current_owner, title, description, contract_end_date, advance_percent)
+            contract_id = storage.add_contract(current_owner, title, description, signed_date, contract_end_date, advance_percent)
             for index, amount, start_date, end_date, notes in stage_specs:
                 storage.add_stage(contract_id, index, notes, start_date, end_date, amount)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
