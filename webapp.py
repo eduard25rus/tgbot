@@ -1358,6 +1358,9 @@ def layout(
       box-shadow: var(--card-shadow);
       display: grid;
       gap: 18px;
+      position: relative;
+      z-index: 5;
+      overflow: visible;
     }}
     .hero-top {{
       display: flex;
@@ -1455,6 +1458,10 @@ def layout(
       position: relative;
       display: inline-block;
       flex: 0 0 auto;
+      z-index: 80;
+    }}
+    .notification-menu[open] {{
+      z-index: 120;
     }}
     .notification-menu summary {{
       list-style: none;
@@ -1520,7 +1527,7 @@ def layout(
       gap: 8px;
       text-align: left;
       color: var(--ink);
-      z-index: 30;
+      z-index: 160;
     }}
     .notification-title {{
       font-size: 14px;
