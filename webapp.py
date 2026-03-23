@@ -514,7 +514,17 @@ def supply_status_allowed(current_user: dict | None, auction, estimate_status: s
 def management_status_allowed(current_user: dict | None, auction, estimate_status: str, submit_decision_status: str, result_status: str) -> bool:
     if not is_management_user(current_user):
         return True
-    if result_status != auction.result_status:
+    expected_result_status = auction.result_status
+    if auction.submit_decision_status != "submitted":
+        expected_result_status = "not_participated"
+    elif expected_result_status == "not_participated":
+        expected_result_status = "pending"
+    requested_result_status = result_status
+    if submit_decision_status != "submitted":
+        requested_result_status = "not_participated"
+    elif requested_result_status == "not_participated":
+        requested_result_status = "pending"
+    if requested_result_status != expected_result_status:
         return False
     estimate_changed = estimate_status != auction.estimate_status
     submit_changed = submit_decision_status != auction.submit_decision_status
