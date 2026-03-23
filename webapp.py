@@ -191,6 +191,15 @@ def parse_optional_number(raw: str) -> float | None:
     return round(float(cleaned), 2)
 
 
+def validate_auction_number(raw: str) -> str:
+    normalized = raw.strip()
+    if not normalized:
+        raise ValueError("Нужно указать номер аукциона")
+    if not normalized.isdigit():
+        raise ValueError("В номере аукциона должны быть только цифры")
+    return normalized
+
+
 def auction_min_amount(total_amount: float, discount_percent: float) -> float:
     return round(total_amount * (1 - discount_percent / 100), 2)
 
@@ -994,7 +1003,7 @@ def render_auction_details_form(owner_chat_id: int, item, active_tab: str, row_n
       <form class="status-popover lot-form" method="post" action="/auctions/{item.id}/details?owner={owner_chat_id}&tab={escape(active_tab)}">
         <div class="field">
           <label>Номер аукциона</label>
-          <input type="text" name="auction_number" value="{escape(item.auction_number)}" required>
+          <input type="text" name="auction_number" value="{escape(item.auction_number)}" inputmode="numeric" pattern="[0-9]+" required>
         </div>
         <div class="field">
           <label>Название аукциона</label>
@@ -3815,7 +3824,7 @@ def render_auctions_section(
         <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
           <div class="field">
             <label>Номер аукциона</label>
-            <input type="text" name="auction_number" placeholder="0145300000126000011" required>
+            <input type="text" name="auction_number" placeholder="0145300000126000011" inputmode="numeric" pattern="[0-9]+" required>
           </div>
           <div class="field">
             <label>Название аукциона</label>
@@ -4286,7 +4295,7 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
         form = read_post_data(environ)
         try:
-            auction_number = form["auction_number"].strip()
+            auction_number = validate_auction_number(form["auction_number"])
             title = form["title"].strip()
             city = form["city"].strip()
             bid_deadline = parse_date(form["bid_deadline"])
@@ -4294,8 +4303,6 @@ def app(environ, start_response):
             source_url = form.get("source_url", "").strip()
             has_advance = form.get("has_advance") == "1"
             advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
-            if not auction_number:
-                raise ValueError("Нужно указать номер аукциона")
             if not title:
                 raise ValueError("Нужно указать название аукциона")
             if not city:
@@ -4507,15 +4514,13 @@ def app(environ, start_response):
             auction = next((item for item in storage.list_auctions(current_owner) if item.id == auction_id), None)
             if auction is None:
                 raise ValueError("Аукцион не найден")
-            auction_number = form.get("auction_number", "").strip()
+            auction_number = validate_auction_number(form.get("auction_number", ""))
             title = form.get("title", "").strip()
             city = form.get("city", "").strip()
             source_url = form.get("source_url", "").strip()
             created_date = parse_date(form.get("created_date", ""))
             has_advance = form.get("has_advance") == "1"
             advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
-            if not auction_number:
-                raise ValueError("Нужно указать номер аукциона")
             if not title:
                 raise ValueError("Нужно указать название аукциона")
             if not city:
