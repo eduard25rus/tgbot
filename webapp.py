@@ -995,7 +995,7 @@ def render_auction_details_form(owner_chat_id: int, item, active_tab: str, row_n
     <details class="status-menu lot-menu">
       <summary>
         <div class="auction-head">
-          <div class="auction-seq">#{row_number}</div>
+          <div class="auction-seq">#{item.registry_position}</div>
           <div class="auction-number">№ {source_link}</div>
         </div>
         <div class="timeline-title">{escape(item.title)}</div>
@@ -1046,7 +1046,7 @@ def render_auction_details_display(item, row_number: int) -> str:
     return f"""
     <div>
       <div class="auction-head">
-        <div class="auction-seq">#{row_number}</div>
+        <div class="auction-seq">#{item.registry_position}</div>
         <div class="auction-number">№ {source_link}</div>
       </div>
       <div class="timeline-title">{escape(item.title)}</div>

@@ -53,6 +53,7 @@ class Payment:
 class Auction:
     id: int
     owner_chat_id: int
+    registry_position: int
     auction_number: str
     bid_deadline: date
     amount: float
@@ -200,6 +201,7 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS auctions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_chat_id INTEGER NOT NULL,
+                    registry_position INTEGER,
                     auction_number TEXT NOT NULL,
                     bid_deadline TEXT NOT NULL,
                     amount REAL NOT NULL DEFAULT 0,
@@ -310,6 +312,9 @@ class Storage:
                     WHERE submit_decision_status = 'rejected' OR result_status IN ('won', 'lost', 'rejected')
                     """
                 )
+            if "registry_position" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN registry_position INTEGER")
+            self._backfill_auction_registry_positions(conn)
             if "application_status" in auction_columns:
                 conn.execute(
                     """
@@ -765,11 +770,11 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
+                SELECT id, owner_chat_id, registry_position, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
                        estimate_status, estimate_status_updated_at, submit_decision_status, submit_status_updated_at, application_status, result_status, final_bid_amount, archived_at, deleted_at, created_at
                 FROM auctions
                 WHERE owner_chat_id = ?
-                ORDER BY bid_deadline ASC, id ASC
+                ORDER BY registry_position ASC, id ASC
                 """,
                 (owner_chat_id,),
             ).fetchall()
@@ -795,17 +800,19 @@ class Storage:
                 (owner_chat_id, datetime.utcnow().isoformat()),
             )
             self._ensure_default_web_admin(conn, owner_chat_id)
+            registry_position = self._next_auction_registry_position(conn, owner_chat_id)
             cursor = conn.execute(
                 """
                 INSERT INTO auctions (
-                    owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
+                    owner_chat_id, registry_position, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
                     max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status,
                     approval_status, application_status, result_status, final_bid_amount, created_at, archived_at, deleted_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL, NULL)
                 """,
                 (
                     owner_chat_id,
+                    registry_position,
                     auction_number.strip(),
                     bid_deadline.strftime(DATE_FMT),
                     amount,
@@ -1610,6 +1617,7 @@ class Storage:
         return Auction(
             id=row["id"],
             owner_chat_id=row["owner_chat_id"],
+            registry_position=int(row["registry_position"]) if row["registry_position"] is not None else int(row["id"]),
             auction_number=row["auction_number"],
             bid_deadline=date.fromisoformat(row["bid_deadline"]),
             amount=float(row["amount"]),
@@ -1631,6 +1639,44 @@ class Storage:
             deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] is not None else None,
             created_at=datetime.fromisoformat(row["created_at"]),
         )
+
+    @staticmethod
+    def _next_auction_registry_position(conn: sqlite3.Connection, owner_chat_id: int) -> int:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(registry_position), 0) AS max_position FROM auctions WHERE owner_chat_id = ?",
+            (owner_chat_id,),
+        ).fetchone()
+        return int(row["max_position"]) + 1
+
+    @staticmethod
+    def _backfill_auction_registry_positions(conn: sqlite3.Connection) -> None:
+        owner_rows = conn.execute("SELECT DISTINCT owner_chat_id FROM auctions").fetchall()
+        for owner_row in owner_rows:
+            owner_chat_id = int(owner_row["owner_chat_id"])
+            max_row = conn.execute(
+                "SELECT COALESCE(MAX(registry_position), 0) AS max_position FROM auctions WHERE owner_chat_id = ?",
+                (owner_chat_id,),
+            ).fetchone()
+            next_position = int(max_row["max_position"]) + 1
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM auctions
+                WHERE owner_chat_id = ? AND registry_position IS NULL
+                ORDER BY datetime(created_at) ASC, id ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    """
+                    UPDATE auctions
+                    SET registry_position = ?
+                    WHERE id = ? AND owner_chat_id = ? AND registry_position IS NULL
+                    """,
+                    (next_position, int(row["id"]), owner_chat_id),
+                )
+                next_position += 1
 
     @staticmethod
     def _normalize_stage_positions(conn: sqlite3.Connection, contract_id: int) -> None:
