@@ -2430,9 +2430,6 @@ def layout(
     }}
     .status-form {{
       margin: 0;
-      display: flex;
-      justify-content: center;
-      align-items: center;
     }}
     .status-menu {{
       position: relative;
@@ -2441,8 +2438,6 @@ def layout(
     .status-menu summary {{
       list-style: none;
       cursor: pointer;
-      display: inline-flex;
-      justify-content: center;
     }}
     .status-menu summary::-webkit-details-marker {{
       display: none;
@@ -2678,6 +2673,14 @@ def layout(
     .auction-table td:nth-child(7) .status-popover {{
       left: auto;
       right: 0;
+    }}
+    .auction-table td:nth-child(4) > .status-menu,
+    .auction-table td:nth-child(5) > .status-menu,
+    .auction-table td:nth-child(6) > .status-menu,
+    .auction-table td:nth-child(7) > .status-menu {{
+      display: block;
+      width: fit-content;
+      margin: 0 auto;
     }}
     tr[data-auction-row].is-saving {{
       opacity: 0.55;
