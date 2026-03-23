@@ -2052,7 +2052,7 @@ def layout(
       margin-bottom: 10px;
     }}
     .stat-value {{
-      font-size: clamp(2rem, 2.2vw, 3rem);
+      font-size: clamp(1.85rem, 2vw, 2.75rem);
       font-weight: 700;
       line-height: 1.02;
       letter-spacing: -0.03em;
