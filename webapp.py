@@ -4641,6 +4641,16 @@ def app(environ, start_response):
         )
         return [html.encode("utf-8")]
 
+    if path.startswith("/auctions/") and method == "GET":
+        denied = guard("auctions", "view")
+        if denied:
+            return denied
+        fallback_url = f"/auctions?owner={current_owner}&tab={current_auction_tab}"
+        if current_task_view:
+            fallback_url += "&task_view=1"
+        fallback_url += "#auction-registry"
+        return redirect(start_response, fallback_url)
+
     if path == "/auctions":
         denied = guard("auctions", "view")
         if denied:
