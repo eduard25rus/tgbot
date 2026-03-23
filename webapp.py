@@ -2667,7 +2667,31 @@ def layout(
     }}
     .auction-table td:first-child,
     .auction-table th:first-child {{
-      width: 30%;
+      width: 31%;
+    }}
+    .auction-table td:nth-child(2),
+    .auction-table th:nth-child(2) {{
+      width: 11%;
+    }}
+    .auction-table td:nth-child(3),
+    .auction-table th:nth-child(3) {{
+      width: 11%;
+    }}
+    .auction-table td:nth-child(4),
+    .auction-table th:nth-child(4) {{
+      width: 10%;
+    }}
+    .auction-table td:nth-child(5),
+    .auction-table th:nth-child(5) {{
+      width: 12%;
+    }}
+    .auction-table td:nth-child(6),
+    .auction-table th:nth-child(6) {{
+      width: 12%;
+    }}
+    .auction-table td:nth-child(7),
+    .auction-table th:nth-child(7) {{
+      width: 13%;
     }}
     .auction-table td:nth-child(6) .status-popover,
     .auction-table td:nth-child(7) .status-popover {{
