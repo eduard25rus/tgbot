@@ -54,6 +54,8 @@ class Auction:
     id: int
     owner_chat_id: int
     registry_position: int
+    created_by_user_id: Optional[int]
+    created_by_name: str
     auction_number: str
     bid_deadline: date
     amount: float
@@ -202,6 +204,8 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_chat_id INTEGER NOT NULL,
                     registry_position INTEGER,
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
                     auction_number TEXT NOT NULL,
                     bid_deadline TEXT NOT NULL,
                     amount REAL NOT NULL DEFAULT 0,
@@ -314,6 +318,10 @@ class Storage:
                 )
             if "registry_position" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN registry_position INTEGER")
+            if "created_by_user_id" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN created_by_user_id INTEGER")
+            if "created_by_name" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN created_by_name TEXT NOT NULL DEFAULT ''")
             self._backfill_auction_registry_positions(conn)
             if "application_status" in auction_columns:
                 conn.execute(
@@ -770,7 +778,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, registry_position, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
+                SELECT id, owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
                        estimate_status, estimate_status_updated_at, submit_decision_status, submit_status_updated_at, application_status, result_status, final_bid_amount, archived_at, deleted_at, created_at
                 FROM auctions
                 WHERE owner_chat_id = ?
@@ -790,6 +798,8 @@ class Storage:
         title: str,
         city: str,
         source_url: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
     ) -> int:
         with self.connection() as conn:
             conn.execute(
@@ -804,15 +814,17 @@ class Storage:
             cursor = conn.execute(
                 """
                 INSERT INTO auctions (
-                    owner_chat_id, registry_position, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
+                    owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
                     max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status,
                     approval_status, application_status, result_status, final_bid_amount, created_at, archived_at, deleted_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL, NULL)
                 """,
                 (
                     owner_chat_id,
                     registry_position,
+                    created_by_user_id,
+                    created_by_name.strip(),
                     auction_number.strip(),
                     bid_deadline.strftime(DATE_FMT),
                     amount,
@@ -1025,13 +1037,14 @@ class Storage:
                 conn.execute(
                     """
                     INSERT INTO auctions (
-                        owner_chat_id, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
+                        owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
                         max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status, approval_status, application_status, result_status, final_bid_amount, created_at, deleted_at
                     )
-                    VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?, 'new', ?, ?, NULL, ?, NULL)
+                    VALUES (?, ?, NULL, 'Система', ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?, 'new', ?, ?, NULL, ?, NULL)
                     """,
                     (
                         owner_chat_id,
+                        self._next_auction_registry_position(conn, owner_chat_id),
                         item[0],
                         item[1].strftime(DATE_FMT),
                         item[2],
@@ -1630,6 +1643,8 @@ class Storage:
             id=row["id"],
             owner_chat_id=row["owner_chat_id"],
             registry_position=int(row["registry_position"]) if row["registry_position"] is not None else int(row["id"]),
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
             auction_number=row["auction_number"],
             bid_deadline=date.fromisoformat(row["bid_deadline"]),
             amount=float(row["amount"]),

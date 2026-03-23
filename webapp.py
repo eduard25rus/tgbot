@@ -645,7 +645,10 @@ def contract_advance_summary(advance_percent: float | None, advance_amount: floa
 def added_date_meta(item) -> str:
     added_date = item.created_at.date()
     css_class = "auction-added-date is-new" if (datetime.now() - item.created_at) <= timedelta(days=1) else "auction-added-date"
-    return f'<span class="{css_class}">Добавлен: {escape(format_date(added_date))}</span>'
+    tooltip_attrs = ""
+    if item.created_by_name:
+        tooltip_attrs = f' data-tooltip="Добавил: {escape(item.created_by_name)}"'
+    return f'<span class="{css_class} auction-added-tooltip"{tooltip_attrs}>Добавлен: {escape(format_date(added_date))}</span>'
 
 
 def render_auction_status_form(
@@ -2447,6 +2450,29 @@ def layout(
     .auction-added-date.is-new {{
       color: var(--ok);
       font-weight: 700;
+    }}
+    .auction-added-tooltip {{
+      position: relative;
+      cursor: default;
+    }}
+    .auction-added-tooltip[data-tooltip]:hover::after {{
+      content: attr(data-tooltip);
+      position: absolute;
+      right: 0;
+      bottom: calc(100% + 8px);
+      min-width: 150px;
+      max-width: 220px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(22, 35, 47, 0.96);
+      color: #fff;
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: normal;
+      text-align: center;
+      box-shadow: 0 12px 28px rgba(22, 35, 47, 0.2);
+      z-index: 40;
+      pointer-events: none;
     }}
     .auction-seq {{
       font-size: 11px;
@@ -4388,7 +4414,18 @@ def app(environ, start_response):
                     raise ValueError("Укажите процент авансирования")
                 if advance_percent <= 0 or advance_percent > 100:
                     raise ValueError("Процент авансирования должен быть от 0,01 до 100")
-            storage.add_auction(current_owner, auction_number, bid_deadline, amount, advance_percent, title, city, source_url)
+            storage.add_auction(
+                current_owner,
+                auction_number,
+                bid_deadline,
+                amount,
+                advance_percent,
+                title,
+                city,
+                source_url,
+                current_user.get("id") if current_user else None,
+                current_user.get("full_name", "") if current_user else "",
+            )
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Аукцион добавлен в реестр.", True)
         except Exception as exc:
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось добавить аукцион: {exc}")
