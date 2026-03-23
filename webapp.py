@@ -2668,27 +2668,27 @@ def layout(
     }}
     .auction-table td:first-child,
     .auction-table th:first-child {{
-      width: 31%;
+      width: 28%;
     }}
     .auction-table td:nth-child(2),
     .auction-table th:nth-child(2) {{
-      width: 11%;
+      width: 10%;
     }}
     .auction-table td:nth-child(3),
     .auction-table th:nth-child(3) {{
-      width: 11%;
+      width: 10%;
     }}
     .auction-table td:nth-child(4),
     .auction-table th:nth-child(4) {{
-      width: 10%;
+      width: 13%;
     }}
     .auction-table td:nth-child(5),
     .auction-table th:nth-child(5) {{
-      width: 12%;
+      width: 13%;
     }}
     .auction-table td:nth-child(6),
     .auction-table th:nth-child(6) {{
-      width: 12%;
+      width: 13%;
     }}
     .auction-table td:nth-child(7),
     .auction-table th:nth-child(7) {{
@@ -2713,8 +2713,7 @@ def layout(
       margin: 0 auto;
     }}
     .auction-cell-center .chip {{
-      width: min(170px, 100%);
-      box-sizing: border-box;
+      max-width: 100%;
     }}
     .auction-cell-center .discount-value {{
       display: grid;
