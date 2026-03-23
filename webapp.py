@@ -1219,7 +1219,7 @@ def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, cur
     """
     if active_tab == "deleted":
         purge_action = ""
-        if current_user.get("is_super_admin"):
+        if has_active_admin_mode(current_user):
             purge_action = f"""
             <form class="auction-delete-form" method="post" action="/auctions/{item.id}/purge?owner={owner_chat_id}&tab={escape(active_tab)}">
               <button class="icon-btn danger" type="submit" title="Удалить навсегда">{delete_icon}</button>
@@ -3875,7 +3875,7 @@ def render_auctions_section(
         </div>
         """
     deleted_toolbar = ""
-    if active_tab == "deleted" and current_user is not None and current_user.get("is_super_admin") and deleted_auctions:
+    if active_tab == "deleted" and has_active_admin_mode(current_user) and deleted_auctions:
         deleted_count = len(deleted_auctions)
         deleted_toolbar = f"""
         <div class="action-row" style="justify-content: flex-end; margin-bottom: 16px;">
@@ -4098,6 +4098,14 @@ def has_permission(current_user: dict | None, section_id: str, mode: str = "view
         return True
     permissions = current_user.get("permissions", {}).get(section_id, {})
     return bool(permissions.get("can_edit" if mode == "edit" else "can_view"))
+
+
+def has_active_admin_mode(current_user: dict | None) -> bool:
+    return bool(
+        current_user
+        and current_user.get("is_super_admin")
+        and not current_user.get("preview_role_name")
+    )
 
 
 def render_auth_body(storage: Storage, flash_message: str = "", setup_message: str = "", login_hint: str = "") -> str:
@@ -4677,7 +4685,7 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
-        if current_user is None or not current_user.get("is_super_admin"):
+        if not has_active_admin_mode(current_user):
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Только главный пользователь может очищать аукционы навсегда.")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
@@ -4698,7 +4706,7 @@ def app(environ, start_response):
         denied = guard("auctions", "edit")
         if denied:
             return denied
-        if current_user is None or not current_user.get("is_super_admin"):
+        if not has_active_admin_mode(current_user):
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Только главный пользователь может очищать корзину.")
             html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
