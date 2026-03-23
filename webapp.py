@@ -2021,7 +2021,7 @@ def layout(
     }}
     .stats {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 14px;
     }}
     .card {{
@@ -2052,10 +2052,13 @@ def layout(
       margin-bottom: 10px;
     }}
     .stat-value {{
-      font-size: 28px;
+      font-size: clamp(2rem, 2.2vw, 3rem);
       font-weight: 700;
+      line-height: 1.02;
+      letter-spacing: -0.03em;
       margin-bottom: 6px;
       white-space: nowrap;
+      font-variant-numeric: tabular-nums;
     }}
     .stat-note {{
       color: var(--muted);
