@@ -3811,7 +3811,7 @@ def render_auctions_section(
           </form>
         </div>
         """
-    add_auction_block = "" if is_procurement_user(current_user) or is_supply_user(current_user) or is_management_user(current_user) else f"""
+    add_auction_block = f"""
     <section class="card panel">
       <div class="panel-head">
         <div>
@@ -4285,14 +4285,9 @@ def app(environ, start_response):
         return [html.encode("utf-8")]
 
     if path == "/auctions/new" and method == "POST":
-        denied = guard("auctions", "edit")
+        denied = guard("auctions", "view")
         if denied:
             return denied
-        if is_procurement_user(current_user) or is_supply_user(current_user) or is_management_user(current_user):
-            body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Эта роль не добавляет новые аукционы.")
-            html = layout("Аукционы", body, owners, current_owner, "auctions", current_user)
-            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
-            return [html.encode("utf-8")]
         form = read_post_data(environ)
         try:
             auction_number = validate_auction_number(form["auction_number"])
