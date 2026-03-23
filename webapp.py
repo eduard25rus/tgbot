@@ -718,7 +718,7 @@ def render_stage_status_form(owner_chat_id: int, contract_id: int, stage, curren
         ("closed_iis", "Закрыт на ИИС"),
     ]
     buttons = "".join(
-        f'<button class="status-option" type="submit" name="status" value="{value}">{escape(label)}</button>'
+        f'<button class="{STATUS_META[value][1]} status-option" type="submit" name="status" value="{value}">{escape(label)}</button>'
         for value, label in options
     )
     return f"""
@@ -742,7 +742,7 @@ def render_stage_payment_form(owner_chat_id: int, contract_id: int, stage, curre
         ("paid", "Оплачен"),
     ]
     buttons = "".join(
-        f'<button class="status-option" type="submit" name="payment_status" value="{value}">{escape(label)}</button>'
+        f'<button class="{STAGE_PAYMENT_META[value][1]} status-option" type="submit" name="payment_status" value="{value}">{escape(label)}</button>'
         for value, label in options
     )
     return f"""
@@ -775,6 +775,44 @@ def render_stage_deadline_form(owner_chat_id: int, contract_id: int, stage, curr
         </form>
       </div>
     </details>
+    """
+
+
+def render_contract_advance_card(owner_chat_id: int, contract, payload: dict, current_user: dict | None) -> str:
+    current_label = format_percent(contract.advance_percent) if contract.advance_percent else "Без аванса"
+    current_note = format_amount(payload["advance_amount"]) if contract.advance_percent else "Аванс не указан"
+    if not can_edit_contract_stage_controls(current_user):
+        return f"""
+      <article class="card stat-card">
+        <div class="stat-label">Аванс</div>
+        <div class="stat-value">{current_label}</div>
+        <div class="stat-note">{current_note}</div>
+      </article>
+        """
+    current_value = escape(format_amount_input(contract.advance_percent)) if contract.advance_percent else ""
+    checked_attr = 'checked' if contract.advance_percent else ''
+    return f"""
+      <article class="card stat-card">
+        <div class="stat-label">Аванс</div>
+        <details class="status-menu">
+          <summary>
+            <div class="stat-value">{current_label}</div>
+            <div class="stat-note">{current_note}</div>
+          </summary>
+          <div class="status-popover">
+            <form class="form-grid" method="post" action="/contracts/{contract.id}/settings?owner={owner_chat_id}">
+              <label class="advance-toggle">
+                <input class="toggle-checkbox" type="checkbox" name="has_advance" value="1" {checked_attr}> У контракта есть аванс
+              </label>
+              <div class="field">
+                <label>Процент аванса</label>
+                <input type="text" name="advance_percent" value="{current_value}" placeholder="Например, 30">
+              </div>
+              <button class="submit-btn" type="submit">Сохранить аванс</button>
+            </form>
+          </div>
+        </details>
+      </article>
     """
 
 
@@ -2642,8 +2680,15 @@ def layout(
     }}
     .status-option {{
       width: 100%;
-      text-align: left;
+      text-align: center;
       cursor: pointer;
+      appearance: none;
+      border: none;
+      font: inherit;
+      padding: 12px 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }}
     .discount-menu summary {{
       display: inline-block;
@@ -3517,7 +3562,6 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
 
     contract = payload["contract"]
     advance_percent = contract.advance_percent or 0.0
-    can_edit_stage_controls = can_edit_contract_stage_controls(current_user)
     stages_html = "".join(
         f"""
         <tr>
@@ -3548,29 +3592,6 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
 
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     return f"""
-    <section class="stats">
-      <article class="card stat-card">
-        <div class="stat-label">Общая сумма</div>
-        <div class="stat-value">{format_amount(payload["total_amount"])}</div>
-        <div class="stat-note">Полная сумма контракта</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Аванс</div>
-        <div class="stat-value">{format_percent(contract.advance_percent) if contract.advance_percent else '—'}</div>
-        <div class="stat-note">{format_amount(payload["advance_amount"]) if contract.advance_percent else 'Аванс не указан'}</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Оплачено</div>
-        <div class="stat-value">{format_amount(payload["paid_amount"])}</div>
-        <div class="stat-note">{format_percent(payload["paid_ratio"] * 100)} от суммы контракта</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Долг</div>
-        <div class="stat-value">{format_amount(payload["debt_amount"])}</div>
-        <div class="stat-note">Неоплаченный остаток</div>
-      </article>
-    </section>
-    {flash_html}
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
@@ -3587,27 +3608,26 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <span class="chip">Этапов: {len(payload["stages"])}</span>
         <span class="chip">Оплат: {len(payload["payments"])}</span>
       </div>
-      {
-        f'''
-      <form class="form-grid" method="post" action="/contracts/{contract.id}/settings?owner={owner_chat_id}" style="margin-top:18px;">
-        <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
-          <label class="advance-toggle">
-            <input class="toggle-checkbox" type="checkbox" name="has_advance" value="1" {"checked" if contract.advance_percent else ""}> У контракта есть аванс
-          </label>
-          <div class="field">
-            <label>Процент аванса</label>
-            <input type="text" name="advance_percent" value="{escape(format_amount_input(contract.advance_percent)) if contract.advance_percent else ''}" placeholder="Например, 30">
-          </div>
-        </div>
-        <div class="action-row">
-          <button class="submit-btn" type="submit">Сохранить параметры контракта</button>
-        </div>
-      </form>
-        '''
-        if can_edit_stage_controls
-        else ''
-      }
     </section>
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Общая сумма</div>
+        <div class="stat-value">{format_amount(payload["total_amount"])}</div>
+        <div class="stat-note">Полная сумма контракта</div>
+      </article>
+      {render_contract_advance_card(owner_chat_id, contract, payload, current_user)}
+      <article class="card stat-card">
+        <div class="stat-label">Оплачено</div>
+        <div class="stat-value">{format_amount(payload["paid_amount"])}</div>
+        <div class="stat-note">{format_percent(payload["paid_ratio"] * 100)} от суммы контракта</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Долг</div>
+        <div class="stat-value">{format_amount(payload["debt_amount"])}</div>
+        <div class="stat-note">Неоплаченный остаток</div>
+      </article>
+    </section>
+    {flash_html}
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
