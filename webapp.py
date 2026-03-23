@@ -376,13 +376,13 @@ def result_summary(item) -> str:
 def estimate_summary(item) -> str:
     if item.estimate_status != "calculated" or item.material_cost is None:
         return ""
-    tooltip = (
-        f' title="Установлено: {escape(format_datetime(item.estimate_status_updated_at))}"'
+    tooltip_attr = (
+        f' data-tooltip="Установлено: {escape(format_datetime(item.estimate_status_updated_at))}"'
         if item.estimate_status_updated_at is not None
         else ""
     )
     return (
-        f'<span class="result-meta result-meta-stack"{tooltip}>'
+        f'<span class="result-meta result-meta-stack result-meta-tooltip"{tooltip_attr}>'
         '<span>Материалы:</span>'
         f'<span>{escape(format_amount(item.material_cost))}</span>'
         '</span>'
@@ -2065,6 +2065,30 @@ def layout(
       white-space: normal;
       text-align: center;
       line-height: 1.2;
+    }}
+    .result-meta-tooltip {{
+      position: relative;
+      cursor: help;
+    }}
+    .result-meta-tooltip:hover::after {{
+      content: attr(data-tooltip);
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 8px);
+      transform: translateX(-50%);
+      min-width: 170px;
+      max-width: 240px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(22, 35, 47, 0.96);
+      color: #fff;
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: normal;
+      text-align: center;
+      box-shadow: 0 12px 28px rgba(22, 35, 47, 0.2);
+      z-index: 40;
+      pointer-events: none;
     }}
     .discount-form {{
       min-width: 280px;
