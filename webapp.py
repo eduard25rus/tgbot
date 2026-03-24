@@ -2296,6 +2296,14 @@ def layout(
     .payroll-payment-field.is-hidden {{
       display: none;
     }}
+    .payroll-table th:nth-child(4),
+    .payroll-table td:nth-child(4),
+    .payroll-table th:nth-child(6),
+    .payroll-table td:nth-child(6),
+    .payroll-table th:nth-child(8),
+    .payroll-table td:nth-child(8) {{
+      border-left: 1px solid var(--line);
+    }}
     .contract-advance-stack {{
       display: grid;
       gap: 4px;
@@ -4223,7 +4231,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
       </div>
       <div class="tab-row">{month_tabs}</div>
       {flash_html}
-      <table class="table contract-table" style="margin-top: 18px;">
+      <table class="table contract-table payroll-table" style="margin-top: 18px;">
         <thead>
           <tr>
             <th class="nowrap">№</th>
