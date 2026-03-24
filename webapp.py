@@ -3683,6 +3683,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
       <div class="info-row">
         <span class="chip">ID: {contract.id}</span>
         {render_contract_signed_date_chip(owner_chat_id, contract, current_user)}
+        <span class="chip">Старт работ: {format_date(payload["first_stage_start_date"]) if payload["first_stage_start_date"] is not None else "Не задан"}</span>
         <span class="chip">Дедлайн: {format_date(contract.end_date)}</span>
         <span class="chip">Этапов: {len(payload["stages"])}</span>
         <span class="chip">Оплат: {len(payload["payments"])}</span>
