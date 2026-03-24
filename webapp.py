@@ -3289,7 +3289,7 @@ document.addEventListener("submit", (event) => {{
       nextInput.value = `${{window.location.pathname}}${{window.location.search}}`;
     }}
   }}
-  if (event.target.closest(".discount-form, .amount-form, .deadline-form, .lot-form, .result-form, .estimate-form, .auction-delete-form")) {{
+  if (event.target.closest(".discount-form, .amount-form, .deadline-form, .lot-form, .result-form, .estimate-form, .auction-delete-form, .payroll-amount-form, .payroll-payment-form")) {{
     window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
   }}
 }});
@@ -3378,15 +3378,28 @@ document.addEventListener("change", (event) => {{
   if (!form) {{
     return;
   }}
+  const plannedInput = form.querySelector('input[name="planned_amount"]');
+  const paidAmountInput = form.querySelector('input[name="paid_amount"]');
+  const paidDateInput = form.querySelector('input[name="paid_date"]');
   form.querySelectorAll(".payroll-payment-field").forEach((field) => {{
     field.classList.toggle("is-hidden", !checkbox.checked);
   }});
-  form.querySelectorAll('input[name="paid_amount"], input[name="paid_date"]').forEach((input) => {{
-    input.required = checkbox.checked;
-    if (!checkbox.checked) {{
-      input.value = "";
+  if (paidAmountInput) {{
+    paidAmountInput.required = checkbox.checked;
+    if (checkbox.checked) {{
+      if (!paidAmountInput.value.trim() && plannedInput) {{
+        paidAmountInput.value = plannedInput.value;
+      }}
+    }} else {{
+      paidAmountInput.value = "";
     }}
-  }});
+  }}
+  if (paidDateInput) {{
+    paidDateInput.required = checkbox.checked;
+    if (!checkbox.checked) {{
+      paidDateInput.value = "";
+    }}
+  }}
 }});
 
 document.addEventListener("input", (event) => {{
@@ -3928,7 +3941,7 @@ def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, f
     <details class="status-menu">
       <summary><span class="{amount_class}">{amount_html}</span></summary>
       <div class="status-popover">
-        <form class="form-grid" method="post" action="/payroll/entries/{row.employee_id}/amount?owner={owner_chat_id}&month={payroll_month.strftime('%Y-%m')}">
+        <form class="form-grid payroll-amount-form" method="post" action="/payroll/entries/{row.employee_id}/amount?owner={owner_chat_id}&month={payroll_month.strftime('%Y-%m')}">
           <input type="hidden" name="field_name" value="{escape(field_name)}">
           <div class="field">
             <label>{escape(label)}</label>
@@ -3962,7 +3975,7 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
     <details class="status-menu">
       <summary>{display}</summary>
       <div class="status-popover">
-        <form class="form-grid" method="post" action="/payroll/entries/{row.employee_id}/payment?owner={owner_chat_id}&month={payroll_month.strftime('%Y-%m')}">
+        <form class="form-grid payroll-payment-form" method="post" action="/payroll/entries/{row.employee_id}/payment?owner={owner_chat_id}&month={payroll_month.strftime('%Y-%m')}">
           <input type="hidden" name="payment_kind" value="{escape(payment_kind)}">
           <div class="field">
             <label>{escape(label)} начислено</label>
