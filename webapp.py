@@ -2304,6 +2304,19 @@ def layout(
     .payroll-table td:nth-child(8) {{
       border-left: 1px solid var(--line);
     }}
+    .payroll-table th:not(:nth-child(2)),
+    .payroll-table td:not(:nth-child(2)) {{
+      text-align: center;
+    }}
+    .payroll-table td:not(:nth-child(2)) .status-menu,
+    .payroll-table td:not(:nth-child(2)) .payroll-payment-note,
+    .payroll-table td:not(:nth-child(2)) .payroll-balance,
+    .payroll-table td:not(:nth-child(2)) .chip,
+    .payroll-table td:not(:nth-child(2)) .payroll-amount {{
+      margin-left: auto;
+      margin-right: auto;
+      text-align: center;
+    }}
     .contract-advance-stack {{
       display: grid;
       gap: 4px;
