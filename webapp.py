@@ -5587,10 +5587,8 @@ def app(environ, start_response):
             if not role_title:
                 raise ValueError("Укажите должность сотрудника")
             storage.add_payroll_employee(current_owner, full_name, role_title)
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, "Сотрудник добавлен", True)
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
-            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
-            return [html.encode("utf-8")]
+            month_param = selected_month.strftime("%Y-%m") if selected_month is not None else ""
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={month_param}")
         except Exception as exc:
             body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось добавить сотрудника: {exc}")
             html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
@@ -5609,10 +5607,7 @@ def app(environ, start_response):
             amount = parse_amount(form.get("amount", "0"))
             if not storage.upsert_payroll_amount(current_owner, employee_id, selected_month, field_name, amount):
                 raise ValueError("Не удалось обновить сумму")
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, "Сумма обновлена", True)
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
-            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
-            return [html.encode("utf-8")]
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
         except Exception as exc:
             body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить сумму: {exc}")
             html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
@@ -5636,10 +5631,7 @@ def app(environ, start_response):
                 raise ValueError("Сумма выплаты не может быть отрицательной")
             if not storage.upsert_payroll_payment(current_owner, employee_id, selected_month, payment_kind, planned_amount, paid_amount, paid_date, is_paid):
                 raise ValueError("Не удалось обновить выплату")
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, "Выплата обновлена", True)
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
-            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
-            return [html.encode("utf-8")]
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
         except Exception as exc:
             body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить выплату: {exc}")
             html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
@@ -5657,15 +5649,17 @@ def app(environ, start_response):
             note = form.get("note", "")
             if not storage.upsert_payroll_note(current_owner, employee_id, selected_month, note):
                 raise ValueError("Не удалось обновить заметку")
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, "Заметка обновлена", True)
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
-            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
-            return [html.encode("utf-8")]
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
         except Exception as exc:
             body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить заметку: {exc}")
             html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
+
+    if method == "GET" and (path == "/payroll/employees/new" or path.startswith("/payroll/entries/")):
+        month_param = parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]
+        month_query = f"&month={month_param}" if month_param else ""
+        return redirect(start_response, f"/payroll?owner={current_owner}{month_query}")
 
     if path.startswith("/contracts/stages/") and path.endswith("/status") and method == "POST":
         if not can_edit_contract_stage_controls(current_user):
