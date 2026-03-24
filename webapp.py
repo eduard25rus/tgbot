@@ -2253,6 +2253,29 @@ def layout(
     .payroll-payment-note {{
       line-height: 1.28;
     }}
+    .payroll-col-head {{
+      font-size: 12px;
+      line-height: 1.25;
+      color: var(--muted);
+      margin-top: 4px;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: normal;
+      white-space: normal;
+    }}
+    .payroll-col-deadline {{
+      font-size: 12px;
+      line-height: 1.25;
+      color: var(--muted);
+      margin-top: 2px;
+      font-weight: 600;
+      text-transform: none;
+      letter-spacing: normal;
+      white-space: normal;
+    }}
+    .payroll-col-deadline.danger {{
+      color: var(--danger);
+    }}
     .payroll-balance {{
       font-weight: 600;
       white-space: nowrap;
@@ -3938,6 +3961,42 @@ def payroll_row_metrics(row) -> dict[str, float | str]:
     }
 
 
+def payroll_deadline_for_kind(payroll_month: date, payment_kind: str) -> date:
+    if payment_kind in {"advance_card", "advance_cash"}:
+        return payroll_month.replace(day=20)
+    if payroll_month.month == 12:
+        return date(payroll_month.year + 1, 1, 5)
+    return date(payroll_month.year, payroll_month.month + 1, 5)
+
+
+def payroll_deadline_header(payroll_month: date, payment_kind: str, rows) -> str:
+    labels = {
+        "advance_card": "до 20 числа",
+        "advance_cash": "до 20 числа",
+        "salary": "до 5 числа след. месяца",
+        "bonus": "до 5 числа след. месяца",
+    }
+    field_map = {
+        "advance_card": ("advance_card_amount", "advance_card_paid_amount"),
+        "advance_cash": ("advance_cash_amount", "advance_cash_paid_amount"),
+        "salary": ("salary_amount", "salary_paid_amount"),
+        "bonus": ("bonus_amount", "bonus_paid_amount"),
+    }
+    deadline = payroll_deadline_for_kind(payroll_month, payment_kind)
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    days_left = (deadline - today).days
+    planned_field, paid_field = field_map[payment_kind]
+    has_open_items = any(
+        getattr(row, planned_field) > getattr(row, paid_field) + 0.009
+        for row in rows
+    )
+    deadline_class = "payroll-col-deadline danger" if has_open_items and days_left <= 2 else "payroll-col-deadline"
+    return (
+        f'<div class="payroll-col-head">{escape(labels[payment_kind])}</div>'
+        f'<div class="{deadline_class}">{format_date(deadline)}</div>'
+    )
+
+
 def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, field_name: str, label: str, value: float, current_user: dict | None) -> str:
     amount_html = format_amount(value)
     amount_class = "payroll-amount"
@@ -4142,10 +4201,10 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
             <th class="nowrap">№</th>
             <th>Сотрудник</th>
             <th class="nowrap">Начислено</th>
-            <th class="nowrap">Аванс карта</th>
-            <th class="nowrap">Аванс кэш</th>
-            <th class="nowrap">ЗП</th>
-            <th class="nowrap">Премия</th>
+            <th class="nowrap">Аванс карта{payroll_deadline_header(selected_month, "advance_card", rows)}</th>
+            <th class="nowrap">Аванс кэш{payroll_deadline_header(selected_month, "advance_cash", rows)}</th>
+            <th class="nowrap">ЗП{payroll_deadline_header(selected_month, "salary", rows)}</th>
+            <th class="nowrap">Премия{payroll_deadline_header(selected_month, "bonus", rows)}</th>
             <th class="nowrap">Выплачено</th>
             <th class="nowrap">Остаток</th>
             <th class="nowrap">Статус</th>
