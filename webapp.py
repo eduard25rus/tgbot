@@ -2250,8 +2250,14 @@ def layout(
     .payroll-amount.is-partial {{
       color: var(--warn);
     }}
+    .payroll-amount.is-alert {{
+      color: var(--danger);
+    }}
     .payroll-payment-note {{
       line-height: 1.28;
+    }}
+    .payroll-payment-note.danger {{
+      color: var(--danger);
     }}
     .payroll-col-head {{
       font-size: 12px;
@@ -3997,6 +4003,10 @@ def payroll_deadline_header(payroll_month: date, payment_kind: str, rows) -> str
     )
 
 
+def payroll_expected_salary_amount(row) -> float:
+    return round(max(row.accrued_amount - row.advance_card_amount - row.advance_cash_amount, 0.0), 2)
+
+
 def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, field_name: str, label: str, value: float, current_user: dict | None) -> str:
     amount_html = format_amount(value)
     amount_class = "payroll-amount"
@@ -4021,21 +4031,39 @@ def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, f
 
 def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, payment_kind: str, label: str, planned_amount: float, paid_amount: float, paid_date: date | None, current_user: dict | None) -> str:
     note_class = "contract-table-subtle payroll-payment-note"
-    if paid_amount > 0.009:
+    mismatch_note = ""
+    form_value = planned_amount
+    if payment_kind == "salary":
+        expected_amount = payroll_expected_salary_amount(row)
+        if abs(planned_amount - expected_amount) > 0.009:
+            amount_class = "payroll-amount is-alert"
+            mismatch_note = f'Должно быть:<br>{format_amount(expected_amount)}'
+            form_value = expected_amount
+        elif paid_amount > 0.009:
+            if planned_amount > 0.009 and paid_amount + 0.009 < planned_amount:
+                amount_class = "payroll-amount is-partial"
+            else:
+                amount_class = "payroll-amount is-paid"
+        else:
+            amount_class = "payroll-amount"
+    elif paid_amount > 0.009:
         if planned_amount > 0.009 and paid_amount + 0.009 < planned_amount:
             amount_class = "payroll-amount is-partial"
         else:
             amount_class = "payroll-amount is-paid"
+    else:
+        amount_class = "payroll-amount"
+    if paid_amount > 0.009:
         paid_note = (
             f'Выплачено:<br>{format_amount(paid_amount)}<br>{format_date(paid_date)}'
             if paid_date is not None
             else f'Выплачено:<br>{format_amount(paid_amount)}'
         )
     else:
-        amount_class = "payroll-amount"
         paid_note = "" if planned_amount <= 0.009 else "Не выплачено"
     display = f"""
     <div class="{amount_class}">{format_amount(planned_amount)}</div>
+    {f'<div class="{note_class} danger">{mismatch_note}</div>' if mismatch_note else ""}
     {f'<div class="{note_class}">{paid_note}</div>' if paid_note else ""}
     """
     if not has_permission(current_user, "payroll", "edit"):
@@ -4049,7 +4077,7 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
           <input type="hidden" name="payment_kind" value="{escape(payment_kind)}">
           <div class="field">
             <label>{escape(label)} начислено</label>
-            <input type="text" name="planned_amount" value="{escape(format_amount_input(planned_amount))}" data-money-input="1" required>
+            <input type="text" name="planned_amount" value="{escape(format_amount_input(form_value))}" data-money-input="1" required>
           </div>
           <label class="advance-toggle">
             <input class="toggle-checkbox" type="checkbox" name="is_paid" value="1" {checked_attr}> Выплата зафиксирована
