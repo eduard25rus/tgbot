@@ -2247,6 +2247,12 @@ def layout(
     .payroll-amount.is-paid {{
       color: var(--ok);
     }}
+    .payroll-amount.is-partial {{
+      color: var(--warn);
+    }}
+    .payroll-payment-note {{
+      line-height: 1.28;
+    }}
     .payroll-balance {{
       font-weight: 600;
       white-space: nowrap;
@@ -3955,18 +3961,23 @@ def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, f
 
 
 def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, payment_kind: str, label: str, planned_amount: float, paid_amount: float, paid_date: date | None, current_user: dict | None) -> str:
-    paid_note = (
-        f'Выплачено {format_amount(paid_amount)} · {format_date(paid_date)}'
-        if paid_amount > 0.009 and paid_date is not None
-        else f'Выплачено {format_amount(paid_amount)}'
-        if paid_amount > 0.009
-        else "Не выплачено"
-    )
-    note_class = "contract-table-subtle"
-    amount_class = "payroll-amount is-paid" if paid_amount > 0.009 else "payroll-amount"
+    note_class = "contract-table-subtle payroll-payment-note"
+    if paid_amount > 0.009:
+        if planned_amount > 0.009 and paid_amount + 0.009 < planned_amount:
+            amount_class = "payroll-amount is-partial"
+        else:
+            amount_class = "payroll-amount is-paid"
+        paid_note = (
+            f'Выплачено:<br>{format_amount(paid_amount)}<br>{format_date(paid_date)}'
+            if paid_date is not None
+            else f'Выплачено:<br>{format_amount(paid_amount)}'
+        )
+    else:
+        amount_class = "payroll-amount"
+        paid_note = "Не выплачено"
     display = f"""
     <div class="{amount_class}">{format_amount(planned_amount)}</div>
-    <div class="{note_class}">{escape(paid_note)}</div>
+    <div class="{note_class}">{paid_note}</div>
     """
     if not has_permission(current_user, "payroll", "edit"):
         return display
