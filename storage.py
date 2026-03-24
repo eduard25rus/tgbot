@@ -18,7 +18,7 @@ class Contract:
     chat_id: int
     title: str
     description: str
-    signed_date: date
+    signed_date: Optional[date]
     end_date: date
     advance_percent: Optional[float]
     created_at: datetime
@@ -1245,7 +1245,7 @@ class Storage:
                 (viewer_username, viewer_name, owner_chat_id, viewer_user_id),
             )
 
-    def add_contract(self, chat_id: int, title: str, description: str, signed_date: date, end_date: date, advance_percent: float | None = None) -> int:
+    def add_contract(self, chat_id: int, title: str, description: str, signed_date: date | None, end_date: date, advance_percent: float | None = None) -> int:
         with self.connection() as conn:
             conn.execute(
                 """
@@ -1259,7 +1259,15 @@ class Storage:
                 INSERT INTO contracts (chat_id, title, description, signed_date, end_date, advance_percent, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (chat_id, title.strip(), description.strip(), signed_date.strftime(DATE_FMT), end_date.strftime(DATE_FMT), advance_percent, datetime.utcnow().isoformat()),
+                (
+                    chat_id,
+                    title.strip(),
+                    description.strip(),
+                    signed_date.strftime(DATE_FMT) if signed_date is not None else None,
+                    end_date.strftime(DATE_FMT),
+                    advance_percent,
+                    datetime.utcnow().isoformat(),
+                ),
             )
             return int(cursor.lastrowid)
 
@@ -1450,7 +1458,7 @@ class Storage:
             )
             return cursor.rowcount > 0
 
-    def update_contract_signed_date(self, chat_id: int, contract_id: int, signed_date: date) -> bool:
+    def update_contract_signed_date(self, chat_id: int, contract_id: int, signed_date: date | None) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
                 """
@@ -1458,7 +1466,7 @@ class Storage:
                 SET signed_date = ?
                 WHERE id = ? AND chat_id = ?
                 """,
-                (signed_date.strftime(DATE_FMT), contract_id, chat_id),
+                (signed_date.strftime(DATE_FMT) if signed_date is not None else None, contract_id, chat_id),
             )
             return cursor.rowcount > 0
 
@@ -1806,7 +1814,7 @@ class Storage:
             chat_id=row["chat_id"],
             title=row["title"],
             description=row["description"],
-            signed_date=date.fromisoformat(row["signed_date"]) if row["signed_date"] is not None else datetime.fromisoformat(row["created_at"]).date(),
+            signed_date=date.fromisoformat(row["signed_date"]) if row["signed_date"] is not None and row["signed_date"] != "" else None,
             end_date=date.fromisoformat(row["end_date"]),
             advance_percent=float(row["advance_percent"]) if row["advance_percent"] is not None else None,
             created_at=datetime.fromisoformat(row["created_at"]),
