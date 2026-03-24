@@ -109,9 +109,17 @@ class PayrollRow:
     payroll_month: date
     accrued_amount: float
     advance_card_amount: float
+    advance_card_paid_amount: float
+    advance_card_paid_date: Optional[date]
     advance_cash_amount: float
+    advance_cash_paid_amount: float
+    advance_cash_paid_date: Optional[date]
     salary_amount: float
+    salary_paid_amount: float
+    salary_paid_date: Optional[date]
     bonus_amount: float
+    bonus_paid_amount: float
+    bonus_paid_date: Optional[date]
     note: str
 
 
@@ -294,9 +302,17 @@ class Storage:
                     payroll_month TEXT NOT NULL,
                     accrued_amount REAL NOT NULL DEFAULT 0,
                     advance_card_amount REAL NOT NULL DEFAULT 0,
+                    advance_card_paid_amount REAL NOT NULL DEFAULT 0,
+                    advance_card_paid_date TEXT,
                     advance_cash_amount REAL NOT NULL DEFAULT 0,
+                    advance_cash_paid_amount REAL NOT NULL DEFAULT 0,
+                    advance_cash_paid_date TEXT,
                     salary_amount REAL NOT NULL DEFAULT 0,
+                    salary_paid_amount REAL NOT NULL DEFAULT 0,
+                    salary_paid_date TEXT,
                     bonus_amount REAL NOT NULL DEFAULT 0,
+                    bonus_paid_amount REAL NOT NULL DEFAULT 0,
+                    bonus_paid_date TEXT,
                     note TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -310,6 +326,9 @@ class Storage:
             }
             contract_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(contracts)").fetchall()
+            }
+            payroll_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(payroll_entries)").fetchall()
             }
             if "amount" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN amount REAL NOT NULL DEFAULT 0")
@@ -360,6 +379,19 @@ class Storage:
                     WHERE signed_date IS NULL OR signed_date = ''
                     """
                 )
+            payroll_alters = [
+                ("advance_card_paid_amount", "REAL NOT NULL DEFAULT 0"),
+                ("advance_card_paid_date", "TEXT"),
+                ("advance_cash_paid_amount", "REAL NOT NULL DEFAULT 0"),
+                ("advance_cash_paid_date", "TEXT"),
+                ("salary_paid_amount", "REAL NOT NULL DEFAULT 0"),
+                ("salary_paid_date", "TEXT"),
+                ("bonus_paid_amount", "REAL NOT NULL DEFAULT 0"),
+                ("bonus_paid_date", "TEXT"),
+            ]
+            for column_name, column_def in payroll_alters:
+                if column_name not in payroll_columns:
+                    conn.execute(f"ALTER TABLE payroll_entries ADD COLUMN {column_name} {column_def}")
             grant_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(access_grants)").fetchall()
             }
@@ -2095,9 +2127,17 @@ class Storage:
                     COALESCE(p.payroll_month, ?) AS payroll_month,
                     COALESCE(p.accrued_amount, 0) AS accrued_amount,
                     COALESCE(p.advance_card_amount, 0) AS advance_card_amount,
+                    COALESCE(p.advance_card_paid_amount, 0) AS advance_card_paid_amount,
+                    p.advance_card_paid_date AS advance_card_paid_date,
                     COALESCE(p.advance_cash_amount, 0) AS advance_cash_amount,
+                    COALESCE(p.advance_cash_paid_amount, 0) AS advance_cash_paid_amount,
+                    p.advance_cash_paid_date AS advance_cash_paid_date,
                     COALESCE(p.salary_amount, 0) AS salary_amount,
+                    COALESCE(p.salary_paid_amount, 0) AS salary_paid_amount,
+                    p.salary_paid_date AS salary_paid_date,
                     COALESCE(p.bonus_amount, 0) AS bonus_amount,
+                    COALESCE(p.bonus_paid_amount, 0) AS bonus_paid_amount,
+                    p.bonus_paid_date AS bonus_paid_date,
                     COALESCE(p.note, '') AS note
                 FROM payroll_employees e
                 LEFT JOIN payroll_entries p
@@ -2139,6 +2179,49 @@ class Storage:
             self._upsert_payroll_entry(conn, owner_chat_id, employee_id, payroll_month, updated_field=column, updated_value=amount)
             return True
 
+    def upsert_payroll_payment(
+        self,
+        owner_chat_id: int,
+        employee_id: int,
+        payroll_month: date,
+        payment_kind: str,
+        planned_amount: float,
+        paid_amount: float | None,
+        paid_date: date | None,
+        is_paid: bool,
+    ) -> bool:
+        kind_map = {
+            "advance_card": ("advance_card_amount", "advance_card_paid_amount", "advance_card_paid_date"),
+            "advance_cash": ("advance_cash_amount", "advance_cash_paid_amount", "advance_cash_paid_date"),
+            "salary": ("salary_amount", "salary_paid_amount", "salary_paid_date"),
+            "bonus": ("bonus_amount", "bonus_paid_amount", "bonus_paid_date"),
+        }
+        columns = kind_map.get(payment_kind)
+        if columns is None:
+            return False
+        with self.connection() as conn:
+            employee = conn.execute(
+                "SELECT id FROM payroll_employees WHERE id = ? AND owner_chat_id = ?",
+                (employee_id, owner_chat_id),
+            ).fetchone()
+            if employee is None:
+                return False
+            self._upsert_payroll_entry(
+                conn,
+                owner_chat_id,
+                employee_id,
+                payroll_month,
+                updated_payment={
+                    "planned_column": columns[0],
+                    "paid_column": columns[1],
+                    "date_column": columns[2],
+                    "planned_amount": planned_amount,
+                    "paid_amount": 0.0 if not is_paid else float(paid_amount or 0),
+                    "paid_date": None if not is_paid else paid_date,
+                },
+            )
+            return True
+
     def upsert_payroll_note(self, owner_chat_id: int, employee_id: int, payroll_month: date, note: str) -> bool:
         with self.connection() as conn:
             employee = conn.execute(
@@ -2172,9 +2255,17 @@ class Storage:
             payroll_month=date.fromisoformat(row["payroll_month"]),
             accrued_amount=float(row["accrued_amount"]),
             advance_card_amount=float(row["advance_card_amount"]),
+            advance_card_paid_amount=float(row["advance_card_paid_amount"]),
+            advance_card_paid_date=date.fromisoformat(row["advance_card_paid_date"]) if row["advance_card_paid_date"] else None,
             advance_cash_amount=float(row["advance_cash_amount"]),
+            advance_cash_paid_amount=float(row["advance_cash_paid_amount"]),
+            advance_cash_paid_date=date.fromisoformat(row["advance_cash_paid_date"]) if row["advance_cash_paid_date"] else None,
             salary_amount=float(row["salary_amount"]),
+            salary_paid_amount=float(row["salary_paid_amount"]),
+            salary_paid_date=date.fromisoformat(row["salary_paid_date"]) if row["salary_paid_date"] else None,
             bonus_amount=float(row["bonus_amount"]),
+            bonus_paid_amount=float(row["bonus_paid_amount"]),
+            bonus_paid_date=date.fromisoformat(row["bonus_paid_date"]) if row["bonus_paid_date"] else None,
             note=row["note"] or "",
         )
 
@@ -2213,10 +2304,14 @@ class Storage:
         note: str | None = None,
         updated_field: str | None = None,
         updated_value: float | str | None = None,
+        updated_payment: dict | None = None,
     ) -> None:
         row = conn.execute(
             """
-            SELECT id, accrued_amount, advance_card_amount, advance_cash_amount, salary_amount, bonus_amount, note
+            SELECT id, accrued_amount, advance_card_amount, advance_card_paid_amount, advance_card_paid_date,
+                   advance_cash_amount, advance_cash_paid_amount, advance_cash_paid_date,
+                   salary_amount, salary_paid_amount, salary_paid_date,
+                   bonus_amount, bonus_paid_amount, bonus_paid_date, note
             FROM payroll_entries
             WHERE owner_chat_id = ? AND employee_id = ? AND payroll_month = ?
             LIMIT 1
@@ -2227,30 +2322,57 @@ class Storage:
         payload = {
             "accrued_amount": float(accrued_amount or 0),
             "advance_card_amount": float(advance_card_amount or 0),
+            "advance_card_paid_amount": 0.0,
+            "advance_card_paid_date": None,
             "advance_cash_amount": float(advance_cash_amount or 0),
+            "advance_cash_paid_amount": 0.0,
+            "advance_cash_paid_date": None,
             "salary_amount": float(salary_amount or 0),
+            "salary_paid_amount": 0.0,
+            "salary_paid_date": None,
             "bonus_amount": float(bonus_amount or 0),
+            "bonus_paid_amount": 0.0,
+            "bonus_paid_date": None,
             "note": note or "",
         }
         if row is not None:
             payload = {
                 "accrued_amount": float(row["accrued_amount"]),
                 "advance_card_amount": float(row["advance_card_amount"]),
+                "advance_card_paid_amount": float(row["advance_card_paid_amount"]),
+                "advance_card_paid_date": row["advance_card_paid_date"],
                 "advance_cash_amount": float(row["advance_cash_amount"]),
+                "advance_cash_paid_amount": float(row["advance_cash_paid_amount"]),
+                "advance_cash_paid_date": row["advance_cash_paid_date"],
                 "salary_amount": float(row["salary_amount"]),
+                "salary_paid_amount": float(row["salary_paid_amount"]),
+                "salary_paid_date": row["salary_paid_date"],
                 "bonus_amount": float(row["bonus_amount"]),
+                "bonus_paid_amount": float(row["bonus_paid_amount"]),
+                "bonus_paid_date": row["bonus_paid_date"],
                 "note": row["note"] or "",
             }
         if updated_field is not None:
             payload[updated_field] = updated_value if updated_field == "note" else float(updated_value or 0)
+        if updated_payment is not None:
+            payload[updated_payment["planned_column"]] = float(updated_payment["planned_amount"] or 0)
+            payload[updated_payment["paid_column"]] = float(updated_payment["paid_amount"] or 0)
+            payload[updated_payment["date_column"]] = (
+                updated_payment["paid_date"].strftime(DATE_FMT)
+                if updated_payment.get("paid_date") is not None
+                else None
+            )
         if row is None:
             conn.execute(
                 """
                 INSERT INTO payroll_entries (
                     owner_chat_id, employee_id, payroll_month, accrued_amount, advance_card_amount,
-                    advance_cash_amount, salary_amount, bonus_amount, note, created_at, updated_at
+                    advance_card_paid_amount, advance_card_paid_date,
+                    advance_cash_amount, advance_cash_paid_amount, advance_cash_paid_date,
+                    salary_amount, salary_paid_amount, salary_paid_date,
+                    bonus_amount, bonus_paid_amount, bonus_paid_date, note, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -2258,9 +2380,17 @@ class Storage:
                     payroll_month.strftime(DATE_FMT),
                     payload["accrued_amount"],
                     payload["advance_card_amount"],
+                    payload["advance_card_paid_amount"],
+                    payload["advance_card_paid_date"],
                     payload["advance_cash_amount"],
+                    payload["advance_cash_paid_amount"],
+                    payload["advance_cash_paid_date"],
                     payload["salary_amount"],
+                    payload["salary_paid_amount"],
+                    payload["salary_paid_date"],
                     payload["bonus_amount"],
+                    payload["bonus_paid_amount"],
+                    payload["bonus_paid_date"],
                     payload["note"],
                     now,
                     now,
@@ -2270,16 +2400,26 @@ class Storage:
         conn.execute(
             """
             UPDATE payroll_entries
-            SET accrued_amount = ?, advance_card_amount = ?, advance_cash_amount = ?, salary_amount = ?,
-                bonus_amount = ?, note = ?, updated_at = ?
+            SET accrued_amount = ?, advance_card_amount = ?, advance_card_paid_amount = ?, advance_card_paid_date = ?,
+                advance_cash_amount = ?, advance_cash_paid_amount = ?, advance_cash_paid_date = ?,
+                salary_amount = ?, salary_paid_amount = ?, salary_paid_date = ?,
+                bonus_amount = ?, bonus_paid_amount = ?, bonus_paid_date = ?, note = ?, updated_at = ?
             WHERE id = ?
             """,
             (
                 payload["accrued_amount"],
                 payload["advance_card_amount"],
+                payload["advance_card_paid_amount"],
+                payload["advance_card_paid_date"],
                 payload["advance_cash_amount"],
+                payload["advance_cash_paid_amount"],
+                payload["advance_cash_paid_date"],
                 payload["salary_amount"],
+                payload["salary_paid_amount"],
+                payload["salary_paid_date"],
                 payload["bonus_amount"],
+                payload["bonus_paid_amount"],
+                payload["bonus_paid_date"],
                 payload["note"],
                 now,
                 row["id"],

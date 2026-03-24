@@ -2258,6 +2258,9 @@ def layout(
     .payroll-balance.danger {{
       color: var(--danger);
     }}
+    .payroll-payment-field.is-hidden {{
+      display: none;
+    }}
     .contract-advance-stack {{
       display: grid;
       gap: 4px;
@@ -3366,6 +3369,26 @@ document.addEventListener("change", (event) => {{
   }}
 }});
 
+document.addEventListener("change", (event) => {{
+  const checkbox = event.target.closest('input[name="is_paid"]');
+  if (!checkbox) {{
+    return;
+  }}
+  const form = checkbox.closest("form");
+  if (!form) {{
+    return;
+  }}
+  form.querySelectorAll(".payroll-payment-field").forEach((field) => {{
+    field.classList.toggle("is-hidden", !checkbox.checked);
+  }});
+  form.querySelectorAll('input[name="paid_amount"], input[name="paid_date"]').forEach((input) => {{
+    input.required = checkbox.checked;
+    if (!checkbox.checked) {{
+      input.value = "";
+    }}
+  }});
+}});
+
 document.addEventListener("input", (event) => {{
   const stageCountInput = event.target.closest('[data-stage-count-input]');
   if (!stageCountInput) {{
@@ -3870,7 +3893,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
 
 
 def payroll_row_metrics(row) -> dict[str, float | str]:
-    paid_total = row.advance_card_amount + row.advance_cash_amount + row.salary_amount + row.bonus_amount
+    paid_total = row.advance_card_paid_amount + row.advance_cash_paid_amount + row.salary_paid_amount + row.bonus_paid_amount
     balance = round(row.accrued_amount - paid_total, 2)
     debt_amount = max(balance, 0.0)
     overpaid_amount = abs(min(balance, 0.0))
@@ -3898,7 +3921,7 @@ def payroll_row_metrics(row) -> dict[str, float | str]:
 
 def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, field_name: str, label: str, value: float, current_user: dict | None) -> str:
     amount_html = format_amount(value)
-    amount_class = "payroll-amount is-paid" if value > 0.009 and field_name != "accrued_amount" else "payroll-amount"
+    amount_class = "payroll-amount"
     if not has_permission(current_user, "payroll", "edit"):
         return f'<span class="{amount_class}">{amount_html}</span>'
     return f"""
@@ -3912,6 +3935,51 @@ def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, f
             <input type="text" name="amount" value="{escape(format_amount_input(value))}" data-money-input="1" required>
           </div>
           <button class="submit-btn" type="submit">Сохранить</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, payment_kind: str, label: str, planned_amount: float, paid_amount: float, paid_date: date | None, current_user: dict | None) -> str:
+    paid_note = (
+        f'Выплачено {format_amount(paid_amount)} · {format_date(paid_date)}'
+        if paid_amount > 0.009 and paid_date is not None
+        else f'Выплачено {format_amount(paid_amount)}'
+        if paid_amount > 0.009
+        else "Не выплачено"
+    )
+    note_class = "contract-table-subtle"
+    amount_class = "payroll-amount is-paid" if paid_amount > 0.009 else "payroll-amount"
+    display = f"""
+    <div class="{amount_class}">{format_amount(planned_amount)}</div>
+    <div class="{note_class}">{escape(paid_note)}</div>
+    """
+    if not has_permission(current_user, "payroll", "edit"):
+        return display
+    checked_attr = "checked" if paid_amount > 0.009 else ""
+    return f"""
+    <details class="status-menu">
+      <summary>{display}</summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="/payroll/entries/{row.employee_id}/payment?owner={owner_chat_id}&month={payroll_month.strftime('%Y-%m')}">
+          <input type="hidden" name="payment_kind" value="{escape(payment_kind)}">
+          <div class="field">
+            <label>{escape(label)} начислено</label>
+            <input type="text" name="planned_amount" value="{escape(format_amount_input(planned_amount))}" data-money-input="1" required>
+          </div>
+          <label class="advance-toggle">
+            <input class="toggle-checkbox" type="checkbox" name="is_paid" value="1" {checked_attr}> Выплата зафиксирована
+          </label>
+          <div class="field payroll-payment-field{' is-hidden' if paid_amount <= 0.009 else ''}">
+            <label>Фактически выплачено</label>
+            <input type="text" name="paid_amount" value="{escape(format_amount_input(paid_amount)) if paid_amount > 0.009 else ''}" data-money-input="1">
+          </div>
+          <div class="field payroll-payment-field{' is-hidden' if paid_amount <= 0.009 else ''}">
+            <label>Дата выплаты</label>
+            <input type="date" name="paid_date" value="{paid_date.isoformat() if paid_date is not None else ''}">
+          </div>
+          <button class="submit-btn" type="submit">Сохранить выплату</button>
         </form>
       </div>
     </details>
@@ -4020,10 +4088,10 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
                 {render_payroll_note_editor(owner_chat_id, selected_month, row, current_user)}
               </td>
               <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "accrued_amount", "Начислено", row.accrued_amount, current_user)}</td>
-              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "advance_card_amount", "Аванс карта", row.advance_card_amount, current_user)}</td>
-              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "advance_cash_amount", "Аванс кэш", row.advance_cash_amount, current_user)}</td>
-              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "salary_amount", "Зарплата", row.salary_amount, current_user)}</td>
-              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "bonus_amount", "Премия", row.bonus_amount, current_user)}</td>
+              <td>{render_payroll_payment_editor(owner_chat_id, selected_month, row, "advance_card", "Аванс карта", row.advance_card_amount, row.advance_card_paid_amount, row.advance_card_paid_date, current_user)}</td>
+              <td>{render_payroll_payment_editor(owner_chat_id, selected_month, row, "advance_cash", "Аванс кэш", row.advance_cash_amount, row.advance_cash_paid_amount, row.advance_cash_paid_date, current_user)}</td>
+              <td>{render_payroll_payment_editor(owner_chat_id, selected_month, row, "salary", "Зарплата", row.salary_amount, row.salary_paid_amount, row.salary_paid_date, current_user)}</td>
+              <td>{render_payroll_payment_editor(owner_chat_id, selected_month, row, "bonus", "Премия", row.bonus_amount, row.bonus_paid_amount, row.bonus_paid_date, current_user)}</td>
               <td class="nowrap">{format_amount(meta["paid_total"])}</td>
               <td class="nowrap">{balance_display}</td>
               <td><span class="{meta["status_class"]}">{meta["status_label"]}</span></td>
@@ -5534,6 +5602,33 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
         except Exception as exc:
             body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить сумму: {exc}")
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/payroll/entries/") and path.endswith("/payment") and method == "POST":
+        denied = guard("payroll", "edit")
+        if denied:
+            return denied
+        employee_id = int(path.split("/")[3])
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
+        form = read_post_data(environ)
+        try:
+            payment_kind = form.get("payment_kind", "").strip()
+            planned_amount = parse_amount(form.get("planned_amount", "0"))
+            is_paid = form.get("is_paid") == "1"
+            paid_amount = parse_amount(form.get("paid_amount", "0")) if is_paid else None
+            paid_date = parse_date(form["paid_date"]) if is_paid else None
+            if is_paid and paid_amount is not None and paid_amount < 0:
+                raise ValueError("Сумма выплаты не может быть отрицательной")
+            if not storage.upsert_payroll_payment(current_owner, employee_id, selected_month, payment_kind, planned_amount, paid_amount, paid_date, is_paid):
+                raise ValueError("Не удалось обновить выплату")
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, "Выплата обновлена", True)
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        except Exception as exc:
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить выплату: {exc}")
             html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
