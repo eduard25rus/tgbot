@@ -1446,6 +1446,21 @@ class Storage:
                     )
             return cursor.rowcount > 0
 
+    def update_stage_amount(self, chat_id: int, stage_id: int, amount: float) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE stages
+                SET amount = ?
+                WHERE id = ?
+                  AND contract_id IN (
+                      SELECT id FROM contracts WHERE chat_id = ?
+                  )
+                """,
+                (amount, stage_id, chat_id),
+            )
+            return cursor.rowcount > 0
+
     def update_contract_advance_percent(self, chat_id: int, contract_id: int, advance_percent: float | None) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(

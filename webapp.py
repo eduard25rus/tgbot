@@ -789,6 +789,26 @@ def render_stage_deadline_form(owner_chat_id: int, contract_id: int, stage, curr
     """
 
 
+def render_stage_amount_form(owner_chat_id: int, contract_id: int, stage, current_user: dict | None, active_tab: str = "detail") -> str:
+    if not can_edit_contract_stage_controls(current_user):
+        return format_amount(stage.amount)
+    return f"""
+    <details class="status-menu">
+      <summary><span class="deadline-value">{format_amount(stage.amount)}</span></summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="/contracts/stages/{stage.id}/amount?owner={owner_chat_id}&contract_id={contract_id}">
+          <input type="hidden" name="tab" value="{escape(active_tab)}">
+          <div class="field">
+            <label>Сумма этапа</label>
+            <input type="text" name="amount" value="{escape(format_amount_input(stage.amount))}" data-money-input="1" required>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить сумму</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
 def render_contract_advance_card(owner_chat_id: int, contract, payload: dict, current_user: dict | None) -> str:
     current_label = format_percent(contract.advance_percent) if contract.advance_percent else "Без аванса"
     current_note = format_amount(payload["advance_amount"]) if contract.advance_percent else "Аванс не указан"
@@ -3675,7 +3695,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
           </td>
           <td>{render_stage_status_form(owner_chat_id, contract.id, stage, current_user)}</td>
           <td>{render_stage_deadline_form(owner_chat_id, contract.id, stage, current_user)}</td>
-          <td>{format_amount(stage.amount)}</td>
+          <td>{render_stage_amount_form(owner_chat_id, contract.id, stage, current_user)}</td>
           <td>{format_amount(stage.amount * advance_percent / 100) if contract.advance_percent else 'Без аванса'}</td>
           <td>{format_amount(stage.amount - (stage.amount * advance_percent / 100)) if contract.advance_percent else format_amount(stage.amount)}</td>
           <td>{render_stage_payment_form(owner_chat_id, contract.id, stage, current_user)}</td>
@@ -5302,6 +5322,29 @@ def app(environ, start_response):
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить дедлайн этапа: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/stages/") and path.endswith("/amount") and method == "POST":
+        if not can_edit_contract_stage_controls(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            stage_id = int(path.split("/")[3])
+            contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0])
+            form = read_post_data(environ)
+            amount = parse_amount(form["amount"])
+            if amount <= 0:
+                raise ValueError("Сумма этапа должна быть больше 0")
+            updated = storage.update_stage_amount(current_owner, stage_id, amount)
+            if not updated:
+                raise ValueError("Этап не найден")
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить сумму этапа: {exc}")
             html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
