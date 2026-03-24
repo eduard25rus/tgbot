@@ -3974,10 +3974,10 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
         )
     else:
         amount_class = "payroll-amount"
-        paid_note = "Не выплачено"
+        paid_note = "" if planned_amount <= 0.009 else "Не выплачено"
     display = f"""
     <div class="{amount_class}">{format_amount(planned_amount)}</div>
-    <div class="{note_class}">{paid_note}</div>
+    {f'<div class="{note_class}">{paid_note}</div>' if paid_note else ""}
     """
     if not has_permission(current_user, "payroll", "edit"):
         return display
