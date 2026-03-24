@@ -300,13 +300,13 @@ class Storage:
                 conn.execute("ALTER TABLE contracts ADD COLUMN advance_percent REAL")
             if "signed_date" not in contract_columns:
                 conn.execute("ALTER TABLE contracts ADD COLUMN signed_date TEXT")
-            conn.execute(
-                """
-                UPDATE contracts
-                SET signed_date = substr(created_at, 1, 10)
-                WHERE signed_date IS NULL OR signed_date = ''
-                """
-            )
+                conn.execute(
+                    """
+                    UPDATE contracts
+                    SET signed_date = substr(created_at, 1, 10)
+                    WHERE signed_date IS NULL OR signed_date = ''
+                    """
+                )
             grant_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(access_grants)").fetchall()
             }

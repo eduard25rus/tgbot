@@ -828,7 +828,7 @@ def render_contract_advance_card(owner_chat_id: int, contract, payload: dict, cu
 
 
 def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user: dict | None) -> str:
-    label = f"Заключен: {format_date(contract.signed_date)}" if contract.signed_date is not None else "Не подписан"
+    label = f"Заключен: {format_date(contract.signed_date)}" if contract.signed_date is not None else "Еще не подписан"
     if not can_edit_contract_stage_controls(current_user):
         return f'<span class="chip">{escape(label)}</span>'
     checked_attr = "checked" if contract.signed_date is None else ""
@@ -840,7 +840,7 @@ def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user:
           <label class="advance-toggle">
             <input class="toggle-checkbox" type="checkbox" name="is_unsigned" value="1" {checked_attr}> Контракт еще не подписан
           </label>
-          <div class="field">
+          <div class="field signed-date-field{" is-hidden" if contract.signed_date is None else ""}">
             <label>Дата заключения контракта</label>
             <input type="date" name="signed_date" value="{contract.signed_date.isoformat() if contract.signed_date is not None else ''}">
           </div>
@@ -2549,6 +2549,9 @@ def layout(
     .advance-field.is-hidden {{
       display: none;
     }}
+    .signed-date-field.is-hidden {{
+      display: none;
+    }}
     .action-row {{
       display: flex;
       gap: 10px;
@@ -3275,6 +3278,25 @@ document.addEventListener("change", (event) => {{
   }}
 }});
 
+document.addEventListener("change", (event) => {{
+  const checkbox = event.target.closest('input[name="is_unsigned"]');
+  if (!checkbox) {{
+    return;
+  }}
+  const form = checkbox.closest("form");
+  const field = form ? form.querySelector(".signed-date-field") : null;
+  const dateInput = form ? form.querySelector('input[name="signed_date"]') : null;
+  if (field) {{
+    field.classList.toggle("is-hidden", checkbox.checked);
+  }}
+  if (dateInput) {{
+    dateInput.required = !checkbox.checked;
+    if (checkbox.checked) {{
+      dateInput.value = "";
+    }}
+  }}
+}});
+
 document.addEventListener("input", (event) => {{
   const stageCountInput = event.target.closest('[data-stage-count-input]');
   if (!stageCountInput) {{
@@ -3454,7 +3476,7 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
                   <div class="timeline-title">{escape(contract.title)}</div>
                 </a>
                 <div class="contract-table-subtle">{escape(contract.description) if contract.description else 'Описание пока не заполнено'}</div>
-                <div class="contract-table-subtle" style="text-align:right;">{f'Заключен: {format_date(contract.signed_date)}' if contract.signed_date is not None else 'Не подписан'}</div>
+                <div class="contract-table-subtle" style="text-align:right;">{f'Заключен: {format_date(contract.signed_date)}' if contract.signed_date is not None else 'Еще не подписан'}</div>
               </td>
               <td class="nowrap" style="text-align:center;">
                 <div{deadline_tooltip}>{format_date(contract.end_date)}</div>
