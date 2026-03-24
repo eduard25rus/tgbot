@@ -4016,7 +4016,7 @@ def payroll_expected_salary_amount(row) -> float:
 
 
 def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, field_name: str, label: str, value: float, current_user: dict | None) -> str:
-    amount_html = format_amount(value)
+    amount_html = format_amount(value) if abs(value) > 0.009 else "—"
     amount_class = "payroll-amount"
     if not has_permission(current_user, "payroll", "edit"):
         return f'<span class="{amount_class}">{amount_html}</span>'
@@ -4041,6 +4041,7 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
     note_class = "contract-table-subtle payroll-payment-note"
     mismatch_note = ""
     form_value = planned_amount
+    planned_display = format_amount(planned_amount) if planned_amount > 0.009 else "—"
     if payment_kind == "salary":
         expected_amount = payroll_expected_salary_amount(row)
         if abs(planned_amount - expected_amount) > 0.009:
@@ -4070,7 +4071,7 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
     else:
         paid_note = "" if planned_amount <= 0.009 else "Не выплачено"
     display = f"""
-    <div class="{amount_class}">{format_amount(planned_amount)}</div>
+    <div class="{amount_class}">{planned_display}</div>
     {f'<div class="{note_class} danger">{mismatch_note}</div>' if mismatch_note else ""}
     {f'<div class="{note_class}">{paid_note}</div>' if paid_note else ""}
     """
