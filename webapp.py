@@ -141,6 +141,26 @@ def format_date(value: date) -> str:
     return value.strftime("%d-%m-%Y")
 
 
+RU_MONTH_NAMES = {
+    1: "Январь",
+    2: "Февраль",
+    3: "Март",
+    4: "Апрель",
+    5: "Май",
+    6: "Июнь",
+    7: "Июль",
+    8: "Август",
+    9: "Сентябрь",
+    10: "Октябрь",
+    11: "Ноябрь",
+    12: "Декабрь",
+}
+
+
+def format_month_label(value: date) -> str:
+    return f"{RU_MONTH_NAMES[value.month]} {value.year}"
+
+
 def format_datetime(value: datetime) -> str:
     localized = value
     if value.tzinfo is None:
@@ -254,6 +274,16 @@ def pick_owner(storage: Storage, requested_owner: str | None) -> int | None:
         if parsed in owners:
             return parsed
     return owners[0]
+
+
+def parse_month_key(raw: str | None) -> date | None:
+    if not raw:
+        return None
+    raw = raw.strip()
+    try:
+        return date.fromisoformat(f"{raw}-01")
+    except ValueError:
+        return None
 
 
 def contract_payload(storage: Storage, owner_chat_id: int) -> list[dict]:
@@ -2209,6 +2239,25 @@ def layout(
       line-height: 1.45;
       margin-top: 4px;
     }}
+    .payroll-amount {{
+      font-weight: 600;
+      color: var(--ink);
+      white-space: nowrap;
+    }}
+    .payroll-amount.is-paid {{
+      color: var(--ok);
+    }}
+    .payroll-balance {{
+      font-weight: 600;
+      white-space: nowrap;
+      color: var(--warn);
+    }}
+    .payroll-balance.ok {{
+      color: var(--ok);
+    }}
+    .payroll-balance.danger {{
+      color: var(--danger);
+    }}
     .contract-advance-stack {{
       display: grid;
       gap: 4px;
@@ -3820,6 +3869,202 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
     """
 
 
+def payroll_row_metrics(row) -> dict[str, float | str]:
+    paid_total = row.advance_card_amount + row.advance_cash_amount + row.salary_amount + row.bonus_amount
+    balance = round(row.accrued_amount - paid_total, 2)
+    debt_amount = max(balance, 0.0)
+    overpaid_amount = abs(min(balance, 0.0))
+    if overpaid_amount > 0.009:
+        status_label = "Переплата"
+        status_class = "chip danger"
+    elif row.accrued_amount > 0 and debt_amount <= 0.009:
+        status_label = "Закрыто"
+        status_class = "chip ok"
+    elif paid_total > 0:
+        status_label = "Частично выплачено"
+        status_class = "chip warn"
+    else:
+        status_label = "Не выплачено"
+        status_class = "chip"
+    return {
+        "paid_total": paid_total,
+        "balance": balance,
+        "debt_amount": debt_amount,
+        "overpaid_amount": overpaid_amount,
+        "status_label": status_label,
+        "status_class": status_class,
+    }
+
+
+def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, field_name: str, label: str, value: float, current_user: dict | None) -> str:
+    amount_html = format_amount(value)
+    amount_class = "payroll-amount is-paid" if value > 0.009 and field_name != "accrued_amount" else "payroll-amount"
+    if not has_permission(current_user, "payroll", "edit"):
+        return f'<span class="{amount_class}">{amount_html}</span>'
+    return f"""
+    <details class="status-menu">
+      <summary><span class="{amount_class}">{amount_html}</span></summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="/payroll/entries/{row.employee_id}/amount?owner={owner_chat_id}&month={payroll_month.strftime('%Y-%m')}">
+          <input type="hidden" name="field_name" value="{escape(field_name)}">
+          <div class="field">
+            <label>{escape(label)}</label>
+            <input type="text" name="amount" value="{escape(format_amount_input(value))}" data-money-input="1" required>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_payroll_note_editor(owner_chat_id: int, payroll_month: date, row, current_user: dict | None) -> str:
+    note_text = row.note.strip() or ("Добавить заметку" if has_permission(current_user, "payroll", "edit") else "")
+    note_class = "contract-table-subtle"
+    if not note_text:
+        return ""
+    if not has_permission(current_user, "payroll", "edit"):
+        return f'<div class="{note_class}">{escape(note_text)}</div>'
+    return f"""
+    <details class="status-menu">
+      <summary><div class="{note_class}">{escape(note_text)}</div></summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="/payroll/entries/{row.employee_id}/note?owner={owner_chat_id}&month={payroll_month.strftime('%Y-%m')}">
+          <div class="field">
+            <label>Заметка по выплате</label>
+            <textarea name="note" placeholder="Например, договорились доплатить отдельно">{escape(row.note)}</textarea>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить заметку</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date | None = None, flash_message: str = "", success: bool = False) -> str:
+    storage.ensure_payroll_seed(owner_chat_id)
+    months = storage.list_payroll_months(owner_chat_id)
+    if not months:
+        months = [date.today().replace(day=1)]
+    if selected_month is None or selected_month not in months:
+        selected_month = months[0]
+    rows = storage.list_payroll_rows(owner_chat_id, selected_month)
+    total_accrued = sum(row.accrued_amount for row in rows)
+    total_paid = sum(payroll_row_metrics(row)["paid_total"] for row in rows)
+    total_debt = sum(payroll_row_metrics(row)["debt_amount"] for row in rows)
+    closed_count = sum(1 for row in rows if payroll_row_metrics(row)["status_label"] == "Закрыто")
+    month_tabs = "".join(
+        f'<a class="tab-btn{" active" if month == selected_month else ""}" href="/payroll?owner={owner_chat_id}&month={month.strftime("%Y-%m")}">{escape(format_month_label(month))}</a>'
+        for month in months
+    )
+    stats = f"""
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Сотрудников</div>
+        <div class="stat-value">{len(rows)}</div>
+        <div class="stat-note">В реестре зарплаты за месяц</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Начислено</div>
+        <div class="stat-value">{format_amount(total_accrued)}</div>
+        <div class="stat-note">Общая сумма начислений за месяц</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Выплачено</div>
+        <div class="stat-value">{format_amount(total_paid)}</div>
+        <div class="stat-note">Уже выдано сотрудникам</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Долг по зарплате</div>
+        <div class="stat-value">{format_amount(total_debt)}</div>
+        <div class="stat-note">Осталось закрыть по месяцу · закрыто {closed_count}</div>
+      </article>
+    </section>
+    """
+    add_employee_button = ""
+    if has_permission(current_user, "payroll", "edit"):
+        add_employee_button = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Добавить сотрудника</span></summary>
+          <div class="status-popover">
+            <form class="form-grid" method="post" action="/payroll/employees/new?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}">
+              <div class="field">
+                <label>ФИО сотрудника</label>
+                <input type="text" name="full_name" placeholder="Иван Иванов" required>
+              </div>
+              <div class="field">
+                <label>Должность</label>
+                <input type="text" name="role_title" placeholder="Снабженец" required>
+              </div>
+              <button class="submit-btn" type="submit">Добавить в систему</button>
+            </form>
+          </div>
+        </details>
+        """
+    body_rows = []
+    for index, row in enumerate(rows, start=1):
+        meta = payroll_row_metrics(row)
+        balance_display = (
+            f'<span class="payroll-balance danger">Переплата {format_amount(meta["overpaid_amount"])}</span>'
+            if meta["overpaid_amount"] > 0.009
+            else f'<span class="payroll-balance{" ok" if meta["debt_amount"] <= 0.009 else ""}">{format_amount(meta["debt_amount"])}</span>'
+        )
+        role_html = f'<div class="contract-table-subtle">{escape(row.role_title)}</div>' if row.role_title else ""
+        body_rows.append(
+            f"""
+            <tr>
+              <td class="nowrap" style="text-align:center;">{index}</td>
+              <td>
+                <div class="timeline-title">{escape(row.full_name)}</div>
+                {role_html}
+                {render_payroll_note_editor(owner_chat_id, selected_month, row, current_user)}
+              </td>
+              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "accrued_amount", "Начислено", row.accrued_amount, current_user)}</td>
+              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "advance_card_amount", "Аванс карта", row.advance_card_amount, current_user)}</td>
+              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "advance_cash_amount", "Аванс кэш", row.advance_cash_amount, current_user)}</td>
+              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "salary_amount", "Зарплата", row.salary_amount, current_user)}</td>
+              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "bonus_amount", "Премия", row.bonus_amount, current_user)}</td>
+              <td class="nowrap">{format_amount(meta["paid_total"])}</td>
+              <td class="nowrap">{balance_display}</td>
+              <td><span class="{meta["status_class"]}">{meta["status_label"]}</span></td>
+            </tr>
+            """
+        )
+    rows_html = "".join(body_rows) or '<tr><td colspan="10">Сотрудников пока нет.</td></tr>'
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    return f"""
+    {stats}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Реестр зарплаты</h2>
+          <div class="panel-sub">Начисления, выплаты и остатки по сотрудникам в разрезе месяцев.</div>
+        </div>
+        {add_employee_button}
+      </div>
+      <div class="tab-row">{month_tabs}</div>
+      {flash_html}
+      <table class="table contract-table" style="margin-top: 18px;">
+        <thead>
+          <tr>
+            <th class="nowrap">№</th>
+            <th>Сотрудник</th>
+            <th class="nowrap">Начислено</th>
+            <th class="nowrap">Аванс карта</th>
+            <th class="nowrap">Аванс кэш</th>
+            <th class="nowrap">ЗП</th>
+            <th class="nowrap">Премия</th>
+            <th class="nowrap">Выплачено</th>
+            <th class="nowrap">Остаток</th>
+            <th class="nowrap">Статус</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </section>
+    """
+
+
 def render_access_section(
     storage: Storage,
     owner_chat_id: int,
@@ -5247,6 +5492,73 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
+    if path == "/payroll/employees/new" and method == "POST":
+        denied = guard("payroll", "edit")
+        if denied:
+            return denied
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0])
+        form = read_post_data(environ)
+        try:
+            full_name = form.get("full_name", "").strip()
+            role_title = form.get("role_title", "").strip()
+            if not full_name:
+                raise ValueError("Укажите ФИО сотрудника")
+            if not role_title:
+                raise ValueError("Укажите должность сотрудника")
+            storage.add_payroll_employee(current_owner, full_name, role_title)
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, "Сотрудник добавлен", True)
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        except Exception as exc:
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось добавить сотрудника: {exc}")
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/payroll/entries/") and path.endswith("/amount") and method == "POST":
+        denied = guard("payroll", "edit")
+        if denied:
+            return denied
+        employee_id = int(path.split("/")[3])
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
+        form = read_post_data(environ)
+        try:
+            field_name = form.get("field_name", "").strip()
+            amount = parse_amount(form.get("amount", "0"))
+            if not storage.upsert_payroll_amount(current_owner, employee_id, selected_month, field_name, amount):
+                raise ValueError("Не удалось обновить сумму")
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, "Сумма обновлена", True)
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        except Exception as exc:
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить сумму: {exc}")
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/payroll/entries/") and path.endswith("/note") and method == "POST":
+        denied = guard("payroll", "edit")
+        if denied:
+            return denied
+        employee_id = int(path.split("/")[3])
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
+        form = read_post_data(environ)
+        try:
+            note = form.get("note", "")
+            if not storage.upsert_payroll_note(current_owner, employee_id, selected_month, note):
+                raise ValueError("Не удалось обновить заметку")
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, "Заметка обновлена", True)
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        except Exception as exc:
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить заметку: {exc}")
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
     if path.startswith("/contracts/stages/") and path.endswith("/status") and method == "POST":
         if not can_edit_contract_stage_controls(current_user):
             body = render_forbidden_body("Контракты")
@@ -5416,17 +5728,6 @@ def app(environ, start_response):
             ],
             "expenses",
         ),
-        "/payroll": (
-            "Зарплата",
-            "Позже сюда можно вынести сотрудников, начисления, авансы и привязку к объектам.",
-            [
-                "Список сотрудников и ролей",
-                "Начисления и выплаты",
-                "Привязка к контрактам и объектам",
-                "История выплат и задолженностей",
-            ],
-            "payroll",
-        ),
         "/finance-analysis": (
             "Финансовый анализ",
             "Будущий модуль для общей картины бизнеса: cashflow, маржа, долг, оборачиваемость и сценарии.",
@@ -5446,6 +5747,16 @@ def app(environ, start_response):
             return denied
         body = render_placeholder_section(title, subtitle, bullets)
         html = layout(title, body, owners, current_owner, section_id, current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/payroll":
+        denied = guard("payroll", "view")
+        if denied:
+            return denied
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0])
+        body = render_payroll_section(storage, current_owner, current_user, selected_month)
+        html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 

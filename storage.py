@@ -89,6 +89,32 @@ class Auction:
     created_at: datetime
 
 
+@dataclass
+class PayrollEmployee:
+    id: int
+    owner_chat_id: int
+    full_name: str
+    role_title: str
+    is_active: bool
+    created_at: datetime
+
+
+@dataclass
+class PayrollRow:
+    employee_id: int
+    owner_chat_id: int
+    full_name: str
+    role_title: str
+    is_active: bool
+    payroll_month: date
+    accrued_amount: float
+    advance_card_amount: float
+    advance_cash_amount: float
+    salary_amount: float
+    bonus_amount: float
+    note: str
+
+
 class Storage:
     def __init__(self, db_path: str) -> None:
         self.db_path = Path(db_path)
@@ -249,6 +275,33 @@ class Storage:
                     archived_at TEXT,
                     deleted_at TEXT,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS payroll_employees (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    full_name TEXT NOT NULL,
+                    role_title TEXT NOT NULL DEFAULT '',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, full_name, role_title)
+                );
+
+                CREATE TABLE IF NOT EXISTS payroll_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    employee_id INTEGER NOT NULL,
+                    payroll_month TEXT NOT NULL,
+                    accrued_amount REAL NOT NULL DEFAULT 0,
+                    advance_card_amount REAL NOT NULL DEFAULT 0,
+                    advance_cash_amount REAL NOT NULL DEFAULT 0,
+                    salary_amount REAL NOT NULL DEFAULT 0,
+                    bonus_amount REAL NOT NULL DEFAULT 0,
+                    note TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, employee_id, payroll_month),
+                    FOREIGN KEY(employee_id) REFERENCES payroll_employees(id) ON DELETE CASCADE
                 );
                 """
             )
@@ -1961,6 +2014,277 @@ class Storage:
                 """,
                 (index, f"Этап {index}", row["id"]),
             )
+
+    def ensure_payroll_seed(self, owner_chat_id: int) -> None:
+        with self.connection() as conn:
+            has_rows = conn.execute(
+                "SELECT 1 FROM payroll_entries WHERE owner_chat_id = ? LIMIT 1",
+                (owner_chat_id,),
+            ).fetchone()
+            if has_rows is not None:
+                return
+            seed_rows = [
+                ("Эдуард Шевченко", "Учредитель", {"2026-01": (300000, 14642, 0, 285358, 0, ""), "2026-02": (300000, 17000, 0, 283000, 0, ""), "2026-03": (300000, 17000, 0, 283000, 0, "")}),
+                ("Денис Учайкин", "Учредитель", {"2026-01": (300000, 14824, 0, 285176, 0, ""), "2026-02": (300000, 17000, 0, 283000, 0, ""), "2026-03": (300000, 17000, 0, 283000, 0, "")}),
+                ("Александр Волкоруб", "Нач стройки", {"2026-01": (75000, 14642, 0, 60358, 0, ""), "2026-02": (150000, 17000, 50000, 83000, 0, "80 000 руб Сане"), "2026-03": (150000, 17000, 50000, 83000, 0, "")}),
+                ("Икрам Алимов", "Снабжение & Люди", {"2026-01": (110000, 14642, 40000, 55358, 0, ""), "2026-02": (110000, 17000, 40000, 53000, 0, ""), "2026-03": (110000, 17000, 40000, 53000, 0, "")}),
+                ("Александр Ю", "Снабженец", {"2026-01": (120000, 0, 50000, 70000, 0, ""), "2026-02": (120000, 0, 50000, 70000, 0, ""), "2026-03": (120000, 0, 50000, 70000, 0, "")}),
+                ("Захар Шкуркин", "Прораб", {"2026-01": (120000, 0, 40000, 80000, 0, ""), "2026-02": (120000, 0, 40000, 80000, 0, ""), "2026-03": (120000, 0, 40000, 80000, 0, "")}),
+                ("Ольга Жмурина", "Ведущий бухгалтер", {"2026-01": (150000, 0, 60000, 90000, 0, ""), "2026-02": (150000, 0, 60000, 90000, 0, ""), "2026-03": (150000, 0, 60000, 90000, 0, "")}),
+                ("Ирина", "Госзакупки", {"2026-01": (100000, 0, 40000, 60000, 0, ""), "2026-02": (100000, 0, 40000, 60000, 0, ""), "2026-03": (100000, 0, 40000, 60000, 0, "")}),
+                ("Дарья", "Специалист ПТО", {"2026-01": (30000, 0, 0, 30000, 0, ""), "2026-02": (30000, 0, 0, 30000, 0, ""), "2026-03": (30000, 0, 0, 30000, 0, "")}),
+                ("Алимов Анвар", "Специалист", {"2026-02": (0, 8839, 0, 0, 0, ""), "2026-03": (0, 8839, 0, 0, 0, "")}),
+            ]
+            for full_name, role_title, months in seed_rows:
+                employee_id = self._ensure_payroll_employee(conn, owner_chat_id, full_name, role_title)
+                for month_key, values in months.items():
+                    month_date = date.fromisoformat(f"{month_key}-01")
+                    self._upsert_payroll_entry(
+                        conn,
+                        owner_chat_id,
+                        employee_id,
+                        month_date,
+                        values[0],
+                        values[1],
+                        values[2],
+                        values[3],
+                        values[4],
+                        values[5],
+                    )
+
+    def list_payroll_employees(self, owner_chat_id: int) -> list[PayrollEmployee]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, full_name, role_title, is_active, created_at
+                FROM payroll_employees
+                WHERE owner_chat_id = ?
+                ORDER BY is_active DESC, id ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [self._payroll_employee_from_row(row) for row in rows]
+
+    def add_payroll_employee(self, owner_chat_id: int, full_name: str, role_title: str) -> int:
+        with self.connection() as conn:
+            return self._ensure_payroll_employee(conn, owner_chat_id, full_name.strip(), role_title.strip())
+
+    def list_payroll_months(self, owner_chat_id: int) -> list[date]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT payroll_month
+                FROM payroll_entries
+                WHERE owner_chat_id = ?
+                ORDER BY payroll_month DESC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [date.fromisoformat(row["payroll_month"]) for row in rows]
+
+    def list_payroll_rows(self, owner_chat_id: int, payroll_month: date) -> list[PayrollRow]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    e.id AS employee_id,
+                    e.owner_chat_id,
+                    e.full_name,
+                    e.role_title,
+                    e.is_active,
+                    COALESCE(p.payroll_month, ?) AS payroll_month,
+                    COALESCE(p.accrued_amount, 0) AS accrued_amount,
+                    COALESCE(p.advance_card_amount, 0) AS advance_card_amount,
+                    COALESCE(p.advance_cash_amount, 0) AS advance_cash_amount,
+                    COALESCE(p.salary_amount, 0) AS salary_amount,
+                    COALESCE(p.bonus_amount, 0) AS bonus_amount,
+                    COALESCE(p.note, '') AS note
+                FROM payroll_employees e
+                LEFT JOIN payroll_entries p
+                  ON p.employee_id = e.id
+                 AND p.owner_chat_id = e.owner_chat_id
+                 AND p.payroll_month = ?
+                WHERE e.owner_chat_id = ?
+                ORDER BY e.is_active DESC, e.id ASC
+                """,
+                (payroll_month.strftime(DATE_FMT), payroll_month.strftime(DATE_FMT), owner_chat_id),
+            ).fetchall()
+        return [self._payroll_row_from_row(row) for row in rows]
+
+    def upsert_payroll_amount(
+        self,
+        owner_chat_id: int,
+        employee_id: int,
+        payroll_month: date,
+        field_name: str,
+        amount: float,
+    ) -> bool:
+        field_map = {
+            "accrued_amount": "accrued_amount",
+            "advance_card_amount": "advance_card_amount",
+            "advance_cash_amount": "advance_cash_amount",
+            "salary_amount": "salary_amount",
+            "bonus_amount": "bonus_amount",
+        }
+        column = field_map.get(field_name)
+        if column is None:
+            return False
+        with self.connection() as conn:
+            employee = conn.execute(
+                "SELECT id FROM payroll_employees WHERE id = ? AND owner_chat_id = ?",
+                (employee_id, owner_chat_id),
+            ).fetchone()
+            if employee is None:
+                return False
+            self._upsert_payroll_entry(conn, owner_chat_id, employee_id, payroll_month, updated_field=column, updated_value=amount)
+            return True
+
+    def upsert_payroll_note(self, owner_chat_id: int, employee_id: int, payroll_month: date, note: str) -> bool:
+        with self.connection() as conn:
+            employee = conn.execute(
+                "SELECT id FROM payroll_employees WHERE id = ? AND owner_chat_id = ?",
+                (employee_id, owner_chat_id),
+            ).fetchone()
+            if employee is None:
+                return False
+            self._upsert_payroll_entry(conn, owner_chat_id, employee_id, payroll_month, updated_field="note", updated_value=note.strip())
+            return True
+
+    @staticmethod
+    def _payroll_employee_from_row(row: sqlite3.Row) -> PayrollEmployee:
+        return PayrollEmployee(
+            id=int(row["id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            full_name=row["full_name"],
+            role_title=row["role_title"] or "",
+            is_active=bool(row["is_active"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
+    def _payroll_row_from_row(row: sqlite3.Row) -> PayrollRow:
+        return PayrollRow(
+            employee_id=int(row["employee_id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            full_name=row["full_name"],
+            role_title=row["role_title"] or "",
+            is_active=bool(row["is_active"]),
+            payroll_month=date.fromisoformat(row["payroll_month"]),
+            accrued_amount=float(row["accrued_amount"]),
+            advance_card_amount=float(row["advance_card_amount"]),
+            advance_cash_amount=float(row["advance_cash_amount"]),
+            salary_amount=float(row["salary_amount"]),
+            bonus_amount=float(row["bonus_amount"]),
+            note=row["note"] or "",
+        )
+
+    def _ensure_payroll_employee(self, conn: sqlite3.Connection, owner_chat_id: int, full_name: str, role_title: str) -> int:
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM payroll_employees
+            WHERE owner_chat_id = ? AND full_name = ? AND role_title = ?
+            LIMIT 1
+            """,
+            (owner_chat_id, full_name, role_title),
+        ).fetchone()
+        if existing is not None:
+            return int(existing["id"])
+        cursor = conn.execute(
+            """
+            INSERT INTO payroll_employees (owner_chat_id, full_name, role_title, is_active, created_at)
+            VALUES (?, ?, ?, 1, ?)
+            """,
+            (owner_chat_id, full_name, role_title, datetime.utcnow().isoformat()),
+        )
+        return int(cursor.lastrowid)
+
+    def _upsert_payroll_entry(
+        self,
+        conn: sqlite3.Connection,
+        owner_chat_id: int,
+        employee_id: int,
+        payroll_month: date,
+        accrued_amount: float | None = None,
+        advance_card_amount: float | None = None,
+        advance_cash_amount: float | None = None,
+        salary_amount: float | None = None,
+        bonus_amount: float | None = None,
+        note: str | None = None,
+        updated_field: str | None = None,
+        updated_value: float | str | None = None,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT id, accrued_amount, advance_card_amount, advance_cash_amount, salary_amount, bonus_amount, note
+            FROM payroll_entries
+            WHERE owner_chat_id = ? AND employee_id = ? AND payroll_month = ?
+            LIMIT 1
+            """,
+            (owner_chat_id, employee_id, payroll_month.strftime(DATE_FMT)),
+        ).fetchone()
+        now = datetime.utcnow().isoformat()
+        payload = {
+            "accrued_amount": float(accrued_amount or 0),
+            "advance_card_amount": float(advance_card_amount or 0),
+            "advance_cash_amount": float(advance_cash_amount or 0),
+            "salary_amount": float(salary_amount or 0),
+            "bonus_amount": float(bonus_amount or 0),
+            "note": note or "",
+        }
+        if row is not None:
+            payload = {
+                "accrued_amount": float(row["accrued_amount"]),
+                "advance_card_amount": float(row["advance_card_amount"]),
+                "advance_cash_amount": float(row["advance_cash_amount"]),
+                "salary_amount": float(row["salary_amount"]),
+                "bonus_amount": float(row["bonus_amount"]),
+                "note": row["note"] or "",
+            }
+        if updated_field is not None:
+            payload[updated_field] = updated_value if updated_field == "note" else float(updated_value or 0)
+        if row is None:
+            conn.execute(
+                """
+                INSERT INTO payroll_entries (
+                    owner_chat_id, employee_id, payroll_month, accrued_amount, advance_card_amount,
+                    advance_cash_amount, salary_amount, bonus_amount, note, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_chat_id,
+                    employee_id,
+                    payroll_month.strftime(DATE_FMT),
+                    payload["accrued_amount"],
+                    payload["advance_card_amount"],
+                    payload["advance_cash_amount"],
+                    payload["salary_amount"],
+                    payload["bonus_amount"],
+                    payload["note"],
+                    now,
+                    now,
+                ),
+            )
+            return
+        conn.execute(
+            """
+            UPDATE payroll_entries
+            SET accrued_amount = ?, advance_card_amount = ?, advance_cash_amount = ?, salary_amount = ?,
+                bonus_amount = ?, note = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                payload["accrued_amount"],
+                payload["advance_card_amount"],
+                payload["advance_cash_amount"],
+                payload["salary_amount"],
+                payload["bonus_amount"],
+                payload["note"],
+                now,
+                row["id"],
+            ),
+        )
 
     def _ensure_default_web_admin(self, conn: sqlite3.Connection, owner_chat_id: int) -> int:
         row = conn.execute(
