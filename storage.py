@@ -2334,6 +2334,10 @@ class Storage:
         updated_value: float | str | None = None,
         updated_payment: dict | None = None,
     ) -> None:
+        should_sync_salary_amount = any(
+            value is not None
+            for value in (accrued_amount, advance_card_amount, advance_cash_amount)
+        )
         row = conn.execute(
             """
             SELECT id, accrued_amount, advance_card_amount, advance_card_paid_amount, advance_card_paid_date,
@@ -2382,6 +2386,8 @@ class Storage:
             }
         if updated_field is not None:
             payload[updated_field] = updated_value if updated_field == "note" else float(updated_value or 0)
+            if updated_field in {"accrued_amount", "advance_card_amount", "advance_cash_amount"}:
+                should_sync_salary_amount = True
         if updated_payment is not None:
             payload[updated_payment["planned_column"]] = float(updated_payment["planned_amount"] or 0)
             payload[updated_payment["paid_column"]] = float(updated_payment["paid_amount"] or 0)
@@ -2389,6 +2395,18 @@ class Storage:
                 updated_payment["paid_date"].strftime(DATE_FMT)
                 if updated_payment.get("paid_date") is not None
                 else None
+            )
+            if updated_payment["planned_column"] in {"advance_card_amount", "advance_cash_amount"}:
+                should_sync_salary_amount = True
+        if row is None or should_sync_salary_amount:
+            payload["salary_amount"] = round(
+                max(
+                    float(payload["accrued_amount"])
+                    - float(payload["advance_card_amount"])
+                    - float(payload["advance_cash_amount"]),
+                    0.0,
+                ),
+                2,
             )
         if row is None:
             conn.execute(
