@@ -827,6 +827,26 @@ def render_contract_advance_card(owner_chat_id: int, contract, payload: dict, cu
     """
 
 
+def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user: dict | None) -> str:
+    label = f"Заключен: {format_date(contract.signed_date)}"
+    if not can_edit_contract_stage_controls(current_user):
+        return f'<span class="chip">{escape(label)}</span>'
+    return f"""
+    <details class="status-menu">
+      <summary><span class="chip">{escape(label)}</span></summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="/contracts/{contract.id}/signed-date?owner={owner_chat_id}">
+          <div class="field">
+            <label>Дата заключения контракта</label>
+            <input type="date" name="signed_date" value="{contract.signed_date.isoformat()}" required>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить дату</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
 def render_auction_status_form(
     owner_chat_id: int,
     auction_id: int,
@@ -3662,6 +3682,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
       </div>
       <div class="info-row">
         <span class="chip">ID: {contract.id}</span>
+        {render_contract_signed_date_chip(owner_chat_id, contract, current_user)}
         <span class="chip">Дедлайн: {format_date(contract.end_date)}</span>
         <span class="chip">Этапов: {len(payload["stages"])}</span>
         <span class="chip">Оплат: {len(payload["payments"])}</span>
@@ -5155,6 +5176,26 @@ def app(environ, start_response):
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить контракт: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/") and path.endswith("/signed-date") and method == "POST":
+        if not can_edit_contract_stage_controls(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            contract_id = int(path.split("/")[2])
+            form = read_post_data(environ)
+            signed_date = parse_date(form["signed_date"])
+            updated = storage.update_contract_signed_date(current_owner, contract_id, signed_date)
+            if not updated:
+                raise ValueError("Контракт не найден")
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить дату контракта: {exc}")
             html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
