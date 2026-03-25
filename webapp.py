@@ -3667,6 +3667,26 @@ document.addEventListener("input", (event) => {{
   list.classList.toggle('is-open', visible > 0);
 }});
 
+document.addEventListener("input", (event) => {{
+  const dueDaysInput = event.target.closest('form[action^="/payables/new"] input[name="due_days"]');
+  if (!dueDaysInput) {{
+    return;
+  }}
+  updatePayableDueFields(dueDaysInput.closest('form'), 'days');
+}});
+
+document.addEventListener("change", (event) => {{
+  const dueDateInput = event.target.closest('form[action^="/payables/new"] input[name="due_date"]');
+  if (dueDateInput) {{
+    updatePayableDueFields(dueDateInput.closest('form'), 'date');
+    return;
+  }}
+  const documentDateInput = event.target.closest('form[action^="/payables/new"] input[name="document_date"]');
+  if (documentDateInput) {{
+    updatePayableDueFields(documentDateInput.closest('form'), 'document');
+  }}
+}});
+
 document.addEventListener("click", (event) => {{
   const option = event.target.closest('.autocomplete-option');
   if (option) {{
@@ -3687,6 +3707,57 @@ document.addEventListener("click", (event) => {{
     }});
   }}
 }});
+
+function updatePayableDueFields(form, source) {{
+  if (!form) {{
+    return;
+  }}
+  const documentDateInput = form.querySelector('input[name="document_date"]');
+  const dueDateInput = form.querySelector('input[name="due_date"]');
+  const dueDaysInput = form.querySelector('input[name="due_days"]');
+  if (!dueDateInput || !dueDaysInput) {{
+    return;
+  }}
+  const today = new Date();
+  const todayIso = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString().slice(0, 10);
+  const baseValue = (documentDateInput && documentDateInput.value) ? documentDateInput.value : todayIso;
+  const baseDate = new Date(`${{baseValue}}T00:00:00`);
+  if (Number.isNaN(baseDate.getTime())) {{
+    return;
+  }}
+  if (source === 'days') {{
+    const rawDays = dueDaysInput.value.trim();
+    if (!rawDays) {{
+      dueDateInput.value = "";
+      return;
+    }}
+    const days = Number(rawDays);
+    if (!Number.isFinite(days) || days <= 0) {{
+      return;
+    }}
+    const dueDate = new Date(baseDate);
+    dueDate.setDate(dueDate.getDate() + Math.round(days));
+    dueDateInput.value = dueDate.toISOString().slice(0, 10);
+    return;
+  }}
+  if (source === 'date') {{
+    if (!dueDateInput.value) {{
+      dueDaysInput.value = "";
+      return;
+    }}
+    const dueDate = new Date(`${{dueDateInput.value}}T00:00:00`);
+    if (Number.isNaN(dueDate.getTime())) {{
+      return;
+    }}
+    const diffMs = dueDate.getTime() - baseDate.getTime();
+    const diffDays = Math.round(diffMs / 86400000);
+    dueDaysInput.value = diffDays > 0 ? String(diffDays) : "";
+    return;
+  }}
+  if (source === 'document' && dueDateInput.value) {{
+    updatePayableDueFields(form, 'date');
+  }}
+}}
 
 document.addEventListener("input", (event) => {{
   const form = event.target.closest(".discount-form");
@@ -4716,7 +4787,7 @@ def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict 
           </div>
           <div class="action-row">
             <button class="submit-btn" type="submit">Сохранить оплату</button>
-            {f'<button class="secondary-btn" type="submit" formnovalidate formaction="/payables/{entry.id}/payment/reset{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">Сбросить оплату</button>' if entry.paid_amount > 0.009 else ''}
+            {f'<button class="secondary-btn" type="submit" formnovalidate formaction="/payables/{entry.id}/payment/reset{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">Отменить оплату</button>' if entry.paid_amount > 0.009 else ''}
           </div>
         </form>
       </div>
