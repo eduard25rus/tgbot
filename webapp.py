@@ -2701,6 +2701,42 @@ def layout(
       font-weight: 700;
       cursor: pointer;
     }}
+    .autocomplete-wrap {{
+      position: relative;
+    }}
+    .autocomplete-list {{
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      z-index: 35;
+      display: none;
+      max-height: 220px;
+      overflow: auto;
+      padding: 6px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,250,242,0.98);
+      box-shadow: var(--card-shadow);
+      gap: 4px;
+    }}
+    .autocomplete-list.is-open {{
+      display: grid;
+    }}
+    .autocomplete-option {{
+      width: 100%;
+      border: none;
+      background: rgba(255,255,255,0.78);
+      border-radius: 10px;
+      padding: 10px 12px;
+      text-align: left;
+      font: inherit;
+      color: var(--ink);
+      cursor: pointer;
+    }}
+    .autocomplete-option[hidden] {{
+      display: none;
+    }}
     .flash {{
       padding: 14px 16px;
       border-radius: 16px;
@@ -3584,6 +3620,71 @@ document.addEventListener("change", (event) => {{
   const targetInput = targetId ? document.getElementById(targetId) : null;
   if (targetInput && counterpartySelect.value) {{
     targetInput.value = counterpartySelect.value;
+  }}
+}});
+
+document.addEventListener("focusin", (event) => {{
+  const input = event.target.closest('.counterparty-autocomplete-input');
+  if (!input) {{
+    return;
+  }}
+  const wrap = input.closest('.autocomplete-wrap');
+  const list = wrap ? wrap.querySelector('.autocomplete-list') : null;
+  if (!list) {{
+    return;
+  }}
+  const query = input.value.trim().toLowerCase();
+  let visible = 0;
+  list.querySelectorAll('.autocomplete-option').forEach((option) => {{
+    const matches = !query || option.dataset.valueLower.includes(query);
+    option.hidden = !matches;
+    if (matches) {{
+      visible += 1;
+    }}
+  }});
+  list.classList.toggle('is-open', visible > 0);
+}});
+
+document.addEventListener("input", (event) => {{
+  const input = event.target.closest('.counterparty-autocomplete-input');
+  if (!input) {{
+    return;
+  }}
+  const wrap = input.closest('.autocomplete-wrap');
+  const list = wrap ? wrap.querySelector('.autocomplete-list') : null;
+  if (!list) {{
+    return;
+  }}
+  const query = input.value.trim().toLowerCase();
+  let visible = 0;
+  list.querySelectorAll('.autocomplete-option').forEach((option) => {{
+    const matches = !query || option.dataset.valueLower.includes(query);
+    option.hidden = !matches;
+    if (matches) {{
+      visible += 1;
+    }}
+  }});
+  list.classList.toggle('is-open', visible > 0);
+}});
+
+document.addEventListener("click", (event) => {{
+  const option = event.target.closest('.autocomplete-option');
+  if (option) {{
+    const wrap = option.closest('.autocomplete-wrap');
+    const input = wrap ? wrap.querySelector('.counterparty-autocomplete-input') : null;
+    const list = wrap ? wrap.querySelector('.autocomplete-list') : null;
+    if (input) {{
+      input.value = option.dataset.value || "";
+    }}
+    if (list) {{
+      list.classList.remove('is-open');
+    }}
+    return;
+  }}
+  if (!event.target.closest('.autocomplete-wrap')) {{
+    document.querySelectorAll('.autocomplete-list.is-open').forEach((list) => {{
+      list.classList.remove('is-open');
+    }});
   }}
 }});
 
@@ -4544,14 +4645,12 @@ def render_payable_document_form(owner_chat_id: int, entry, current_user: dict |
         <form class="form-grid" method="post" action="/payables/{entry.id}/update{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
           <div class="field">
             <label>Контрагент</label>
-            <input id="payable-counterparty-{entry.id}" type="text" name="counterparty" value="{escape(entry.counterparty)}" required>
-          </div>
-          <div class="field">
-            <label>Из существующих контрагентов</label>
-            <select class="payable-counterparty-select" data-target-input="payable-counterparty-{entry.id}">
-              <option value="">Оставить текущее значение</option>
-              {"".join(f'<option value="{escape(name)}">{escape(name)}</option>' for name in (counterparty_options or []))}
-            </select>
+            <div class="autocomplete-wrap">
+              <input id="payable-counterparty-{entry.id}" class="counterparty-autocomplete-input" type="text" name="counterparty" value="{escape(entry.counterparty)}" autocomplete="off" required>
+              <div class="autocomplete-list">
+                {"".join(f'<button class="autocomplete-option" type="button" data-value="{escape(name)}" data-value-lower="{escape(name.lower())}">{escape(name)}</button>' for name in (counterparty_options or []))}
+              </div>
+            </div>
           </div>
           <div class="field">
             <label>Счет / документ</label>
@@ -4617,7 +4716,7 @@ def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict 
           </div>
           <div class="action-row">
             <button class="submit-btn" type="submit">Сохранить оплату</button>
-            {f'<button class="secondary-btn" type="submit" name="reset_payment" value="1">Сбросить оплату</button>' if entry.paid_amount > 0.009 else ''}
+            {f'<button class="secondary-btn" type="submit" formaction="/payables/{entry.id}/payment/reset{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">Сбросить оплату</button>' if entry.paid_amount > 0.009 else ''}
           </div>
         </form>
       </div>
@@ -4673,14 +4772,12 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
           <form class="form-grid payable-create-grid" method="post" action="/payables/new{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
             <div class="field">
               <label>Контрагент</label>
-              <input id="new-payable-counterparty" type="text" name="counterparty" placeholder="Например, ВЛ Снаб" required>
-            </div>
-            <div class="field">
-              <label>Из существующих контрагентов</label>
-              <select class="payable-counterparty-select" data-target-input="new-payable-counterparty">
-                <option value="">Выбрать существующего</option>
-                {"".join(f'<option value="{escape(name)}">{escape(name)}</option>' for name in available_counterparties)}
-              </select>
+              <div class="autocomplete-wrap">
+                <input id="new-payable-counterparty" class="counterparty-autocomplete-input" type="text" name="counterparty" placeholder="Например, ВЛ Снаб" autocomplete="off" required>
+                <div class="autocomplete-list">
+                  {"".join(f'<button class="autocomplete-option" type="button" data-value="{escape(name)}" data-value-lower="{escape(name.lower())}">{escape(name)}</button>' for name in available_counterparties)}
+                </div>
+              </div>
             </div>
             <div class="field">
               <label>Счет / документ</label>
@@ -6465,8 +6562,6 @@ def app(environ, start_response):
                 raise ValueError("Запись не найдена")
             amount = parse_amount(form.get("amount", "0"))
             is_paid = form.get("is_paid") == "1"
-            if form.get("reset_payment") == "1":
-                is_paid = False
             paid_amount = parse_amount(form.get("paid_amount", "0")) if is_paid else 0.0
             paid_date = parse_date(form["paid_date"]) if is_paid else None
             if amount <= 0:
@@ -6497,7 +6592,25 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
-    if method == "GET" and (path == "/payables/new" or (path.startswith("/payables/") and (path.endswith("/update") or path.endswith("/payment")))):
+    if path.startswith("/payables/") and path.endswith("/payment/reset") and method == "POST":
+        denied = guard("payables", "edit")
+        if denied:
+            return denied
+        payable_id = int(path.split("/")[2])
+        try:
+            entry = storage.get_payable(current_owner, payable_id)
+            if entry is None:
+                raise ValueError("Запись не найдена")
+            if not storage.update_payable_payment(current_owner, payable_id, 0.0, None):
+                raise ValueError("Не удалось сбросить оплату")
+            return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}")
+        except Exception as exc:
+            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, f"Не удалось сбросить оплату: {exc}", counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
+            html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if method == "GET" and (path == "/payables/new" or (path.startswith("/payables/") and (path.endswith("/update") or path.endswith("/payment") or path.endswith("/payment/reset")))):
         return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}")
 
     if path.startswith("/contracts/") and path.endswith("/settings") and method == "POST":
