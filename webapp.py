@@ -4425,18 +4425,64 @@ def payable_metrics(entry) -> dict[str, float | str]:
     }
 
 
-def payable_query_suffix(owner_chat_id: int, active_tab: str = "active", counterparty_filter: str = "") -> str:
+def payable_query_suffix(owner_chat_id: int, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
     suffix = f"?owner={owner_chat_id}&tab={active_tab}"
     if counterparty_filter:
         suffix += f"&counterparty={quote_plus(counterparty_filter)}"
+    if sort_key and sort_order:
+        suffix += f"&sort={quote_plus(sort_key)}&order={quote_plus(sort_order)}"
     return suffix
 
 
-def render_payable_document_form(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "") -> str:
+def normalize_payables_sort(sort_key: str, sort_order: str) -> tuple[str, str]:
+    allowed = {"counterparty", "document_ref", "object_name", "comment", "amount", "paid_amount", "outstanding", "due_date"}
+    if sort_key not in allowed or sort_order not in {"asc", "desc"}:
+        return "", ""
+    return sort_key, sort_order
+
+
+def next_payables_sort(clicked_key: str, current_key: str, current_order: str) -> tuple[str, str]:
+    if current_key != clicked_key:
+        return clicked_key, "asc"
+    if current_order == "asc":
+        return clicked_key, "desc"
+    return "", ""
+
+
+def sort_payable_entries(entries, sort_key: str, sort_order: str):
+    effective_key = sort_key or "due_date"
+    effective_order = sort_order or "asc"
+    reverse = effective_order == "desc"
+
+    def key(entry):
+        metrics = payable_metrics(entry)
+        return {
+            "counterparty": entry.counterparty.lower(),
+            "document_ref": entry.document_ref.lower(),
+            "object_name": entry.object_name.lower(),
+            "comment": entry.comment.lower(),
+            "amount": entry.amount,
+            "paid_amount": entry.paid_amount,
+            "outstanding": metrics["outstanding"],
+            "due_date": entry.due_date,
+        }[effective_key]
+
+    return sorted(entries, key=key, reverse=reverse)
+
+
+def render_payables_sort_link(owner_chat_id: int, active_tab: str, counterparty_filter: str, current_sort_key: str, current_sort_order: str, label: str, clicked_key: str) -> str:
+    next_key, next_order = next_payables_sort(clicked_key, current_sort_key, current_sort_order)
+    href = f"/payables{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, next_key, next_order)}"
+    is_active = current_sort_key == clicked_key
+    arrow = " ↑" if is_active and current_sort_order == "asc" else " ↓" if is_active and current_sort_order == "desc" else ""
+    return f'<a class="contract-table-link{" active-sort" if is_active else ""}" href="{href}">{escape(label)}{arrow}</a>'
+
+
+def render_payable_document_form(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
     doc_label = entry.document_ref.strip() or "Документ не указан"
     date_note = format_date(entry.document_date) if entry.document_date is not None else "Дата не указана"
     display = f"""
-    <div class="timeline-title">{escape(doc_label)}</div>
+    <div class="contract-table-subtle" style="margin-top:0;">{escape(doc_label)}</div>
     <div class="contract-table-subtle">{escape(date_note)}</div>
     """
     if not has_permission(current_user, "payables", "edit"):
@@ -4445,7 +4491,7 @@ def render_payable_document_form(owner_chat_id: int, entry, current_user: dict |
     <details class="status-menu lot-menu">
       <summary>{display}</summary>
       <div class="status-popover lot-form">
-        <form class="form-grid" method="post" action="/payables/{entry.id}/update{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter)}">
+        <form class="form-grid" method="post" action="/payables/{entry.id}/update{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
           <div class="field">
             <label>Контрагент</label>
             <input type="text" name="counterparty" value="{escape(entry.counterparty)}" required>
@@ -4481,13 +4527,12 @@ def render_payable_document_form(owner_chat_id: int, entry, current_user: dict |
     """
 
 
-def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "") -> str:
+def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
     metrics = payable_metrics(entry)
-    paid_display = format_amount(entry.paid_amount) if entry.paid_amount > 0.009 else "—"
     paid_note = format_date(entry.paid_date) if entry.paid_date is not None else ""
     display = f"""
-    <div class="payroll-amount{' is-partial' if entry.paid_amount > 0.009 and metrics['outstanding'] > 0.009 else ' is-paid' if entry.paid_amount > 0.009 and metrics['outstanding'] <= 0.009 else ''}">{paid_display}</div>
-    {f'<div class="contract-table-subtle">{escape(paid_note)}</div>' if paid_note else ''}
+    {f'<div class="payroll-amount{" is-partial" if metrics["outstanding"] > 0.009 else " is-paid"}">{format_amount(entry.paid_amount)}</div>' if entry.paid_amount > 0.009 else ''}
+    {f'<div class="contract-table-subtle">{escape(paid_note)}</div>' if entry.paid_amount > 0.009 and paid_note else ''}
     <div><span class="{metrics["status_class"]}">{metrics["status_label"]}</span></div>
     """
     if not has_permission(current_user, "payables", "edit"):
@@ -4497,7 +4542,7 @@ def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict 
     <details class="status-menu">
       <summary>{display}</summary>
       <div class="status-popover">
-        <form class="form-grid payroll-payment-form" method="post" action="/payables/{entry.id}/payment{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter)}">
+        <form class="form-grid payroll-payment-form" method="post" action="/payables/{entry.id}/payment{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
           <div class="field">
             <label>Начислено к оплате</label>
             <input type="text" name="amount" value="{escape(format_amount_input(entry.amount))}" data-money-input="1" required>
@@ -4536,13 +4581,14 @@ def is_payable_archived(entry) -> bool:
     return payable_metrics(entry)["outstanding"] <= 0.009
 
 
-def render_payables_section(storage: Storage, owner_chat_id: int, current_user: dict | None, active_tab: str = "active", flash_message: str = "", success: bool = False, counterparty_filter: str = "") -> str:
+def render_payables_section(storage: Storage, owner_chat_id: int, current_user: dict | None, active_tab: str = "active", flash_message: str = "", success: bool = False, counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
     storage.ensure_payables_seed(owner_chat_id)
     all_entries = storage.list_payables(owner_chat_id)
     active_entries = [entry for entry in all_entries if not is_payable_archived(entry)]
     archived_entries = [entry for entry in all_entries if is_payable_archived(entry)]
     source_entries = archived_entries if active_tab == "archive" else active_entries
     entries = [entry for entry in source_entries if not counterparty_filter or entry.counterparty == counterparty_filter]
+    entries = sort_payable_entries(entries, sort_key, sort_order)
     total_outstanding = sum(payable_metrics(entry)["outstanding"] for entry in active_entries)
     overdue_count = sum(
         1 for entry in active_entries
@@ -4556,7 +4602,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         <details class="status-menu">
           <summary><span class="secondary-btn">Добавить задолженность</span></summary>
           <div class="status-popover lot-form">
-            <form class="form-grid" method="post" action="/payables/new{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter)}">
+            <form class="form-grid" method="post" action="/payables/new{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
               <div class="field">
                 <label>Контрагент</label>
                 <input type="text" name="counterparty" placeholder="Например, ВЛ Снаб" required>
@@ -4595,12 +4641,12 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     rows_html = "".join(
         f"""
         <tr>
-          <td>{escape(entry.counterparty)}</td>
-          <td>{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter)}</td>
+          <td><strong>{escape(entry.counterparty)}</strong></td>
+          <td>{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td>{escape(entry.object_name) if entry.object_name else '—'}</td>
           <td>{escape(entry.comment) if entry.comment else '—'}</td>
           <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
-          <td>{render_payable_payment_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter)}</td>
+          <td>{render_payable_payment_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td class="nowrap" style="text-align:center;">{format_amount(payable_metrics(entry)["outstanding"]) if payable_metrics(entry)["outstanding"] > 0.009 else '—'}</td>
           <td class="nowrap" style="text-align:center;">{render_payable_due_cell(entry)}</td>
         </tr>
@@ -4619,14 +4665,14 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
       <table class="table contract-table">
         <thead>
           <tr>
-            <th>Контрагент</th>
-            <th>Основание</th>
-            <th>Объект</th>
-            <th>Комментарий</th>
-            <th class="nowrap">Сумма</th>
-            <th class="nowrap">Оплата</th>
-            <th class="nowrap">Остаток</th>
-            <th class="nowrap">Срок оплаты</th>
+            <th>{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Контрагент", "counterparty")}</th>
+            <th>{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Основание", "document_ref")}</th>
+            <th>{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Объект", "object_name")}</th>
+            <th>{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Комментарий", "comment")}</th>
+            <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Сумма", "amount")}</th>
+            <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Оплата", "paid_amount")}</th>
+            <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Остаток", "outstanding")}</th>
+            <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Срок оплаты", "due_date")}</th>
           </tr>
         </thead>
         <tbody>{rows_html}</tbody>
@@ -4639,11 +4685,11 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     """
     tab_links = f"""
     <div class="tab-row">
-      <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/payables{payable_query_suffix(owner_chat_id, 'active', counterparty_filter)}">
+      <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/payables{payable_query_suffix(owner_chat_id, 'active', counterparty_filter, sort_key, sort_order)}">
         В работе
         <span class="tab-count">{len(active_entries)}</span>
       </a>
-      <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/payables{payable_query_suffix(owner_chat_id, 'archive', counterparty_filter)}">
+      <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/payables{payable_query_suffix(owner_chat_id, 'archive', counterparty_filter, sort_key, sort_order)}">
         Архив
         <span class="tab-count">{len(archived_entries)}</span>
       </a>
@@ -4696,7 +4742,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         </div>
         <div class="action-row" style="gap:10px;">
           <button class="secondary-btn" type="submit">Показать</button>
-          {f'<a class="secondary-btn" href="/payables{payable_query_suffix(owner_chat_id, active_tab)}">Сбросить фильтр</a>' if counterparty_filter else ""}
+          {f'<a class="secondary-btn" href="/payables{payable_query_suffix(owner_chat_id, active_tab, "", sort_key, sort_order)}">Сбросить фильтр</a>' if counterparty_filter else ""}
         </div>
       </form>
       {flash_html}
@@ -5490,6 +5536,10 @@ def app(environ, start_response):
     if current_payables_tab not in {"active", "archive"}:
         current_payables_tab = "active"
     current_payables_counterparty = query.get("counterparty", [""])[0].strip()
+    current_payables_sort, current_payables_order = normalize_payables_sort(
+        query.get("sort", [""])[0].strip(),
+        query.get("order", [""])[0].strip(),
+    )
     current_task_view = query.get("task_view", ["0"])[0] == "1"
     cookies = parse_cookies(environ)
     current_user = storage.get_web_user_by_session(cookies.get(SESSION_COOKIE, ""))
@@ -6288,9 +6338,9 @@ def app(environ, start_response):
                 current_user.get("id") if current_user else None,
                 current_user.get("full_name", "") if current_user else "",
             )
-            return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty)}")
+            return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}")
         except Exception as exc:
-            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, f"Не удалось добавить запись: {exc}", counterparty_filter=current_payables_counterparty)
+            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, f"Не удалось добавить запись: {exc}", counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
             html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -6320,9 +6370,9 @@ def app(environ, start_response):
                 raise ValueError("Запись не найдена")
             updated_entry = storage.get_payable(current_owner, payable_id)
             target_tab = "archive" if updated_entry is not None and is_payable_archived(updated_entry) else current_payables_tab
-            return redirect(start_response, f"/payables{payable_query_suffix(current_owner, target_tab, current_payables_counterparty)}")
+            return redirect(start_response, f"/payables{payable_query_suffix(current_owner, target_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}")
         except Exception as exc:
-            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, f"Не удалось обновить запись: {exc}", counterparty_filter=current_payables_counterparty)
+            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, f"Не удалось обновить запись: {exc}", counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
             html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -6362,15 +6412,15 @@ def app(environ, start_response):
                 raise ValueError("Не удалось обновить оплату")
             updated_entry = storage.get_payable(current_owner, payable_id)
             target_tab = "archive" if updated_entry is not None and is_payable_archived(updated_entry) else current_payables_tab
-            return redirect(start_response, f"/payables{payable_query_suffix(current_owner, target_tab, current_payables_counterparty)}")
+            return redirect(start_response, f"/payables{payable_query_suffix(current_owner, target_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}")
         except Exception as exc:
-            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, f"Не удалось обновить оплату: {exc}", counterparty_filter=current_payables_counterparty)
+            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, f"Не удалось обновить оплату: {exc}", counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
             html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
     if method == "GET" and (path == "/payables/new" or (path.startswith("/payables/") and (path.endswith("/update") or path.endswith("/payment")))):
-        return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty)}")
+        return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}")
 
     if path.startswith("/contracts/") and path.endswith("/settings") and method == "POST":
         if not can_edit_contract_stage_controls(current_user):
@@ -6701,7 +6751,7 @@ def app(environ, start_response):
         denied = guard("payables", "view")
         if denied:
             return denied
-        body = render_payables_section(storage, current_owner, current_user, current_payables_tab, counterparty_filter=current_payables_counterparty)
+        body = render_payables_section(storage, current_owner, current_user, current_payables_tab, counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
         html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
