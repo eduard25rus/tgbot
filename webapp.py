@@ -3575,6 +3575,18 @@ document.addEventListener("click", (event) => {{
   window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
 }});
 
+document.addEventListener("change", (event) => {{
+  const counterpartySelect = event.target.closest('.payable-counterparty-select');
+  if (!counterpartySelect) {{
+    return;
+  }}
+  const targetId = counterpartySelect.dataset.targetInput || "";
+  const targetInput = targetId ? document.getElementById(targetId) : null;
+  if (targetInput && counterpartySelect.value) {{
+    targetInput.value = counterpartySelect.value;
+  }}
+}});
+
 document.addEventListener("input", (event) => {{
   const form = event.target.closest(".discount-form");
   if (!form) {{
@@ -4516,7 +4528,7 @@ def render_payables_sort_link(owner_chat_id: int, active_tab: str, counterparty_
     return f'<a class="contract-table-link{" active-sort" if is_active else ""}" data-keep-payables-scroll="1" href="{href}#payables-registry">{escape(label)}{arrow}</a>'
 
 
-def render_payable_document_form(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
+def render_payable_document_form(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "", counterparty_options: list[str] | None = None) -> str:
     doc_label = entry.document_ref.strip() or "Документ не указан"
     date_note = format_date(entry.document_date) if entry.document_date is not None else "Дата не указана"
     display = f"""
@@ -4532,7 +4544,14 @@ def render_payable_document_form(owner_chat_id: int, entry, current_user: dict |
         <form class="form-grid" method="post" action="/payables/{entry.id}/update{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
           <div class="field">
             <label>Контрагент</label>
-            <input type="text" name="counterparty" list="payable-counterparties" value="{escape(entry.counterparty)}" required>
+            <input id="payable-counterparty-{entry.id}" type="text" name="counterparty" value="{escape(entry.counterparty)}" required>
+          </div>
+          <div class="field">
+            <label>Из существующих контрагентов</label>
+            <select class="payable-counterparty-select" data-target-input="payable-counterparty-{entry.id}">
+              <option value="">Оставить текущее значение</option>
+              {"".join(f'<option value="{escape(name)}">{escape(name)}</option>' for name in (counterparty_options or []))}
+            </select>
           </div>
           <div class="field">
             <label>Счет / документ</label>
@@ -4596,7 +4615,10 @@ def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict 
             <label>Дата оплаты</label>
             <input type="date" name="paid_date" value="{entry.paid_date.isoformat() if entry.paid_date is not None else ''}">
           </div>
-          <button class="submit-btn" type="submit">Сохранить оплату</button>
+          <div class="action-row">
+            <button class="submit-btn" type="submit">Сохранить оплату</button>
+            {f'<button class="secondary-btn" type="submit" name="reset_payment" value="1">Сбросить оплату</button>' if entry.paid_amount > 0.009 else ''}
+          </div>
         </form>
       </div>
     </details>
@@ -4651,7 +4673,14 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
           <form class="form-grid payable-create-grid" method="post" action="/payables/new{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
             <div class="field">
               <label>Контрагент</label>
-              <input type="text" name="counterparty" list="payable-counterparties" placeholder="Например, ВЛ Снаб" required>
+              <input id="new-payable-counterparty" type="text" name="counterparty" placeholder="Например, ВЛ Снаб" required>
+            </div>
+            <div class="field">
+              <label>Из существующих контрагентов</label>
+              <select class="payable-counterparty-select" data-target-input="new-payable-counterparty">
+                <option value="">Выбрать существующего</option>
+                {"".join(f'<option value="{escape(name)}">{escape(name)}</option>' for name in available_counterparties)}
+              </select>
             </div>
             <div class="field">
               <label>Счет / документ</label>
@@ -4679,9 +4708,6 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
             </div>
             <button class="submit-btn" type="submit">Добавить в реестр</button>
           </form>
-          <datalist id="payable-counterparties">
-            {"".join(f'<option value="{escape(name)}"></option>' for name in available_counterparties)}
-          </datalist>
         </section>
         """
     filtered_total = sum(payable_metrics(entry)["outstanding"] for entry in entries)
@@ -4690,7 +4716,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         f"""
         <tr>
           <td><span class="status-chip-tooltip" data-tooltip="Итого задолженность по поставщику: {escape(format_amount(counterparty_totals.get(entry.counterparty, 0.0)))}"><strong>{escape(entry.counterparty)}</strong></span></td>
-          <td>{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
+          <td>{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order, available_counterparties)}</td>
           <td>{escape(entry.object_name) if entry.object_name else '—'}</td>
           <td>{escape(entry.comment) if entry.comment else '—'}</td>
           <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
@@ -6439,6 +6465,8 @@ def app(environ, start_response):
                 raise ValueError("Запись не найдена")
             amount = parse_amount(form.get("amount", "0"))
             is_paid = form.get("is_paid") == "1"
+            if form.get("reset_payment") == "1":
+                is_paid = False
             paid_amount = parse_amount(form.get("paid_amount", "0")) if is_paid else 0.0
             paid_date = parse_date(form["paid_date"]) if is_paid else None
             if amount <= 0:
