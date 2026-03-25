@@ -1790,6 +1790,16 @@ def layout(
     current_user: dict | None = None,
 ) -> str:
     current_preview_options = current_user.get("preview_role_options", ROLE_PREVIEW_OPTIONS) if current_user else ROLE_PREVIEW_OPTIONS
+    sidebar_notes = ""
+    if has_active_admin_mode(current_user):
+        sidebar_notes = """
+      <div class="sidebar-note">
+        Контракты уже рабочие. Доступы тоже начинаем собирать всерьез, чтобы дальше не городить роли поверх хаоса.
+      </div>
+      <div class="sidebar-note">
+        Локальный прототип. Дальше можно вынести это в общий backend и подключить вместе с Telegram.
+      </div>
+        """
     visible_sections = [
         (section_id, label, href)
         for section_id, label, href in SECTIONS
@@ -3438,12 +3448,7 @@ def layout(
         </div>
       </div>
       <nav class="nav">{nav_links}</nav>
-      <div class="sidebar-note">
-        Контракты уже рабочие. Доступы тоже начинаем собирать всерьез, чтобы дальше не городить роли поверх хаоса.
-      </div>
-      <div class="sidebar-note">
-        Локальный прототип. Дальше можно вынести это в общий backend и подключить вместе с Telegram.
-      </div>
+      {sidebar_notes}
     </aside>
     <div class="content">
       <header class="hero">
