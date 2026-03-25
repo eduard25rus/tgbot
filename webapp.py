@@ -2633,10 +2633,16 @@ def layout(
       gap: 12px;
     }}
     .payable-create-grid {{
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       align-items: start;
     }}
     .field.span-2 {{
+      grid-column: span 2;
+    }}
+    .field.span-4 {{
+      grid-column: 1 / -1;
+    }}
+    .payable-create-submit {{
       grid-column: 1 / -1;
     }}
     .field {{
@@ -2666,7 +2672,9 @@ def layout(
       .payable-create-grid {{
         grid-template-columns: 1fr;
       }}
-      .field.span-2 {{
+      .field.span-2,
+      .field.span-4,
+      .payable-create-submit {{
         grid-column: auto;
       }}
     }}
@@ -2952,9 +2960,14 @@ def layout(
       cursor: pointer;
     }}
     .secondary-btn.danger {{
-      color: var(--danger);
-      border-color: rgba(184,50,50,0.22);
-      background: #fff2f2;
+      color: #fff;
+      border-color: rgba(184,50,50,0.35);
+      background: var(--danger);
+      box-shadow: 0 14px 32px rgba(184,50,50,0.18);
+    }}
+    .secondary-btn.danger:hover {{
+      color: #fff;
+      background: #a62e2e;
     }}
     .auction-head {{
       display: flex;
@@ -4787,7 +4800,7 @@ def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict 
           </div>
           <div class="action-row">
             <button class="submit-btn" type="submit">Сохранить оплату</button>
-            {f'<button class="secondary-btn" type="submit" formnovalidate formaction="/payables/{entry.id}/payment/reset{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">Отменить оплату</button>' if entry.paid_amount > 0.009 else ''}
+            {f'<button class="secondary-btn danger" type="submit" formnovalidate formaction="/payables/{entry.id}/payment/reset{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">Отменить оплату</button>' if entry.paid_amount > 0.009 else ''}
           </div>
         </form>
       </div>
@@ -4841,7 +4854,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
             </div>
           </div>
           <form class="form-grid payable-create-grid" method="post" action="/payables/new{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
-            <div class="field">
+            <div class="field span-4">
               <label>Контрагент</label>
               <div class="autocomplete-wrap">
                 <input id="new-payable-counterparty" class="counterparty-autocomplete-input" type="text" name="counterparty" placeholder="Например, ВЛ Снаб" autocomplete="off" required>
@@ -4850,7 +4863,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
                 </div>
               </div>
             </div>
-            <div class="field">
+            <div class="field span-2">
               <label>Счет / документ</label>
               <input type="text" name="document_ref" placeholder="№ 18" required>
             </div>
@@ -4863,22 +4876,22 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
               <input type="text" name="object_name" placeholder="Например, Строитель">
             </div>
             <div class="field span-2">
-              <label>Комментарий</label>
-              <textarea name="comment" placeholder="Например, щебень"></textarea>
-            </div>
-            <div class="field">
               <label>Сумма, ₽</label>
               <input type="text" name="amount" data-money-input="1" placeholder="114000" required>
             </div>
-            <div class="field">
+            <div class="field span-2">
+              <label>Комментарий</label>
+              <textarea name="comment" placeholder="Например, щебень"></textarea>
+            </div>
+            <div class="field span-2">
               <label>Срок оплаты</label>
               <input type="date" name="due_date">
             </div>
-            <div class="field">
+            <div class="field span-2">
               <label>Или срок, дней</label>
               <input type="number" name="due_days" min="1" step="1" placeholder="Например, 30">
             </div>
-            <button class="submit-btn" type="submit">Добавить в реестр</button>
+            <button class="submit-btn payable-create-submit" type="submit">Добавить в реестр</button>
           </form>
         </section>
         """
