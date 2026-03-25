@@ -2859,13 +2859,17 @@ def layout(
     .estimate-skip-row {{
       display: inline-flex;
       align-items: center;
-      gap: 10px;
+      gap: 14px;
       margin: 2px 0 4px;
     }}
     .estimate-skip-box {{
       display: inline-flex;
       align-items: center;
       cursor: pointer;
+      margin: 0;
+      flex: 0 0 18px;
+    }}
+    .estimate-skip-box .toggle-checkbox {{
       margin: 0;
     }}
     .advance-field.is-hidden {{
