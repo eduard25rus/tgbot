@@ -469,7 +469,7 @@ class Storage:
                     """
                     UPDATE auctions
                     SET archived_at = created_at
-                    WHERE submit_decision_status = 'rejected' OR result_status IN ('won', 'lost', 'rejected')
+                    WHERE submit_decision_status = 'rejected' OR result_status IN ('recognized_winner', 'lost', 'rejected')
                     """
                 )
             if "registry_position" not in auction_columns:

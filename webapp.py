@@ -236,7 +236,7 @@ def is_auction_archived(item) -> bool:
         return False
     if item.submit_decision_status == "rejected":
         return True
-    return item.result_status in {"won", "recognized_winner", "lost", "rejected"}
+    return item.result_status in {"recognized_winner", "lost", "rejected"}
 
 
 def is_auction_deleted(item) -> bool:
@@ -5233,7 +5233,7 @@ def app(environ, start_response):
             was_archived = is_auction_archived(auction)
             will_be_archived = (
                 submit_decision_status == "rejected"
-                or result_status in {"won", "recognized_winner", "lost", "rejected"}
+                or result_status in {"recognized_winner", "lost", "rejected"}
             )
             if will_be_archived and not was_archived:
                 archived_at = datetime.now()
