@@ -4870,15 +4870,66 @@ def render_payable_due_cell(entry) -> str:
 
 
 def is_payable_archived(entry) -> bool:
+    if is_payable_deleted(entry):
+        return False
     return payable_metrics(entry)["outstanding"] <= 0.009
+
+
+def is_payable_deleted(entry) -> bool:
+    return entry.deleted_at is not None
+
+
+def render_payable_delete_actions(owner_chat_id: int, entry, active_tab: str, current_user: dict | None, counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
+    if current_user is None:
+        return ""
+    if active_tab == "deleted":
+        if not has_permission(current_user, "payables", "view"):
+            return ""
+    elif not has_permission(current_user, "payables", "edit"):
+        return ""
+    delete_icon = """
+    <svg class="icon-trash" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4 7h16" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M9 4h6l1 2H8l1-2Z" />
+      <path d="M7 7h10l-1 12a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2L7 7Z" />
+    </svg>
+    """
+    restore_icon = """
+    <svg class="icon-restore" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M9 7H5v4" />
+      <path d="M5 11a7 7 0 1 0 2-4" />
+    </svg>
+    """
+    if active_tab == "deleted":
+        purge_action = ""
+        if has_active_admin_mode(current_user):
+            purge_action = f"""
+            <form class="auction-delete-form" method="post" action="/payables/{entry.id}/purge{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+              <button class="icon-btn danger" type="submit" title="Удалить навсегда">{delete_icon}</button>
+            </form>
+            """
+        return f"""
+        <form class="auction-delete-form" method="post" action="/payables/{entry.id}/restore{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+          <button class="icon-btn" type="submit" title="Вернуть в реестр">{restore_icon}</button>
+        </form>
+        {purge_action}
+        """
+    return f"""
+    <form class="auction-delete-form" method="post" action="/payables/{entry.id}/delete{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+      <button class="icon-btn danger" type="submit" title="Переместить в удаленные">{delete_icon}</button>
+    </form>
+    """
 
 
 def render_payables_section(storage: Storage, owner_chat_id: int, current_user: dict | None, active_tab: str = "active", flash_message: str = "", success: bool = False, counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
     storage.ensure_payables_seed(owner_chat_id)
     all_entries = storage.list_payables(owner_chat_id)
-    active_entries = [entry for entry in all_entries if not is_payable_archived(entry)]
-    archived_entries = [entry for entry in all_entries if is_payable_archived(entry)]
-    source_entries = archived_entries if active_tab == "archive" else active_entries
+    active_entries = [entry for entry in all_entries if not is_payable_archived(entry) and not is_payable_deleted(entry)]
+    archived_entries = [entry for entry in all_entries if is_payable_archived(entry) and not is_payable_deleted(entry)]
+    deleted_entries = [entry for entry in all_entries if is_payable_deleted(entry)]
+    source_entries = deleted_entries if active_tab == "deleted" else archived_entries if active_tab == "archive" else active_entries
     entries = [entry for entry in source_entries if not counterparty_filter or entry.counterparty == counterparty_filter]
     entries = sort_payable_entries(entries, sort_key, sort_order)
     total_outstanding = sum(payable_metrics(entry)["outstanding"] for entry in active_entries)
@@ -4886,14 +4937,14 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         1 for entry in active_entries
         if payable_metrics(entry)["outstanding"] > 0.009 and entry.due_date < datetime.now(VLADIVOSTOK_TZ).date()
     )
-    available_counterparties = sorted({entry.counterparty for entry in source_entries if entry.counterparty})
+    available_counterparties = sorted({entry.counterparty for entry in all_entries if entry.counterparty})
     counterparty_totals = {
-        name: sum(payable_metrics(entry)["outstanding"] for entry in source_entries if entry.counterparty == name)
+        name: sum(payable_metrics(entry)["outstanding"] for entry in all_entries if entry.counterparty == name and not is_payable_deleted(entry))
         for name in available_counterparties
     }
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     add_section = ""
-    if has_permission(current_user, "payables", "edit"):
+    if has_permission(current_user, "payables", "edit") and active_tab != "deleted":
         add_section = f"""
         <section class="card panel" style="margin-top:22px;">
           <div class="panel-head">
@@ -4949,7 +5000,12 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     rows_html = "".join(
         f"""
         <tr>
-          <td><span class="status-chip-tooltip" data-tooltip="Итого задолженность по поставщику: {escape(format_amount(counterparty_totals.get(entry.counterparty, 0.0)))}">{render_payable_counterparty_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order, available_counterparties)}</span></td>
+          <td>
+            <span class="status-chip-tooltip" data-tooltip="Итого задолженность по поставщику: {escape(format_amount(counterparty_totals.get(entry.counterparty, 0.0)))}">
+              {render_payable_counterparty_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order, available_counterparties)}
+            </span>
+            <div class="contract-table-subtle">Добавил: {escape(entry.created_by_name.strip() or 'Автор неизвестен')}</div>
+          </td>
           <td>{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td>{render_payable_text_cell_editor(owner_chat_id, entry, current_user, "object_name", "Объект", entry.object_name, "Например, Строитель", active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td>{render_payable_text_cell_editor(owner_chat_id, entry, current_user, "comment", "Комментарий", entry.comment, "Например, щебень", active_tab, counterparty_filter, sort_key, sort_order)}</td>
@@ -4957,6 +5013,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
           <td>{render_payable_payment_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td class="nowrap" style="text-align:center;">{format_amount(payable_metrics(entry)["outstanding"]) if payable_metrics(entry)["outstanding"] > 0.009 else '—'}</td>
           <td class="nowrap" style="text-align:center;">{render_payable_due_cell(entry)}</td>
+          <td class="nowrap" style="text-align:center;">{render_payable_delete_actions(owner_chat_id, entry, active_tab, current_user, counterparty_filter, sort_key, sort_order)}</td>
         </tr>
         """
         for entry in entries
@@ -4965,10 +5022,10 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     <section class="card panel" style="margin-top:18px;">
       <div class="panel-head">
         <div>
-          <h2 class="panel-title">{"Архив кредиторки" if active_tab == "archive" else "Реестр кредиторки"}</h2>
-          <div class="panel-sub">{"Полностью закрытые задолженности перед поставщиками." if active_tab == "archive" else "Кому должны, по какому документу, за какой объект и до какого срока нужно закрыть оплату."}</div>
+          <h2 class="panel-title">{"Удаленные строки кредиторки" if active_tab == "deleted" else "Архив кредиторки" if active_tab == "archive" else "Реестр кредиторки"}</h2>
+          <div class="panel-sub">{"Строки, удаленные из реестра. Их можно вернуть, а окончательно очистить только админом." if active_tab == "deleted" else "Полностью закрытые задолженности перед поставщиками." if active_tab == "archive" else "Кому должны, по какому документу, за какой объект и до какого срока нужно закрыть оплату."}</div>
         </div>
-        <div class="chip">{"Закрыто на сумму" if active_tab == "archive" else "Итого долг"}: {format_amount(filtered_paid_total if active_tab == "archive" else filtered_total)}</div>
+        <div class="chip">{"Удалено строк" if active_tab == "deleted" else "Закрыто на сумму" if active_tab == "archive" else "Итого долг"}: {len(entries) if active_tab == "deleted" else format_amount(filtered_paid_total if active_tab == "archive" else filtered_total)}</div>
       </div>
       <table class="table contract-table">
         <thead>
@@ -4981,6 +5038,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
             <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Оплата", "paid_amount")}</th>
             <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Остаток", "outstanding")}</th>
             <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Срок оплаты", "due_date")}</th>
+            <th class="nowrap" style="text-align:center;">Действие</th>
           </tr>
         </thead>
         <tbody>{rows_html}</tbody>
@@ -4988,7 +5046,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     </section>
     """ if entries else f"""
     <section class="card panel" style="margin-top:18px;">
-      <div class="panel-sub">{"По выбранному контрагенту в архиве пока нет записей." if counterparty_filter and active_tab == "archive" else "По выбранному контрагенту в работе пока нет записей." if counterparty_filter else "Архив пока пуст. Как только задолженность будет закрыта, она окажется здесь." if active_tab == "archive" else "В работе пока нет записей. Добавьте первую задолженность, чтобы начать вести кредиторку."}</div>
+      <div class="panel-sub">{"По выбранному контрагенту в удаленных пока нет записей." if counterparty_filter and active_tab == "deleted" else "По выбранному контрагенту в архиве пока нет записей." if counterparty_filter and active_tab == "archive" else "По выбранному контрагенту в работе пока нет записей." if counterparty_filter else "Удаленные пока пусты." if active_tab == "deleted" else "Архив пока пуст. Как только задолженность будет закрыта, она окажется здесь." if active_tab == "archive" else "В работе пока нет записей. Добавьте первую задолженность, чтобы начать вести кредиторку."}</div>
     </section>
     """
     tab_links = f"""
@@ -5001,8 +5059,22 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         Архив
         <span class="tab-count">{len(archived_entries)}</span>
       </a>
+      <a class="tab-btn{" active" if active_tab == "deleted" else ""}" data-keep-payables-scroll="1" href="/payables{payable_query_suffix(owner_chat_id, 'deleted', counterparty_filter, sort_key, sort_order)}#payables-registry">
+        Удаленные
+        <span class="tab-count">{len(deleted_entries)}</span>
+      </a>
     </div>
     """
+    deleted_toolbar = ""
+    if active_tab == "deleted" and has_active_admin_mode(current_user) and deleted_entries:
+        deleted_count = len(deleted_entries)
+        deleted_toolbar = f"""
+        <div class="toolbar" style="margin-top:12px;">
+          <form class="auction-delete-form" method="post" action="/payables/purge-deleted{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}" onsubmit="return confirm('Вы точно хотите удалить {deleted_count} объектов навсегда?');">
+            <button class="secondary-btn danger" type="submit">Очистить корзину</button>
+          </form>
+        </div>
+        """
     stats = f"""
     <section class="stats">
       <article class="card stat-card">
@@ -5037,6 +5109,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         </div>
       </div>
       {tab_links}
+      {deleted_toolbar}
       <form class="action-row payables-filter-form" method="get" action="/payables" style="justify-content: space-between; align-items: end; margin-bottom: 14px;">
         <input type="hidden" name="owner" value="{owner_chat_id}">
         <input type="hidden" name="tab" value="{active_tab}">
@@ -5843,7 +5916,7 @@ def app(environ, start_response):
     if current_auction_tab not in {"active", "archive", "deleted"}:
         current_auction_tab = "active"
     current_payables_tab = query.get("tab", ["active"])[0]
-    if current_payables_tab not in {"active", "archive"}:
+    if current_payables_tab not in {"active", "archive", "deleted"}:
         current_payables_tab = "active"
     current_payables_counterparty = query.get("counterparty", [""])[0].strip()
     current_payables_sort, current_payables_order = normalize_payables_sort(
@@ -6817,7 +6890,57 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
-    if method == "GET" and (path == "/payables/new" or (path.startswith("/payables/") and (path.endswith("/update") or path.endswith("/field") or path.endswith("/payment") or path.endswith("/payment/reset")))):
+    if path.startswith("/payables/") and path.endswith("/delete") and method == "POST":
+        denied = guard("payables", "edit")
+        if denied:
+            return denied
+        payable_id = int(path.split("/")[2])
+        deleted = storage.soft_delete_payable(current_owner, payable_id, datetime.now())
+        if not deleted:
+            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, "Не удалось удалить запись", counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
+            html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}")
+
+    if path.startswith("/payables/") and path.endswith("/restore") and method == "POST":
+        denied = guard("payables", "view")
+        if denied:
+            return denied
+        payable_id = int(path.split("/")[2])
+        restored = storage.restore_deleted_payable(current_owner, payable_id)
+        if not restored:
+            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, "Не удалось вернуть запись", counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
+            html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/payables{payable_query_suffix(current_owner, 'deleted', current_payables_counterparty, current_payables_sort, current_payables_order)}")
+
+    if path.startswith("/payables/") and path.endswith("/purge") and method == "POST":
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Кредиторка")
+            html = layout("Доступ запрещен", body, owners, current_owner, "payables", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        payable_id = int(path.split("/")[2])
+        deleted = storage.hard_delete_payable(current_owner, payable_id)
+        if not deleted:
+            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, "Не удалось удалить запись навсегда", counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
+            html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/payables{payable_query_suffix(current_owner, 'deleted', current_payables_counterparty, current_payables_sort, current_payables_order)}")
+
+    if path == "/payables/purge-deleted" and method == "POST":
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Кредиторка")
+            html = layout("Доступ запрещен", body, owners, current_owner, "payables", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        storage.hard_delete_all_deleted_payables(current_owner)
+        return redirect(start_response, f"/payables{payable_query_suffix(current_owner, 'deleted', current_payables_counterparty, current_payables_sort, current_payables_order)}")
+
+    if method == "GET" and (path == "/payables/new" or (path.startswith("/payables/") and (path.endswith("/update") or path.endswith("/field") or path.endswith("/payment") or path.endswith("/payment/reset") or path.endswith("/delete") or path.endswith("/restore") or path.endswith("/purge")))):
         return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}")
 
     if path.startswith("/contracts/") and path.endswith("/settings") and method == "POST":

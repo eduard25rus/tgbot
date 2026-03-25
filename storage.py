@@ -143,6 +143,7 @@ class PayableEntry:
     due_date: date
     created_by_user_id: Optional[int]
     created_by_name: str
+    deleted_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
 
@@ -363,6 +364,7 @@ class Storage:
                     due_date TEXT NOT NULL,
                     created_by_user_id INTEGER,
                     created_by_name TEXT NOT NULL DEFAULT '',
+                    deleted_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -376,6 +378,9 @@ class Storage:
             }
             payroll_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(payroll_entries)").fetchall()
+            }
+            payable_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(payables)").fetchall()
             }
             if "amount" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN amount REAL NOT NULL DEFAULT 0")
@@ -439,6 +444,8 @@ class Storage:
             for column_name, column_def in payroll_alters:
                 if column_name not in payroll_columns:
                     conn.execute(f"ALTER TABLE payroll_entries ADD COLUMN {column_name} {column_def}")
+            if "deleted_at" not in payable_columns:
+                conn.execute("ALTER TABLE payables ADD COLUMN deleted_at TEXT")
             grant_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(access_grants)").fetchall()
             }
@@ -2450,7 +2457,7 @@ class Storage:
                 """
                 SELECT
                     id, owner_chat_id, counterparty, document_ref, document_date, object_name, comment,
-                    amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, created_at, updated_at
+                    amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
                 FROM payables
                 WHERE owner_chat_id = ?
                 ORDER BY counterparty COLLATE NOCASE ASC, due_date ASC, COALESCE(document_date, due_date) ASC, id ASC
@@ -2465,7 +2472,7 @@ class Storage:
                 """
                 SELECT
                     id, owner_chat_id, counterparty, document_ref, document_date, object_name, comment,
-                    amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, created_at, updated_at
+                    amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
                 FROM payables
                 WHERE owner_chat_id = ? AND id = ?
                 LIMIT 1
@@ -2493,9 +2500,9 @@ class Storage:
                 """
                 INSERT INTO payables (
                     owner_chat_id, counterparty, document_ref, document_date, object_name, comment,
-                    amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, created_at, updated_at
+                    amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, NULL, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -2573,6 +2580,52 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def soft_delete_payable(self, owner_chat_id: int, payable_id: int, deleted_at: datetime) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE payables
+                SET deleted_at = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (deleted_at.isoformat(), deleted_at.isoformat(), payable_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def restore_deleted_payable(self, owner_chat_id: int, payable_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE payables
+                SET deleted_at = NULL, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NOT NULL
+                """,
+                (datetime.utcnow().isoformat(), payable_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def hard_delete_payable(self, owner_chat_id: int, payable_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM payables
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (payable_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def hard_delete_all_deleted_payables(self, owner_chat_id: int) -> int:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM payables
+                WHERE owner_chat_id = ? AND deleted_at IS NOT NULL
+                """,
+                (owner_chat_id,),
+            )
+            return cursor.rowcount
+
     @staticmethod
     def _payable_from_row(row: sqlite3.Row) -> PayableEntry:
         return PayableEntry(
@@ -2589,6 +2642,7 @@ class Storage:
             due_date=date.fromisoformat(row["due_date"]),
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
             created_by_name=row["created_by_name"] or "",
+            deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
