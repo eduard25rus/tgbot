@@ -4612,45 +4612,48 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         for name in available_counterparties
     }
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
-    add_button = ""
+    add_section = ""
     if has_permission(current_user, "payables", "edit"):
-        add_button = f"""
-        <details class="status-menu">
-          <summary><span class="secondary-btn">Добавить задолженность</span></summary>
-          <div class="status-popover lot-form">
-            <form class="form-grid" method="post" action="/payables/new{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
-              <div class="field">
-                <label>Контрагент</label>
-                <input type="text" name="counterparty" placeholder="Например, ВЛ Снаб" required>
-              </div>
-              <div class="field">
-                <label>Счет / документ</label>
-                <input type="text" name="document_ref" placeholder="№ 18" required>
-              </div>
-              <div class="field">
-                <label>Дата документа</label>
-                <input type="date" name="document_date">
-              </div>
-              <div class="field">
-                <label>Объект</label>
-                <input type="text" name="object_name" placeholder="Например, Строитель">
-              </div>
-              <div class="field">
-                <label>Комментарий</label>
-                <textarea name="comment" placeholder="Например, щебень"></textarea>
-              </div>
-              <div class="field">
-                <label>Сумма, ₽</label>
-                <input type="text" name="amount" data-money-input="1" placeholder="114000" required>
-              </div>
-              <div class="field">
-                <label>Срок оплаты</label>
-                <input type="date" name="due_date" required>
-              </div>
-              <button class="submit-btn" type="submit">Добавить в реестр</button>
-            </form>
+        add_section = f"""
+        <section class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Добавить задолженность</h2>
+              <div class="panel-sub">Укажите контрагента, основание, объект, комментарий, сумму и срок оплаты.</div>
+            </div>
           </div>
-        </details>
+          <form class="form-grid" method="post" action="/payables/new{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+            <div class="field">
+              <label>Контрагент</label>
+              <input type="text" name="counterparty" placeholder="Например, ВЛ Снаб" required>
+            </div>
+            <div class="field">
+              <label>Счет / документ</label>
+              <input type="text" name="document_ref" placeholder="№ 18" required>
+            </div>
+            <div class="field">
+              <label>Дата документа</label>
+              <input type="date" name="document_date">
+            </div>
+            <div class="field">
+              <label>Объект</label>
+              <input type="text" name="object_name" placeholder="Например, Строитель">
+            </div>
+            <div class="field">
+              <label>Комментарий</label>
+              <textarea name="comment" placeholder="Например, щебень"></textarea>
+            </div>
+            <div class="field">
+              <label>Сумма, ₽</label>
+              <input type="text" name="amount" data-money-input="1" placeholder="114000" required>
+            </div>
+            <div class="field">
+              <label>Срок оплаты</label>
+              <input type="date" name="due_date" required>
+            </div>
+            <button class="submit-btn" type="submit">Добавить в реестр</button>
+          </form>
+        </section>
         """
     filtered_total = sum(payable_metrics(entry)["outstanding"] for entry in entries)
     filtered_paid_total = sum(entry.paid_amount for entry in entries)
@@ -4743,7 +4746,6 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
           <h2 class="panel-title">Реестр кредиторки</h2>
           <div class="panel-sub">Кому должны, по какому документу, за какой объект и до какого срока нужно закрыть оплату.</div>
         </div>
-        {add_button}
       </div>
       {tab_links}
       <form class="action-row payables-filter-form" method="get" action="/payables" style="justify-content: space-between; align-items: end; margin-bottom: 14px;">
@@ -4766,6 +4768,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
       {flash_html}
     </section>
     {register_html}
+    {add_section}
     """
 
 
