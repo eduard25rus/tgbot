@@ -4713,7 +4713,33 @@ def render_payables_sort_link(owner_chat_id: int, active_tab: str, counterparty_
     return f'<a class="contract-table-link{" active-sort" if is_active else ""}" data-keep-payables-scroll="1" href="{href}#payables-registry">{escape(label)}{arrow}</a>'
 
 
-def render_payable_document_form(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "", counterparty_options: list[str] | None = None) -> str:
+def render_payable_counterparty_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "", counterparty_options: list[str] | None = None) -> str:
+    display = f'<strong>{escape(entry.counterparty)}</strong>'
+    if not has_permission(current_user, "payables", "edit"):
+        return display
+    return f"""
+    <details class="status-menu lot-menu">
+      <summary>{display}</summary>
+      <div class="status-popover lot-form">
+        <form class="form-grid" method="post" action="/payables/{entry.id}/field{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+          <input type="hidden" name="field_name" value="counterparty">
+          <div class="field">
+            <label>Контрагент</label>
+            <div class="autocomplete-wrap">
+              <input id="payable-counterparty-{entry.id}" class="counterparty-autocomplete-input" type="text" name="value" value="{escape(entry.counterparty)}" autocomplete="off" required>
+              <div class="autocomplete-list">
+                {"".join(f'<button class="autocomplete-option" type="button" data-value="{escape(name)}" data-value-lower="{escape(name.lower())}">{escape(name)}</button>' for name in (counterparty_options or []))}
+              </div>
+            </div>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_payable_document_form(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
     doc_label = entry.document_ref.strip() or "Документ не указан"
     date_note = format_date(entry.document_date) if entry.document_date is not None else "Дата не указана"
     display = f"""
@@ -4726,41 +4752,64 @@ def render_payable_document_form(owner_chat_id: int, entry, current_user: dict |
     <details class="status-menu lot-menu">
       <summary>{display}</summary>
       <div class="status-popover lot-form">
-        <form class="form-grid" method="post" action="/payables/{entry.id}/update{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
-          <div class="field">
-            <label>Контрагент</label>
-            <div class="autocomplete-wrap">
-              <input id="payable-counterparty-{entry.id}" class="counterparty-autocomplete-input" type="text" name="counterparty" value="{escape(entry.counterparty)}" autocomplete="off" required>
-              <div class="autocomplete-list">
-                {"".join(f'<button class="autocomplete-option" type="button" data-value="{escape(name)}" data-value-lower="{escape(name.lower())}">{escape(name)}</button>' for name in (counterparty_options or []))}
-              </div>
-            </div>
-          </div>
+        <form class="form-grid" method="post" action="/payables/{entry.id}/field{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+          <input type="hidden" name="field_name" value="document_ref">
           <div class="field">
             <label>Счет / документ</label>
-            <input type="text" name="document_ref" value="{escape(entry.document_ref)}" required>
+            <input type="text" name="value" value="{escape(entry.document_ref)}" required>
           </div>
           <div class="field">
             <label>Дата документа</label>
             <input type="date" name="document_date" value="{entry.document_date.isoformat() if entry.document_date is not None else ''}">
           </div>
+          <button class="submit-btn" type="submit">Сохранить</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_payable_text_cell_editor(owner_chat_id: int, entry, current_user: dict | None, field_name: str, label: str, value: str, placeholder: str, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
+    display = escape(value) if value else "—"
+    if not has_permission(current_user, "payables", "edit"):
+        return display
+    input_html = (
+        f'<textarea name="value" placeholder="{escape(placeholder)}">{escape(value)}</textarea>'
+        if field_name == "comment"
+        else f'<input type="text" name="value" value="{escape(value)}" placeholder="{escape(placeholder)}">'
+    )
+    return f"""
+    <details class="status-menu lot-menu">
+      <summary>{display}</summary>
+      <div class="status-popover lot-form">
+        <form class="form-grid" method="post" action="/payables/{entry.id}/field{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+          <input type="hidden" name="field_name" value="{field_name}">
           <div class="field">
-            <label>Объект</label>
-            <input type="text" name="object_name" value="{escape(entry.object_name)}" placeholder="Например, Строитель">
+            <label>{label}</label>
+            {input_html}
           </div>
-          <div class="field">
-            <label>Комментарий</label>
-            <textarea name="comment" placeholder="Например, аренда гидромолота">{escape(entry.comment)}</textarea>
-          </div>
+          <button class="submit-btn" type="submit">Сохранить</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_payable_amount_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
+    display = format_amount(entry.amount)
+    if not has_permission(current_user, "payables", "edit"):
+        return display
+    return f"""
+    <details class="status-menu lot-menu">
+      <summary>{display}</summary>
+      <div class="status-popover lot-form">
+        <form class="form-grid" method="post" action="/payables/{entry.id}/field{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+          <input type="hidden" name="field_name" value="amount">
           <div class="field">
             <label>Сумма, ₽</label>
-            <input type="text" name="amount" value="{escape(format_amount_input(entry.amount))}" data-money-input="1" required>
+            <input type="text" name="value" value="{escape(format_amount_input(entry.amount))}" data-money-input="1" required>
           </div>
-          <div class="field">
-            <label>Срок оплаты</label>
-            <input type="date" name="due_date" value="{entry.due_date.isoformat()}" required>
-          </div>
-          <button class="submit-btn" type="submit">Сохранить запись</button>
+          <button class="submit-btn" type="submit">Сохранить</button>
         </form>
       </div>
     </details>
@@ -4900,11 +4949,11 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     rows_html = "".join(
         f"""
         <tr>
-          <td><span class="status-chip-tooltip" data-tooltip="Итого задолженность по поставщику: {escape(format_amount(counterparty_totals.get(entry.counterparty, 0.0)))}"><strong>{escape(entry.counterparty)}</strong></span></td>
-          <td>{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order, available_counterparties)}</td>
-          <td>{escape(entry.object_name) if entry.object_name else '—'}</td>
-          <td>{escape(entry.comment) if entry.comment else '—'}</td>
-          <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+          <td><span class="status-chip-tooltip" data-tooltip="Итого задолженность по поставщику: {escape(format_amount(counterparty_totals.get(entry.counterparty, 0.0)))}">{render_payable_counterparty_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order, available_counterparties)}</span></td>
+          <td>{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
+          <td>{render_payable_text_cell_editor(owner_chat_id, entry, current_user, "object_name", "Объект", entry.object_name, "Например, Строитель", active_tab, counterparty_filter, sort_key, sort_order)}</td>
+          <td>{render_payable_text_cell_editor(owner_chat_id, entry, current_user, "comment", "Комментарий", entry.comment, "Например, щебень", active_tab, counterparty_filter, sort_key, sort_order)}</td>
+          <td class="nowrap" style="text-align:center;">{render_payable_amount_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td>{render_payable_payment_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td class="nowrap" style="text-align:center;">{format_amount(payable_metrics(entry)["outstanding"]) if payable_metrics(entry)["outstanding"] > 0.009 else '—'}</td>
           <td class="nowrap" style="text-align:center;">{render_payable_due_cell(entry)}</td>
@@ -6649,6 +6698,65 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
+    if path.startswith("/payables/") and path.endswith("/field") and method == "POST":
+        denied = guard("payables", "edit")
+        if denied:
+            return denied
+        payable_id = int(path.split("/")[2])
+        form = read_post_data(environ)
+        try:
+            field_name = form.get("field_name", "").strip()
+            entry = storage.get_payable(current_owner, payable_id)
+            if entry is None:
+                raise ValueError("Запись не найдена")
+            counterparty = entry.counterparty
+            document_ref = entry.document_ref
+            document_date = entry.document_date
+            object_name = entry.object_name
+            comment = entry.comment
+            amount = entry.amount
+            due_date = entry.due_date
+
+            if field_name == "counterparty":
+                counterparty = form.get("value", "").strip()
+                if not counterparty:
+                    raise ValueError("Укажите контрагента")
+            elif field_name == "document_ref":
+                document_ref = form.get("value", "").strip()
+                document_date_raw = form.get("document_date", "").strip()
+                document_date = parse_date(document_date_raw) if document_date_raw else None
+                if not document_ref:
+                    raise ValueError("Укажите основание")
+            elif field_name == "object_name":
+                object_name = form.get("value", "").strip()
+            elif field_name == "comment":
+                comment = form.get("value", "").strip()
+            elif field_name == "amount":
+                amount = parse_amount(form.get("value", "0"))
+                if amount <= 0:
+                    raise ValueError("Сумма должна быть больше нуля")
+            else:
+                raise ValueError("Некорректное поле редактирования")
+
+            if not storage.update_payable_details(
+                current_owner,
+                payable_id,
+                counterparty,
+                document_ref,
+                document_date,
+                object_name,
+                comment,
+                amount,
+                due_date,
+            ):
+                raise ValueError("Не удалось обновить запись")
+            return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}#payables-registry")
+        except Exception as exc:
+            body = render_payables_section(storage, current_owner, current_user, current_payables_tab, f"Не удалось обновить поле: {exc}", counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
+            html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
     if path.startswith("/payables/") and path.endswith("/payment") and method == "POST":
         denied = guard("payables", "edit")
         if denied:
@@ -6709,7 +6817,7 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
-    if method == "GET" and (path == "/payables/new" or (path.startswith("/payables/") and (path.endswith("/update") or path.endswith("/payment") or path.endswith("/payment/reset")))):
+    if method == "GET" and (path == "/payables/new" or (path.startswith("/payables/") and (path.endswith("/update") or path.endswith("/field") or path.endswith("/payment") or path.endswith("/payment/reset")))):
         return redirect(start_response, f"/payables{payable_query_suffix(current_owner, current_payables_tab, current_payables_counterparty, current_payables_sort, current_payables_order)}")
 
     if path.startswith("/contracts/") and path.endswith("/settings") and method == "POST":
