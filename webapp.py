@@ -3542,7 +3542,11 @@ document.addEventListener("change", (event) => {{
   }}
   if (paidDateInput) {{
     paidDateInput.required = checkbox.checked;
-    if (!checkbox.checked) {{
+    if (checkbox.checked) {{
+      if (!paidDateInput.value) {{
+        paidDateInput.value = new Date().toISOString().slice(0, 10);
+      }}
+    }} else {{
       paidDateInput.value = "";
     }}
   }}
