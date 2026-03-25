@@ -46,8 +46,9 @@ AUCTION_SUBMIT_DECISION_META = {
 
 AUCTION_RESULT_META = {
     "not_participated": ("Не участвовали", "chip"),
-    "pending": ("Ждем итог", "chip warn"),
-    "won": ("Выигран", "chip ok"),
+    "pending": ("Ждем розыгрыш", "chip warn"),
+    "won": ("Выигран", "chip accent"),
+    "recognized_winner": ("Признан победителем", "chip ok"),
     "lost": ("Проигран", "chip danger"),
     "rejected": ("Заявка отклонена", "chip danger"),
 }
@@ -69,8 +70,9 @@ AUCTION_SUBMIT_OPTIONS = [
 
 AUCTION_RESULT_OPTIONS = [
     ("not_participated", "Не участвовали"),
-    ("pending", "Ждем итог"),
+    ("pending", "Ждем розыгрыш"),
     ("won", "Выигран"),
+    ("recognized_winner", "Признан победителем"),
     ("lost", "Проигран"),
     ("rejected", "Заявка отклонена"),
 ]
@@ -234,7 +236,7 @@ def is_auction_archived(item) -> bool:
         return False
     if item.submit_decision_status == "rejected":
         return True
-    return item.result_status in {"won", "lost", "rejected"}
+    return item.result_status in {"won", "recognized_winner", "lost", "rejected"}
 
 
 def is_auction_deleted(item) -> bool:
@@ -641,7 +643,7 @@ def submit_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
 
 def result_chip_with_tooltip(item, current_values: dict[str, str]) -> str:
     tooltip = ""
-    if current_values["result_status"] in {"pending", "won", "lost", "rejected"}:
+    if current_values["result_status"] in {"pending", "won", "recognized_winner", "lost", "rejected"}:
         tooltip = status_tooltip(item.result_status_updated_at, item.result_status_updated_by_name, show_unknown_author=True)
     return auction_chip(current_values["result_status"], AUCTION_RESULT_META, tooltip)
 
@@ -666,7 +668,7 @@ def normalized_auction_values(current_values: dict[str, str]) -> dict[str, str]:
 
 
 def result_summary(item) -> str:
-    if item.result_status not in {"won", "lost"} or item.final_bid_amount is None or item.amount <= 0:
+    if item.result_status not in {"won", "recognized_winner", "lost"} or item.final_bid_amount is None or item.amount <= 0:
         return ""
     discount_percent = max(0.0, round(((item.amount - item.final_bid_amount) / item.amount) * 100, 2))
     return (
@@ -719,7 +721,9 @@ def status_tooltip(updated_at: datetime | None, author_name: str, *, show_unknow
         lines.append(f"Установлено: {format_datetime(updated_at)}")
     elif show_unknown_author:
         lines.append("Установлено: неизвестно")
-    if author_name:
+    if author_name == "Система":
+        lines.append("Установлено системой")
+    elif author_name:
         lines.append(f"Автор: {author_name}")
     elif show_unknown_author:
         lines.append("Автор: неизвестен")
@@ -1043,6 +1047,8 @@ def render_result_form(owner_chat_id: int, item, current_values: dict[str, str],
         options = [option for option in options if option[0] != "not_participated"]
         if current_values["result_status"] == "not_participated":
             current_values["result_status"] = "pending"
+        if item.final_bid_amount is None and current_values["result_status"] == "recognized_winner":
+            current_values["result_status"] = "won"
     hidden_inputs = []
     for field_name in ("estimate_status", "submit_decision_status"):
         hidden_inputs.append(
@@ -1058,6 +1064,8 @@ def render_result_form(owner_chat_id: int, item, current_values: dict[str, str],
     for value, label in options:
         chip_class = AUCTION_RESULT_META.get(value, ("", "chip"))[1]
         active_class = " is-active" if current_result == value else ""
+        if value == "recognized_winner" and item.final_bid_amount is None and current_result != "recognized_winner":
+            continue
         if value in {"won", "lost"}:
             edit_buttons.append(
                 f"""
@@ -1087,7 +1095,7 @@ def render_result_form(owner_chat_id: int, item, current_values: dict[str, str],
     final_price_placeholder = f"Стартовая цена: {format_amount(item.amount)}"
     helper = ""
     if item.submit_decision_status == "submitted":
-        helper = '<div class="result-helper">Для статусов "Выигран" и "Проигран" укажите финальную цену аукциона.</div>'
+        helper = '<div class="result-helper">Для статусов "Выигран" и "Проигран" укажите финальную цену аукциона. "Признан победителем" доступен после сохранения статуса "Выигран".</div>'
     summary_html = result_summary(item)
     return f"""
     <details class="status-menu result-menu">
@@ -2349,6 +2357,7 @@ def layout(
       border: 1px solid transparent;
     }}
     .chip.warn {{ background: #fff2d8; color: #8b5e00; }}
+    .chip.accent {{ background: #ffe5cf; color: #b95a00; }}
     .chip.danger {{ background: #f9dede; color: #922b2b; }}
     .chip.ok {{ background: #e2f4e8; color: #1c6a38; }}
     .status-chip {{
@@ -4536,7 +4545,7 @@ def render_auctions_section(
     estimate_count = sum(1 for item in active_auctions if item.estimate_status == "approved")
     submit_decision_count = sum(1 for item in active_auctions if item.submit_decision_status == "approved")
     submitted_count = sum(1 for item in all_auctions if item.submit_decision_status == "submitted")
-    won_count = sum(1 for item in all_auctions if item.result_status == "won")
+    won_count = sum(1 for item in all_auctions if item.result_status in {"won", "recognized_winner"})
 
     stats = f"""
     <section class="stats">
@@ -4713,7 +4722,7 @@ def render_auctions_section(
           • Заявка: теперь это одна колонка, где желтый статус означает «подавать заявку», а зеленый — «заявка подана»<br>
           • Макс. снижение: управленческий предел по проценту и минимальной сумме, ниже которой не идем<br>
           • Пока заявка не подана, итог автоматически остается в логике «Не участвовали»<br>
-          • После статуса «Заявка подана» доступны варианты: «Ждем итог», «Выигран», «Проигран», «Заявка отклонена»
+          • После статуса «Заявка подана» доступны варианты: «Ждем розыгрыш», «Выигран», «Признан победителем», «Проигран», «Заявка отклонена»
         </div>
       </section>
       <section class="card panel">
@@ -5198,7 +5207,7 @@ def app(environ, start_response):
             elif result_status == "not_participated":
                 result_status = "pending"
                 result_status_updated_at = datetime.utcnow()
-                result_status_updated_by_name = actor_name
+                result_status_updated_by_name = "Система"
                 final_bid_amount = None
             elif result_status in {"won", "lost"}:
                 final_bid_amount = parse_optional_number(form.get("final_bid_amount", ""))
@@ -5209,6 +5218,13 @@ def app(environ, start_response):
                 if result_status != auction.result_status or final_bid_amount != auction.final_bid_amount:
                     result_status_updated_at = datetime.utcnow()
                     result_status_updated_by_name = actor_name
+            elif result_status == "recognized_winner":
+                if auction.final_bid_amount is None:
+                    raise ValueError("Сначала сохраните статус «Выигран» с ценой аукциона")
+                final_bid_amount = auction.final_bid_amount
+                if result_status != auction.result_status:
+                    result_status_updated_at = datetime.utcnow()
+                    result_status_updated_by_name = actor_name
             else:
                 if result_status != auction.result_status:
                     result_status_updated_at = datetime.utcnow()
@@ -5217,7 +5233,7 @@ def app(environ, start_response):
             was_archived = is_auction_archived(auction)
             will_be_archived = (
                 submit_decision_status == "rejected"
-                or result_status in {"won", "lost", "rejected"}
+                or result_status in {"won", "recognized_winner", "lost", "rejected"}
             )
             if will_be_archived and not was_archived:
                 archived_at = datetime.now()
