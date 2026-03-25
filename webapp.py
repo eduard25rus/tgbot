@@ -2632,6 +2632,13 @@ def layout(
       display: grid;
       gap: 12px;
     }}
+    .payable-create-grid {{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: start;
+    }}
+    .field.span-2 {{
+      grid-column: 1 / -1;
+    }}
     .field {{
       display: grid;
       gap: 6px;
@@ -2654,6 +2661,14 @@ def layout(
     .field textarea {{
       min-height: 92px;
       resize: vertical;
+    }}
+    @media (max-width: 720px) {{
+      .payable-create-grid {{
+        grid-template-columns: 1fr;
+      }}
+      .field.span-2 {{
+        grid-column: auto;
+      }}
     }}
     .copy-field {{
       display: flex;
@@ -3641,35 +3656,7 @@ document.addEventListener("change", (event) => {{
     return;
   }}
   const form = checkbox.closest("form");
-  if (!form) {{
-    return;
-  }}
-  const plannedInput = form.querySelector('input[name="planned_amount"]');
-  const paidAmountInput = form.querySelector('input[name="paid_amount"]');
-  const paidDateInput = form.querySelector('input[name="paid_date"]');
-  form.querySelectorAll(".payroll-payment-field").forEach((field) => {{
-    field.classList.toggle("is-hidden", !checkbox.checked);
-  }});
-  if (paidAmountInput) {{
-    paidAmountInput.required = checkbox.checked;
-    if (checkbox.checked) {{
-      if (!paidAmountInput.value.trim() && plannedInput) {{
-        paidAmountInput.value = plannedInput.value;
-      }}
-    }} else {{
-      paidAmountInput.value = "";
-    }}
-  }}
-  if (paidDateInput) {{
-    paidDateInput.required = checkbox.checked;
-    if (checkbox.checked) {{
-      if (!paidDateInput.value) {{
-        paidDateInput.value = new Date().toISOString().slice(0, 10);
-      }}
-    }} else {{
-      paidDateInput.value = "";
-    }}
-  }}
+  updatePaymentFormState(form);
 }});
 
 document.addEventListener("input", (event) => {{
@@ -3815,6 +3802,42 @@ function updateEstimateFormState(form) {{
   }}
 }}
 
+function updatePaymentFormState(form) {{
+  if (!form) {{
+    return;
+  }}
+  const checkbox = form.querySelector('input[name="is_paid"]');
+  if (!checkbox) {{
+    return;
+  }}
+  const plannedInput = form.querySelector('input[name="planned_amount"], input[name="amount"]');
+  const paidAmountInput = form.querySelector('input[name="paid_amount"]');
+  const paidDateInput = form.querySelector('input[name="paid_date"]');
+  form.querySelectorAll(".payroll-payment-field").forEach((field) => {{
+    field.classList.toggle("is-hidden", !checkbox.checked);
+  }});
+  if (paidAmountInput) {{
+    paidAmountInput.required = checkbox.checked;
+    if (checkbox.checked) {{
+      if (!paidAmountInput.value.trim() && plannedInput) {{
+        paidAmountInput.value = plannedInput.value;
+      }}
+    }} else {{
+      paidAmountInput.value = "";
+    }}
+  }}
+  if (paidDateInput) {{
+    paidDateInput.required = checkbox.checked;
+    if (checkbox.checked) {{
+      if (!paidDateInput.value) {{
+        paidDateInput.value = new Date().toISOString().slice(0, 10);
+      }}
+    }} else {{
+      paidDateInput.value = "";
+    }}
+  }}
+}}
+
 document.addEventListener("change", (event) => {{
   const skipCheckbox = event.target.closest('.estimate-form input[type="checkbox"][name^="skip_"]');
   if (!skipCheckbox) {{
@@ -3833,6 +3856,9 @@ window.addEventListener("load", () => {{
   }});
   document.querySelectorAll('.estimate-form').forEach((form) => {{
     updateEstimateFormState(form);
+  }});
+  document.querySelectorAll('.payroll-payment-form').forEach((form) => {{
+    updatePaymentFormState(form);
   }});
   const saved = window.sessionStorage.getItem("auctionScrollY");
   if (saved !== null) {{
@@ -4506,7 +4532,7 @@ def render_payable_document_form(owner_chat_id: int, entry, current_user: dict |
         <form class="form-grid" method="post" action="/payables/{entry.id}/update{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
           <div class="field">
             <label>Контрагент</label>
-            <input type="text" name="counterparty" value="{escape(entry.counterparty)}" required>
+            <input type="text" name="counterparty" list="payable-counterparties" value="{escape(entry.counterparty)}" required>
           </div>
           <div class="field">
             <label>Счет / документ</label>
@@ -4622,10 +4648,10 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
               <div class="panel-sub">Укажите контрагента, основание, объект, комментарий, сумму и срок оплаты.</div>
             </div>
           </div>
-          <form class="form-grid" method="post" action="/payables/new{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+          <form class="form-grid payable-create-grid" method="post" action="/payables/new{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
             <div class="field">
               <label>Контрагент</label>
-              <input type="text" name="counterparty" placeholder="Например, ВЛ Снаб" required>
+              <input type="text" name="counterparty" list="payable-counterparties" placeholder="Например, ВЛ Снаб" required>
             </div>
             <div class="field">
               <label>Счет / документ</label>
@@ -4639,7 +4665,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
               <label>Объект</label>
               <input type="text" name="object_name" placeholder="Например, Строитель">
             </div>
-            <div class="field">
+            <div class="field span-2">
               <label>Комментарий</label>
               <textarea name="comment" placeholder="Например, щебень"></textarea>
             </div>
@@ -4653,6 +4679,9 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
             </div>
             <button class="submit-btn" type="submit">Добавить в реестр</button>
           </form>
+          <datalist id="payable-counterparties">
+            {"".join(f'<option value="{escape(name)}"></option>' for name in available_counterparties)}
+          </datalist>
         </section>
         """
     filtered_total = sum(payable_metrics(entry)["outstanding"] for entry in entries)
