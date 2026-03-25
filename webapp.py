@@ -3547,6 +3547,17 @@ document.addEventListener("submit", (event) => {{
   if (event.target.closest(".discount-form, .amount-form, .deadline-form, .lot-form, .result-form, .estimate-form, .auction-delete-form, .payroll-amount-form, .payroll-payment-form")) {{
     window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
   }}
+  if (event.target.closest(".payables-filter-form")) {{
+    window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
+  }}
+}});
+
+document.addEventListener("click", (event) => {{
+  const payablesLink = event.target.closest('a[data-keep-payables-scroll="1"]');
+  if (!payablesLink) {{
+    return;
+  }}
+  window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
 }});
 
 document.addEventListener("input", (event) => {{
@@ -4450,7 +4461,7 @@ def next_payables_sort(clicked_key: str, current_key: str, current_order: str) -
 
 
 def sort_payable_entries(entries, sort_key: str, sort_order: str):
-    effective_key = sort_key or "due_date"
+    effective_key = sort_key or "created_at"
     effective_order = sort_order or "asc"
     reverse = effective_order == "desc"
 
@@ -4465,6 +4476,7 @@ def sort_payable_entries(entries, sort_key: str, sort_order: str):
             "paid_amount": entry.paid_amount,
             "outstanding": metrics["outstanding"],
             "due_date": entry.due_date,
+            "created_at": entry.created_at,
         }[effective_key]
 
     return sorted(entries, key=key, reverse=reverse)
@@ -4475,7 +4487,7 @@ def render_payables_sort_link(owner_chat_id: int, active_tab: str, counterparty_
     href = f"/payables{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, next_key, next_order)}"
     is_active = current_sort_key == clicked_key
     arrow = " ↑" if is_active and current_sort_order == "asc" else " ↓" if is_active and current_sort_order == "desc" else ""
-    return f'<a class="contract-table-link{" active-sort" if is_active else ""}" href="{href}">{escape(label)}{arrow}</a>'
+    return f'<a class="contract-table-link{" active-sort" if is_active else ""}" data-keep-payables-scroll="1" href="{href}#payables-registry">{escape(label)}{arrow}</a>'
 
 
 def render_payable_document_form(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
@@ -4595,6 +4607,10 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         if payable_metrics(entry)["outstanding"] > 0.009 and entry.due_date < datetime.now(VLADIVOSTOK_TZ).date()
     )
     available_counterparties = sorted({entry.counterparty for entry in source_entries if entry.counterparty})
+    counterparty_totals = {
+        name: sum(payable_metrics(entry)["outstanding"] for entry in source_entries if entry.counterparty == name)
+        for name in available_counterparties
+    }
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     add_button = ""
     if has_permission(current_user, "payables", "edit"):
@@ -4641,7 +4657,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     rows_html = "".join(
         f"""
         <tr>
-          <td><strong>{escape(entry.counterparty)}</strong></td>
+          <td><span class="status-chip-tooltip" data-tooltip="Итого задолженность по поставщику: {escape(format_amount(counterparty_totals.get(entry.counterparty, 0.0)))}"><strong>{escape(entry.counterparty)}</strong></span></td>
           <td>{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td>{escape(entry.object_name) if entry.object_name else '—'}</td>
           <td>{escape(entry.comment) if entry.comment else '—'}</td>
@@ -4685,11 +4701,11 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     """
     tab_links = f"""
     <div class="tab-row">
-      <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/payables{payable_query_suffix(owner_chat_id, 'active', counterparty_filter, sort_key, sort_order)}">
+      <a class="tab-btn{" active" if active_tab == "active" else ""}" data-keep-payables-scroll="1" href="/payables{payable_query_suffix(owner_chat_id, 'active', counterparty_filter, sort_key, sort_order)}#payables-registry">
         В работе
         <span class="tab-count">{len(active_entries)}</span>
       </a>
-      <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/payables{payable_query_suffix(owner_chat_id, 'archive', counterparty_filter, sort_key, sort_order)}">
+      <a class="tab-btn{" active" if active_tab == "archive" else ""}" data-keep-payables-scroll="1" href="/payables{payable_query_suffix(owner_chat_id, 'archive', counterparty_filter, sort_key, sort_order)}#payables-registry">
         Архив
         <span class="tab-count">{len(archived_entries)}</span>
       </a>
@@ -4721,7 +4737,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     """
     return f"""
     {stats}
-    <section class="card panel" style="margin-top:22px;">
+    <section class="card panel" id="payables-registry" style="margin-top:22px;">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Реестр кредиторки</h2>
@@ -4730,9 +4746,11 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         {add_button}
       </div>
       {tab_links}
-      <form class="action-row" method="get" action="/payables" style="justify-content: space-between; align-items: end; margin-bottom: 14px;">
+      <form class="action-row payables-filter-form" method="get" action="/payables" style="justify-content: space-between; align-items: end; margin-bottom: 14px;">
         <input type="hidden" name="owner" value="{owner_chat_id}">
         <input type="hidden" name="tab" value="{active_tab}">
+        {f'<input type="hidden" name="sort" value="{escape(sort_key)}">' if sort_key and sort_order else ''}
+        {f'<input type="hidden" name="order" value="{escape(sort_order)}">' if sort_key and sort_order else ''}
         <div class="field" style="min-width: 280px; margin:0;">
           <label>Выбрать контрагента</label>
           <select name="counterparty">
@@ -4742,7 +4760,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
         </div>
         <div class="action-row" style="gap:10px;">
           <button class="secondary-btn" type="submit">Показать</button>
-          {f'<a class="secondary-btn" href="/payables{payable_query_suffix(owner_chat_id, active_tab, "", sort_key, sort_order)}">Сбросить фильтр</a>' if counterparty_filter else ""}
+          {f'<a class="secondary-btn" data-keep-payables-scroll="1" href="/payables{payable_query_suffix(owner_chat_id, active_tab, "", sort_key, sort_order)}#payables-registry">Сбросить фильтр</a>' if counterparty_filter else ""}
         </div>
       </form>
       {flash_html}
