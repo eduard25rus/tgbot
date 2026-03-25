@@ -1164,6 +1164,7 @@ def render_result_form(owner_chat_id: int, item, current_values: dict[str, str],
 
 def render_discount_form(
     owner_chat_id: int,
+    item,
     auction_id: int,
     amount: float,
     current_discount: float | None,
@@ -1175,9 +1176,13 @@ def render_discount_form(
     current_label = '<span class="chip">Не установлено</span>'
     percent_value = ""
     min_amount_value = ""
+    tooltip = ""
     if current_discount is not None and current_min_amount is not None:
+        tooltip = status_tooltip(item.max_discount_updated_at, item.max_discount_updated_by_name, show_unknown_author=True) if item is not None else ""
+        tooltip_attr = f' data-tooltip="{escape(tooltip)}"' if tooltip else ""
+        tooltip_class = " status-chip-tooltip" if tooltip else ""
         current_label = (
-            f'<span class="discount-percent">{escape(format_discount_percent(current_discount))}</span>'
+            f'<span class="discount-percent{tooltip_class}"{tooltip_attr}>{escape(format_discount_percent(current_discount))}</span>'
             f'<span class="discount-amount">{escape(format_amount(current_min_amount))}</span>'
         )
         percent_value = str(current_discount).replace(".", ",")
@@ -1350,15 +1355,19 @@ def render_auction_details_display(item, row_number: int) -> str:
 
 
 def render_discount_display(
+    item,
     amount: float,
     current_discount: float | None,
     current_min_amount: float | None,
     is_required: bool,
 ) -> str:
     if current_discount is not None and current_min_amount is not None:
+        tooltip = status_tooltip(item.max_discount_updated_at, item.max_discount_updated_by_name, show_unknown_author=True)
+        tooltip_attr = f' data-tooltip="{escape(tooltip)}"' if tooltip else ""
+        tooltip_class = " status-chip-tooltip" if tooltip else ""
         return (
             f'<span class="discount-value">'
-            f'<span class="discount-percent">{escape(format_discount_percent(current_discount))}</span>'
+            f'<span class="discount-percent{tooltip_class}"{tooltip_attr}>{escape(format_discount_percent(current_discount))}</span>'
             f'<span class="discount-amount">{escape(format_amount(current_min_amount))}</span>'
             f'</span>'
         )
@@ -1610,7 +1619,7 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
         submit_cell = render_submit_for_management(owner_chat_id, item, current_values, active_tab)
     else:
         submit_cell = render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
-    discount_cell = render_discount_display(item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if (procurement_user or supply_user) else render_discount_form(owner_chat_id, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
+    discount_cell = render_discount_display(item, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if (procurement_user or supply_user) else render_discount_form(owner_chat_id, item, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
     result_cell = render_result_form(owner_chat_id, item, current_values, active_tab) if procurement_user else result_chip_with_tooltip(item, current_values) + result_summary(item) if (supply_user or management_user) else render_result_form(owner_chat_id, item, current_values, active_tab)
     row_actions = render_auction_delete_actions(owner_chat_id, item, active_tab, current_user)
     return f"""
@@ -5402,7 +5411,17 @@ def app(environ, start_response):
                 min_bid_amount = round(min_amount, 2)
             if max_discount_percent is not None and max_discount_percent < 0:
                 raise ValueError("Процент снижения не может быть отрицательным")
-            updated = storage.update_auction_max_discount(current_owner, auction_id, max_discount_percent, min_bid_amount)
+            actor_name = current_user.get("full_name", "").strip() if current_user else ""
+            updated_at = None if max_discount_percent is None else datetime.utcnow()
+            updated_by_name = "" if max_discount_percent is None else actor_name
+            updated = storage.update_auction_max_discount(
+                current_owner,
+                auction_id,
+                max_discount_percent,
+                min_bid_amount,
+                updated_at,
+                updated_by_name,
+            )
             if not updated:
                 raise ValueError("Аукцион не найден")
             target_tab = "archive" if is_auction_archived(auction) else current_auction_tab

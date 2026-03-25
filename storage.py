@@ -72,6 +72,8 @@ class Auction:
     source_url: str
     max_discount_percent: Optional[float]
     min_bid_amount: Optional[float]
+    max_discount_updated_at: Optional[datetime]
+    max_discount_updated_by_name: str
     material_cost: Optional[float]
     work_cost: Optional[float]
     other_cost: Optional[float]
@@ -269,6 +271,8 @@ class Storage:
                     source_url TEXT NOT NULL DEFAULT '',
                     max_discount_percent REAL,
                     min_bid_amount REAL,
+                    max_discount_updated_at TEXT,
+                    max_discount_updated_by_name TEXT NOT NULL DEFAULT '',
                     material_cost REAL,
                     work_cost REAL,
                     other_cost REAL,
@@ -455,6 +459,10 @@ class Storage:
                 conn.execute("ALTER TABLE auctions ADD COLUMN max_discount_percent REAL")
             if "min_bid_amount" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN min_bid_amount REAL")
+            if "max_discount_updated_at" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN max_discount_updated_at TEXT")
+            if "max_discount_updated_by_name" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN max_discount_updated_by_name TEXT NOT NULL DEFAULT ''")
             if "material_cost" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN material_cost REAL")
             if "work_cost" not in auction_columns:
@@ -942,7 +950,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost, work_cost, other_cost,
+                SELECT id, owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, max_discount_updated_at, max_discount_updated_by_name, material_cost, work_cost, other_cost,
                        estimate_status, estimate_status_updated_at, estimate_status_updated_by_name, submit_decision_status, submit_status_updated_at, submit_status_updated_by_name,
                        application_status, result_status, result_status_updated_at, result_status_updated_by_name, final_bid_amount, archived_at, deleted_at, created_at
                 FROM auctions
@@ -1060,15 +1068,24 @@ class Storage:
         auction_id: int,
         max_discount_percent: float | None,
         min_bid_amount: float | None,
+        updated_at: datetime | None,
+        updated_by_name: str,
     ) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE auctions
-                SET max_discount_percent = ?, min_bid_amount = ?
+                SET max_discount_percent = ?, min_bid_amount = ?, max_discount_updated_at = ?, max_discount_updated_by_name = ?
                 WHERE id = ? AND owner_chat_id = ?
                 """,
-                (max_discount_percent, min_bid_amount, auction_id, owner_chat_id),
+                (
+                    max_discount_percent,
+                    min_bid_amount,
+                    updated_at.isoformat() if updated_at is not None else None,
+                    updated_by_name,
+                    auction_id,
+                    owner_chat_id,
+                ),
             )
             return cursor.rowcount > 0
 
@@ -1983,6 +2000,8 @@ class Storage:
             source_url=row["source_url"],
             max_discount_percent=float(row["max_discount_percent"]) if row["max_discount_percent"] is not None else None,
             min_bid_amount=float(row["min_bid_amount"]) if row["min_bid_amount"] is not None else None,
+            max_discount_updated_at=datetime.fromisoformat(row["max_discount_updated_at"]) if row["max_discount_updated_at"] is not None else None,
+            max_discount_updated_by_name=row["max_discount_updated_by_name"] or "",
             material_cost=float(row["material_cost"]) if row["material_cost"] is not None else None,
             work_cost=float(row["work_cost"]) if row["work_cost"] is not None else None,
             other_cost=float(row["other_cost"]) if row["other_cost"] is not None else None,
