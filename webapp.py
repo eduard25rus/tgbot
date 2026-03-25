@@ -1032,15 +1032,16 @@ def render_estimate_cost_field(
     is_skipped: bool,
     needs_costs: bool,
     placeholder: str,
+    skip_label: str,
 ) -> str:
     return f"""
         <div class="field estimate-cost-field{" is-hidden" if not needs_costs else ""}" data-estimate-field="{escape(field_name)}">
           <label>{escape(label)}</label>
           <label class="advance-toggle estimate-skip-toggle">
             <input class="toggle-checkbox" type="checkbox" name="skip_{escape(field_name)}" value="1" {"checked" if is_skipped else ""}>
-            Не просчитано
+            {escape(skip_label)}
           </label>
-          <div class="estimate-cost-input{" is-hidden" if is_skipped else ""}">
+          <div class="estimate-cost-input" {"hidden" if is_skipped else ""}>
             <input type="text" name="{escape(field_name)}" value="{escape(value)}" placeholder="{escape(placeholder)}" data-money-input="1" {"required" if needs_costs and not is_skipped else ""}>
           </div>
         </div>
@@ -1112,9 +1113,9 @@ def render_estimate_form(owner_chat_id: int, item, current_values: dict[str, str
           {''.join(calculate_buttons)}
         </div>
         <div class="result-helper">Для статуса "Просчитан" заполните только те суммы, которые реально посчитаны. Остальные можно отметить как «не просчитано».</div>
-        {render_estimate_cost_field("material_cost", "Стоимость материалов, ₽", material_value, item.material_cost is None, needs_costs, "Например, 3 250 000,00")}
-        {render_estimate_cost_field("work_cost", "Стоимость работ, ₽", work_value, item.work_cost is None, needs_costs, "Например, 1 400 000,00")}
-        {render_estimate_cost_field("other_cost", "Прочие расходы, ₽", other_value, item.other_cost is None, needs_costs, "Например, 250 000,00")}
+        {render_estimate_cost_field("material_cost", "Стоимость материалов, ₽", material_value, item.material_cost is None, needs_costs, "Например, 3 250 000,00", "Материалы не просчитаны")}
+        {render_estimate_cost_field("work_cost", "Стоимость работ, ₽", work_value, item.work_cost is None, needs_costs, "Например, 1 400 000,00", "Работы не просчитаны")}
+        {render_estimate_cost_field("other_cost", "Прочие расходы, ₽", other_value, item.other_cost is None, needs_costs, "Например, 250 000,00", "Прочие расходы не просчитаны")}
         <div class="result-error{" is-visible" if needs_costs and not costs_complete else ""}">Заполните хотя бы одно поле расчета. Остальные можно отметить как «не просчитано».</div>
         <div class="field estimate-cost-field{" is-hidden" if not needs_costs else ""}">
           <label>Комментарий</label>
@@ -1525,9 +1526,9 @@ def render_estimate_for_supply(owner_chat_id: int, item, current_values: dict[st
           <button class="estimate-picker {AUCTION_ESTIMATE_META['calculated'][1]}{' is-active' if current_values['estimate_status'] == 'calculated' else ''}" type="button" data-estimate-value="calculated">Просчитан</button>
           <button class="estimate-picker {AUCTION_ESTIMATE_META['not_calculated'][1]}{' is-active' if current_values['estimate_status'] == 'not_calculated' else ''}" type="button" data-estimate-value="not_calculated">Не просчитан</button>
         </div>
-        {render_estimate_cost_field("material_cost", "Стоимость материалов, ₽", material_value, item.material_cost is None, current_values['estimate_status'] == 'calculated', "Введите сумму материалов")}
-        {render_estimate_cost_field("work_cost", "Стоимость работ, ₽", work_value, item.work_cost is None, current_values['estimate_status'] == 'calculated', "Введите стоимость работ")}
-        {render_estimate_cost_field("other_cost", "Прочие расходы, ₽", other_value, item.other_cost is None, current_values['estimate_status'] == 'calculated', "Введите прочие расходы")}
+        {render_estimate_cost_field("material_cost", "Стоимость материалов, ₽", material_value, item.material_cost is None, current_values['estimate_status'] == 'calculated', "Введите сумму материалов", "Материалы не просчитаны")}
+        {render_estimate_cost_field("work_cost", "Стоимость работ, ₽", work_value, item.work_cost is None, current_values['estimate_status'] == 'calculated', "Введите стоимость работ", "Работы не просчитаны")}
+        {render_estimate_cost_field("other_cost", "Прочие расходы, ₽", other_value, item.other_cost is None, current_values['estimate_status'] == 'calculated', "Введите прочие расходы", "Прочие расходы не просчитаны")}
         <div class="result-error{' is-visible' if current_values['estimate_status'] == 'calculated' and not costs_complete else ''}">Заполните хотя бы одно поле расчета. Остальные можно отметить как «не просчитано».</div>
         <div class="field estimate-cost-field{' is-hidden' if current_values['estimate_status'] != 'calculated' else ''}">
           <label>Комментарий</label>
@@ -1576,9 +1577,9 @@ def render_estimate_for_management(owner_chat_id: int, item, current_values: dic
           </summary>
           <form class="status-popover estimate-form" method="post" action="/auctions/{item.id}/status?owner={owner_chat_id}&tab={escape(active_tab)}">
             {''.join(hidden_inputs)}
-            {render_estimate_cost_field("material_cost", "Стоимость материалов, ₽", material_value, item.material_cost is None, True, "Введите сумму материалов")}
-            {render_estimate_cost_field("work_cost", "Стоимость работ, ₽", work_value, item.work_cost is None, True, "Введите стоимость работ")}
-            {render_estimate_cost_field("other_cost", "Прочие расходы, ₽", other_value, item.other_cost is None, True, "Введите прочие расходы")}
+            {render_estimate_cost_field("material_cost", "Стоимость материалов, ₽", material_value, item.material_cost is None, True, "Введите сумму материалов", "Материалы не просчитаны")}
+            {render_estimate_cost_field("work_cost", "Стоимость работ, ₽", work_value, item.work_cost is None, True, "Введите стоимость работ", "Работы не просчитаны")}
+            {render_estimate_cost_field("other_cost", "Прочие расходы, ₽", other_value, item.other_cost is None, True, "Введите прочие расходы", "Прочие расходы не просчитаны")}
             <div class="result-error{' is-visible' if not costs_complete else ''}">Заполните хотя бы одно поле расчета. Остальные можно отметить как «не просчитано».</div>
             <div class="field estimate-cost-field">
               <label>Комментарий</label>
@@ -3745,7 +3746,7 @@ function updateEstimateFormState(form) {{
     const input = field.querySelector('input[type="text"][data-money-input]');
     const skipped = Boolean(checkbox && checkbox.checked);
     if (inputWrap) {{
-      inputWrap.classList.toggle('is-hidden', !needsCost || skipped);
+      inputWrap.hidden = !needsCost || skipped;
     }}
     if (input) {{
       input.required = Boolean(needsCost && !skipped);
