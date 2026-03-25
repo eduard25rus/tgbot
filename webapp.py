@@ -4698,7 +4698,7 @@ def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict 
     <details class="status-menu">
       <summary>{display}</summary>
       <div class="status-popover">
-        <form class="form-grid payroll-payment-form" method="post" action="/payables/{entry.id}/payment{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
+        <form class="form-grid payroll-payment-form" method="post" novalidate action="/payables/{entry.id}/payment{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">
           <div class="field">
             <label>Начислено к оплате</label>
             <input type="text" name="amount" value="{escape(format_amount_input(entry.amount))}" data-money-input="1" required>
@@ -4716,7 +4716,7 @@ def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict 
           </div>
           <div class="action-row">
             <button class="submit-btn" type="submit">Сохранить оплату</button>
-            {f'<button class="secondary-btn" type="submit" formaction="/payables/{entry.id}/payment/reset{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">Сбросить оплату</button>' if entry.paid_amount > 0.009 else ''}
+            {f'<button class="secondary-btn" type="submit" formnovalidate formaction="/payables/{entry.id}/payment/reset{payable_query_suffix(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order)}">Сбросить оплату</button>' if entry.paid_amount > 0.009 else ''}
           </div>
         </form>
       </div>
@@ -4801,7 +4801,11 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
             </div>
             <div class="field">
               <label>Срок оплаты</label>
-              <input type="date" name="due_date" required>
+              <input type="date" name="due_date">
+            </div>
+            <div class="field">
+              <label>Или срок, дней</label>
+              <input type="number" name="due_days" min="1" step="1" placeholder="Например, 30">
             </div>
             <button class="submit-btn" type="submit">Добавить в реестр</button>
           </form>
@@ -6492,7 +6496,18 @@ def app(environ, start_response):
             object_name = form.get("object_name", "").strip()
             comment = form.get("comment", "").strip()
             amount = parse_amount(form.get("amount", "0"))
-            due_date = parse_date(form.get("due_date", ""))
+            due_date_raw = form.get("due_date", "").strip()
+            due_days_raw = form.get("due_days", "").strip()
+            if due_date_raw:
+                due_date = parse_date(due_date_raw)
+            elif due_days_raw:
+                due_days = int(due_days_raw)
+                if due_days <= 0:
+                    raise ValueError("Срок оплаты в днях должен быть больше 0")
+                due_base = document_date or datetime.now(VLADIVOSTOK_TZ).date()
+                due_date = due_base + timedelta(days=due_days)
+            else:
+                raise ValueError("Укажите срок оплаты датой или в днях")
             if not counterparty:
                 raise ValueError("Укажите контрагента")
             if not document_ref:
