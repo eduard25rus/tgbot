@@ -77,6 +77,7 @@ class Auction:
     material_cost: Optional[float]
     work_cost: Optional[float]
     other_cost: Optional[float]
+    estimate_comment: str
     estimate_status: str
     estimate_status_updated_at: Optional[datetime]
     estimate_status_updated_by_name: str
@@ -276,6 +277,7 @@ class Storage:
                     material_cost REAL,
                     work_cost REAL,
                     other_cost REAL,
+                    estimate_comment TEXT NOT NULL DEFAULT '',
                     estimate_status TEXT NOT NULL DEFAULT 'pending',
                     estimate_status_updated_at TEXT,
                     estimate_status_updated_by_name TEXT NOT NULL DEFAULT '',
@@ -469,6 +471,8 @@ class Storage:
                 conn.execute("ALTER TABLE auctions ADD COLUMN work_cost REAL")
             if "other_cost" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN other_cost REAL")
+            if "estimate_comment" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN estimate_comment TEXT NOT NULL DEFAULT ''")
             if "final_bid_amount" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN final_bid_amount REAL")
             if "result_status_updated_at" not in auction_columns:
@@ -950,7 +954,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, max_discount_updated_at, max_discount_updated_by_name, material_cost, work_cost, other_cost,
+                SELECT id, owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, max_discount_updated_at, max_discount_updated_by_name, material_cost, work_cost, other_cost, estimate_comment,
                        estimate_status, estimate_status_updated_at, estimate_status_updated_by_name, submit_decision_status, submit_status_updated_at, submit_status_updated_by_name,
                        application_status, result_status, result_status_updated_at, result_status_updated_by_name, final_bid_amount, archived_at, deleted_at, created_at
                 FROM auctions
@@ -1018,6 +1022,7 @@ class Storage:
         material_cost: float | None,
         work_cost: float | None,
         other_cost: float | None,
+        estimate_comment: str,
         estimate_status_updated_at: datetime | None,
         estimate_status_updated_by_name: str,
         submit_decision_status: str,
@@ -1034,7 +1039,7 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE auctions
-                SET estimate_status = ?, material_cost = ?, work_cost = ?, other_cost = ?, estimate_status_updated_at = ?, estimate_status_updated_by_name = ?,
+                SET estimate_status = ?, material_cost = ?, work_cost = ?, other_cost = ?, estimate_comment = ?, estimate_status_updated_at = ?, estimate_status_updated_by_name = ?,
                     submit_decision_status = ?, submit_status_updated_at = ?, submit_status_updated_by_name = ?,
                     application_status = ?, result_status = ?, result_status_updated_at = ?, result_status_updated_by_name = ?,
                     final_bid_amount = ?, archived_at = ?
@@ -1045,6 +1050,7 @@ class Storage:
                     material_cost,
                     work_cost,
                     other_cost,
+                    estimate_comment,
                     estimate_status_updated_at.isoformat() if estimate_status_updated_at is not None else None,
                     estimate_status_updated_by_name,
                     submit_decision_status,
@@ -2005,6 +2011,7 @@ class Storage:
             material_cost=float(row["material_cost"]) if row["material_cost"] is not None else None,
             work_cost=float(row["work_cost"]) if row["work_cost"] is not None else None,
             other_cost=float(row["other_cost"]) if row["other_cost"] is not None else None,
+            estimate_comment=row["estimate_comment"] or "",
             estimate_status=row["estimate_status"],
             estimate_status_updated_at=datetime.fromisoformat(row["estimate_status_updated_at"]) if row["estimate_status_updated_at"] is not None else None,
             estimate_status_updated_by_name=row["estimate_status_updated_by_name"] or "",

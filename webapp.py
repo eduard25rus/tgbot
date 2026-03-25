@@ -686,8 +686,11 @@ def estimate_summary(item) -> str:
     )
     if total_cost <= 0:
         return ""
+    tooltip = item.estimate_comment.strip()
+    tooltip_attr = f' data-tooltip="{escape(tooltip)}"' if tooltip else ""
+    tooltip_class = " auction-added-tooltip" if tooltip else ""
     return (
-        '<span class="result-meta result-meta-stack">'
+        f'<span class="result-meta result-meta-stack{tooltip_class}"{tooltip_attr}>'
         '<span>Итого затрат:</span>'
         f'<span>{escape(format_amount(total_cost))}</span>'
         '</span>'
@@ -950,6 +953,10 @@ def render_auction_status_form(
             hidden_inputs.append(
                 f'<input type="hidden" name="other_cost" value="{escape(format_amount_input(item.other_cost))}">'
             )
+        if item.estimate_comment:
+            hidden_inputs.append(
+                f'<input type="hidden" name="estimate_comment" value="{escape(item.estimate_comment)}">'
+            )
     if active_field != "result_status" and item.final_bid_amount is not None:
         hidden_inputs.append(
             f'<input type="hidden" name="final_bid_amount" value="{escape(format_amount_input(item.final_bid_amount))}">'
@@ -1021,6 +1028,7 @@ def render_estimate_form(owner_chat_id: int, item, current_values: dict[str, str
     material_value = format_amount_input(item.material_cost) if item.material_cost is not None else ""
     work_value = format_amount_input(item.work_cost) if item.work_cost is not None else ""
     other_value = format_amount_input(item.other_cost) if item.other_cost is not None else ""
+    comment_value = item.estimate_comment or ""
     needs_costs = current_estimate == "calculated"
     costs_complete = all(value.strip() for value in (material_value, work_value, other_value))
     return f"""
@@ -1053,6 +1061,10 @@ def render_estimate_form(owner_chat_id: int, item, current_values: dict[str, str
           <label>Прочие расходы, ₽</label>
           <input type="text" name="other_cost" value="{escape(other_value)}" placeholder="Например, 250 000,00" data-money-input="1" {"required" if needs_costs else ""}>
           <div class="result-error{" is-visible" if needs_costs and not costs_complete else ""}">Заполните все три поля расчета.</div>
+        </div>
+        <div class="field estimate-cost-field{" is-hidden" if not needs_costs else ""}">
+          <label>Комментарий</label>
+          <textarea name="estimate_comment" placeholder="Например, что заложено в расчет">{escape(comment_value)}</textarea>
         </div>
         <div class="action-row">
           <button class="submit-btn" type="submit" {"disabled" if needs_costs and not costs_complete else ""}>Сохранить расчет</button>
@@ -1427,6 +1439,10 @@ def render_estimate_for_supply(owner_chat_id: int, item, current_values: dict[st
         hidden_inputs.append(
             f'<input type="hidden" name="other_cost" value="{escape(format_amount_input(item.other_cost))}">'
         )
+    if item.estimate_comment:
+        hidden_inputs.append(
+            f'<input type="hidden" name="estimate_comment" value="{escape(item.estimate_comment)}">'
+        )
     if item.final_bid_amount is not None:
         hidden_inputs.append(
             f'<input type="hidden" name="final_bid_amount" value="{escape(format_amount_input(item.final_bid_amount))}">'
@@ -1459,6 +1475,10 @@ def render_estimate_for_supply(owner_chat_id: int, item, current_values: dict[st
           <input type="text" name="other_cost" value="{escape(format_amount_input(item.other_cost)) if item.other_cost is not None and current_values['estimate_status'] == 'calculated' else ''}" placeholder="Введите прочие расходы" data-money-input="1" {'required' if current_values['estimate_status'] == 'calculated' else ''}>
           <div class="result-error{' is-visible' if current_values['estimate_status'] == 'calculated' and (item.material_cost is None or item.work_cost is None or item.other_cost is None) else ''}">Заполните все три поля расчета.</div>
         </div>
+        <div class="field estimate-cost-field{' is-hidden' if current_values['estimate_status'] != 'calculated' else ''}">
+          <label>Комментарий</label>
+          <textarea name="estimate_comment" placeholder="Например, что входит в расчет">{escape(item.estimate_comment or '')}</textarea>
+        </div>
         <div class="action-row">
           <button class="submit-btn" type="submit" {'disabled' if current_values['estimate_status'] == 'calculated' and (item.material_cost is None or item.work_cost is None or item.other_cost is None) else ''}>Сохранить расчет</button>
         </div>
@@ -1474,6 +1494,10 @@ def render_estimate_for_management(owner_chat_id: int, item, current_values: dic
             f'<input type="hidden" name="result_status" value="{escape(current_values["result_status"])}">',
             '<input type="hidden" name="estimate_status" value="calculated">',
         ]
+        if item.estimate_comment:
+            hidden_inputs.append(
+                f'<input type="hidden" name="estimate_comment" value="{escape(item.estimate_comment)}">'
+            )
         if item.final_bid_amount is not None:
             hidden_inputs.append(
                 f'<input type="hidden" name="final_bid_amount" value="{escape(format_amount_input(item.final_bid_amount))}">'
@@ -1481,6 +1505,7 @@ def render_estimate_for_management(owner_chat_id: int, item, current_values: dic
         material_value = format_amount_input(item.material_cost) if item.material_cost is not None else ""
         work_value = format_amount_input(item.work_cost) if item.work_cost is not None else ""
         other_value = format_amount_input(item.other_cost) if item.other_cost is not None else ""
+        comment_value = item.estimate_comment or ""
         return f"""
         <details class="status-menu estimate-menu">
           <summary>
@@ -1502,6 +1527,10 @@ def render_estimate_for_management(owner_chat_id: int, item, current_values: dic
             <div class="field estimate-cost-field">
               <label>Прочие расходы, ₽</label>
               <input type="text" name="other_cost" value="{escape(other_value)}" placeholder="Введите прочие расходы" data-money-input="1" required>
+            </div>
+            <div class="field estimate-cost-field">
+              <label>Комментарий</label>
+              <textarea name="estimate_comment" placeholder="Например, что входит в расчет">{escape(comment_value)}</textarea>
             </div>
             <div class="action-row">
               <button class="submit-btn" type="submit">Сохранить расчет</button>
@@ -5255,6 +5284,7 @@ def app(environ, start_response):
             material_cost = auction.material_cost
             work_cost = auction.work_cost
             other_cost = auction.other_cost
+            estimate_comment = auction.estimate_comment
             estimate_status_updated_at = auction.estimate_status_updated_at
             estimate_status_updated_by_name = auction.estimate_status_updated_by_name
             submit_decision_status = form.get("submit_decision_status", auction.submit_decision_status)
@@ -5287,11 +5317,13 @@ def app(environ, start_response):
                     raise ValueError("Стоимость работ должна быть больше 0")
                 if other_cost <= 0:
                     raise ValueError("Прочие расходы должны быть больше 0")
+                estimate_comment = form.get("estimate_comment", "").strip()
                 if (
                     auction.estimate_status != "calculated"
                     or auction.material_cost != material_cost
                     or auction.work_cost != work_cost
                     or auction.other_cost != other_cost
+                    or auction.estimate_comment != estimate_comment
                 ):
                     estimate_status_updated_at = datetime.utcnow()
                     estimate_status_updated_by_name = actor_name
@@ -5299,6 +5331,7 @@ def app(environ, start_response):
                 material_cost = None
                 work_cost = None
                 other_cost = None
+                estimate_comment = ""
                 if estimate_status != auction.estimate_status:
                     estimate_status_updated_at = datetime.utcnow()
                     estimate_status_updated_by_name = actor_name
@@ -5355,6 +5388,7 @@ def app(environ, start_response):
                 material_cost,
                 work_cost,
                 other_cost,
+                estimate_comment,
                 estimate_status_updated_at,
                 estimate_status_updated_by_name,
                 submit_decision_status,
