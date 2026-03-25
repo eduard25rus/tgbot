@@ -2894,6 +2894,7 @@ def layout(
       background: rgba(22, 35, 47, 0.96);
       color: #fff;
       font-size: 12px;
+      font-weight: 400;
       line-height: 1.35;
       white-space: normal;
       text-align: center;
@@ -3077,6 +3078,7 @@ def layout(
       background: rgba(22, 35, 47, 0.96);
       color: #fff;
       font-size: 12px;
+      font-weight: 400;
       line-height: 1.35;
       white-space: normal;
       text-align: center;
