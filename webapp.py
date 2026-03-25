@@ -1037,10 +1037,12 @@ def render_estimate_cost_field(
     return f"""
         <div class="field estimate-cost-field{" is-hidden" if not needs_costs else ""}" data-estimate-field="{escape(field_name)}">
           <label>{escape(label)}</label>
-          <label class="advance-toggle estimate-skip-toggle">
-            <input class="toggle-checkbox" type="checkbox" name="skip_{escape(field_name)}" value="1" {"checked" if is_skipped else ""}>
+          <div class="estimate-skip-row">
+            <label class="estimate-skip-box">
+              <input class="toggle-checkbox" type="checkbox" name="skip_{escape(field_name)}" value="1" {"checked" if is_skipped else ""}>
+            </label>
             <span class="estimate-skip-label">{escape(skip_label)}</span>
-          </label>
+          </div>
           <div class="estimate-cost-input" {"hidden" if is_skipped else ""}>
             <input type="text" name="{escape(field_name)}" value="{escape(value)}" placeholder="{escape(placeholder)}" data-money-input="1" {"required" if needs_costs and not is_skipped else ""}>
           </div>
@@ -2853,6 +2855,18 @@ def layout(
       text-transform: none;
       letter-spacing: normal;
       font-weight: 500;
+    }}
+    .estimate-skip-row {{
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin: 2px 0 4px;
+    }}
+    .estimate-skip-box {{
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+      margin: 0;
     }}
     .advance-field.is-hidden {{
       display: none;
