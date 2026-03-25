@@ -1738,6 +1738,7 @@ def render_auction_rows(auctions, owner_chat_id: int, active_tab: str, current_u
 SECTIONS = [
     ("contracts", "Контракты", "/contracts"),
     ("auctions", "Аукционы", "/auctions"),
+    ("payables", "Кредиторка", "/payables"),
     ("expenses", "Расходы компании", "/expenses"),
     ("payroll", "Зарплата", "/payroll"),
     ("finance", "Финансовый анализ", "/finance-analysis"),
@@ -1755,6 +1756,10 @@ SECTION_HERO = {
     "auctions": (
         "Аукционы",
         "Здесь постепенно соберем воронку тендеров: анализ закупок, статусы участия, шансы на победу и плановые суммы.",
+    ),
+    "payables": (
+        "Кредиторка",
+        "Реестр кредиторской задолженности: кому должны, по какому документу, на какой объект, до какого срока и что уже закрыто оплатой.",
     ),
     "expenses": (
         "Расходы компании",
@@ -4387,6 +4392,289 @@ def render_payroll_note_editor(owner_chat_id: int, payroll_month: date, row, cur
     """
 
 
+def payable_metrics(entry) -> dict[str, float | str]:
+    outstanding = round(max(entry.amount - entry.paid_amount, 0.0), 2)
+    overpaid = round(max(entry.paid_amount - entry.amount, 0.0), 2)
+    if overpaid > 0.009:
+        return {
+            "outstanding": outstanding,
+            "overpaid": overpaid,
+            "status_label": "Переплата",
+            "status_class": "chip danger",
+        }
+    if entry.amount > 0 and outstanding <= 0.009:
+        return {
+            "outstanding": outstanding,
+            "overpaid": overpaid,
+            "status_label": "Закрыто",
+            "status_class": "chip ok",
+        }
+    if entry.paid_amount > 0:
+        return {
+            "outstanding": outstanding,
+            "overpaid": overpaid,
+            "status_label": "Частично оплачено",
+            "status_class": "chip warn",
+        }
+    return {
+        "outstanding": outstanding,
+        "overpaid": overpaid,
+        "status_label": "Не оплачено",
+        "status_class": "chip",
+    }
+
+
+def render_payable_document_form(owner_chat_id: int, entry, current_user: dict | None) -> str:
+    doc_label = entry.document_ref.strip() or "Документ не указан"
+    date_note = format_date(entry.document_date) if entry.document_date is not None else "Дата не указана"
+    display = f"""
+    <div class="timeline-title">{escape(doc_label)}</div>
+    <div class="contract-table-subtle">{escape(date_note)}</div>
+    """
+    if not has_permission(current_user, "payables", "edit"):
+        return display
+    return f"""
+    <details class="status-menu lot-menu">
+      <summary>{display}</summary>
+      <div class="status-popover lot-form">
+        <form class="form-grid" method="post" action="/payables/{entry.id}/update?owner={owner_chat_id}">
+          <div class="field">
+            <label>Контрагент</label>
+            <input type="text" name="counterparty" value="{escape(entry.counterparty)}" required>
+          </div>
+          <div class="field">
+            <label>Счет / документ</label>
+            <input type="text" name="document_ref" value="{escape(entry.document_ref)}" required>
+          </div>
+          <div class="field">
+            <label>Дата документа</label>
+            <input type="date" name="document_date" value="{entry.document_date.isoformat() if entry.document_date is not None else ''}">
+          </div>
+          <div class="field">
+            <label>Объект</label>
+            <input type="text" name="object_name" value="{escape(entry.object_name)}" placeholder="Например, Строитель">
+          </div>
+          <div class="field">
+            <label>Комментарий</label>
+            <textarea name="comment" placeholder="Например, аренда гидромолота">{escape(entry.comment)}</textarea>
+          </div>
+          <div class="field">
+            <label>Сумма, ₽</label>
+            <input type="text" name="amount" value="{escape(format_amount_input(entry.amount))}" data-money-input="1" required>
+          </div>
+          <div class="field">
+            <label>Срок оплаты</label>
+            <input type="date" name="due_date" value="{entry.due_date.isoformat()}" required>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить запись</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_payable_payment_editor(owner_chat_id: int, entry, current_user: dict | None) -> str:
+    metrics = payable_metrics(entry)
+    paid_display = format_amount(entry.paid_amount) if entry.paid_amount > 0.009 else "—"
+    paid_note = format_date(entry.paid_date) if entry.paid_date is not None else ""
+    display = f"""
+    <div class="payroll-amount{' is-partial' if entry.paid_amount > 0.009 and metrics['outstanding'] > 0.009 else ' is-paid' if entry.paid_amount > 0.009 and metrics['outstanding'] <= 0.009 else ''}">{paid_display}</div>
+    {f'<div class="contract-table-subtle">{escape(paid_note)}</div>' if paid_note else ''}
+    <div><span class="{metrics["status_class"]}">{metrics["status_label"]}</span></div>
+    """
+    if not has_permission(current_user, "payables", "edit"):
+        return display
+    checked_attr = "checked" if entry.paid_amount > 0.009 else ""
+    return f"""
+    <details class="status-menu">
+      <summary>{display}</summary>
+      <div class="status-popover">
+        <form class="form-grid payroll-payment-form" method="post" action="/payables/{entry.id}/payment?owner={owner_chat_id}">
+          <div class="field">
+            <label>Начислено к оплате</label>
+            <input type="text" name="amount" value="{escape(format_amount_input(entry.amount))}" data-money-input="1" required>
+          </div>
+          <label class="advance-toggle">
+            <input class="toggle-checkbox" type="checkbox" name="is_paid" value="1" {checked_attr}> Оплата зафиксирована
+          </label>
+          <div class="field payroll-payment-field{' is-hidden' if entry.paid_amount <= 0.009 else ''}">
+            <label>Фактически оплачено</label>
+            <input type="text" name="paid_amount" value="{escape(format_amount_input(entry.paid_amount)) if entry.paid_amount > 0.009 else ''}" data-money-input="1">
+          </div>
+          <div class="field payroll-payment-field{' is-hidden' if entry.paid_amount <= 0.009 else ''}">
+            <label>Дата оплаты</label>
+            <input type="date" name="paid_date" value="{entry.paid_date.isoformat() if entry.paid_date is not None else ''}">
+          </div>
+          <button class="submit-btn" type="submit">Сохранить оплату</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_payable_due_cell(entry) -> str:
+    metrics = payable_metrics(entry)
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    if metrics["outstanding"] <= 0.009:
+        css_class = "contract-table-subtle"
+    elif entry.due_date < today:
+        css_class = "deadline-meta danger"
+    else:
+        css_class = "deadline-meta ok"
+    return f'<span class="{css_class}">{escape(format_date(entry.due_date))}</span>'
+
+
+def render_payables_section(storage: Storage, owner_chat_id: int, current_user: dict | None, flash_message: str = "", success: bool = False) -> str:
+    storage.ensure_payables_seed(owner_chat_id)
+    entries = storage.list_payables(owner_chat_id)
+    total_amount = sum(entry.amount for entry in entries)
+    total_paid = sum(entry.paid_amount for entry in entries)
+    total_outstanding = sum(payable_metrics(entry)["outstanding"] for entry in entries)
+    overdue_count = sum(
+        1 for entry in entries
+        if payable_metrics(entry)["outstanding"] > 0.009 and entry.due_date < datetime.now(VLADIVOSTOK_TZ).date()
+    )
+    counterparties = []
+    grouped_entries: dict[str, list] = {}
+    for entry in entries:
+        if entry.counterparty not in grouped_entries:
+            counterparties.append(entry.counterparty)
+            grouped_entries[entry.counterparty] = []
+        grouped_entries[entry.counterparty].append(entry)
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    add_button = ""
+    if has_permission(current_user, "payables", "edit"):
+        add_button = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Добавить задолженность</span></summary>
+          <div class="status-popover lot-form">
+            <form class="form-grid" method="post" action="/payables/new?owner={owner_chat_id}">
+              <div class="field">
+                <label>Контрагент</label>
+                <input type="text" name="counterparty" placeholder="Например, ВЛ Снаб" required>
+              </div>
+              <div class="field">
+                <label>Счет / документ</label>
+                <input type="text" name="document_ref" placeholder="№ 18" required>
+              </div>
+              <div class="field">
+                <label>Дата документа</label>
+                <input type="date" name="document_date">
+              </div>
+              <div class="field">
+                <label>Объект</label>
+                <input type="text" name="object_name" placeholder="Например, Строитель">
+              </div>
+              <div class="field">
+                <label>Комментарий</label>
+                <textarea name="comment" placeholder="Например, щебень"></textarea>
+              </div>
+              <div class="field">
+                <label>Сумма, ₽</label>
+                <input type="text" name="amount" data-money-input="1" placeholder="114000" required>
+              </div>
+              <div class="field">
+                <label>Срок оплаты</label>
+                <input type="date" name="due_date" required>
+              </div>
+              <button class="submit-btn" type="submit">Добавить в реестр</button>
+            </form>
+          </div>
+        </details>
+        """
+    group_cards = []
+    for counterparty in counterparties:
+        group_items = grouped_entries[counterparty]
+        counterparty_total = sum(payable_metrics(entry)["outstanding"] for entry in group_items)
+        rows_html = "".join(
+            f"""
+            <tr>
+              <td>{render_payable_document_form(owner_chat_id, entry, current_user)}</td>
+              <td>{escape(entry.object_name) if entry.object_name else '—'}</td>
+              <td>{escape(entry.comment) if entry.comment else '—'}</td>
+              <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+              <td>{render_payable_payment_editor(owner_chat_id, entry, current_user)}</td>
+              <td class="nowrap" style="text-align:center;">{format_amount(payable_metrics(entry)["outstanding"]) if payable_metrics(entry)["outstanding"] > 0.009 else '—'}</td>
+              <td class="nowrap" style="text-align:center;">{render_payable_due_cell(entry)}</td>
+            </tr>
+            """
+            for entry in group_items
+        )
+        group_cards.append(
+            f"""
+            <section class="card panel" style="margin-top:18px;">
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">{escape(counterparty)}</h2>
+                  <div class="panel-sub">Открытых позиций: {len(group_items)}</div>
+                </div>
+                <div class="chip">Итого долг: {escape(format_amount(counterparty_total))}</div>
+              </div>
+              <table class="table contract-table">
+                <thead>
+                  <tr>
+                    <th>Документ</th>
+                    <th>Объект</th>
+                    <th>Комментарий</th>
+                    <th class="nowrap">Сумма</th>
+                    <th class="nowrap">Оплата</th>
+                    <th class="nowrap">Остаток</th>
+                    <th class="nowrap">Срок оплаты</th>
+                  </tr>
+                </thead>
+                <tbody>{rows_html}</tbody>
+              </table>
+            </section>
+            """
+        )
+    if not group_cards:
+        group_cards.append(
+            """
+            <section class="card panel" style="margin-top:18px;">
+              <div class="panel-sub">В реестре кредиторки пока нет записей.</div>
+            </section>
+            """
+        )
+    stats = f"""
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Контрагентов</div>
+        <div class="stat-value">{len(counterparties)}</div>
+        <div class="stat-note">В реестре кредиторки</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Позиции</div>
+        <div class="stat-value">{len(entries)}</div>
+        <div class="stat-note">Открытых и закрытых строк</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Общий долг</div>
+        <div class="stat-value">{format_amount(total_outstanding)}</div>
+        <div class="stat-note">Осталось оплатить подрядчикам</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Просрочено</div>
+        <div class="stat-value">{overdue_count}</div>
+        <div class="stat-note">Позиций с просроченным сроком оплаты</div>
+      </article>
+    </section>
+    """
+    return f"""
+    {stats}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Реестр кредиторки</h2>
+          <div class="panel-sub">Кому должны, по какому документу, за какой объект и до какого срока нужно закрыть оплату.</div>
+        </div>
+        {add_button}
+      </div>
+      {flash_html}
+    </section>
+    {''.join(group_cards)}
+    """
+
+
 def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date | None = None, flash_message: str = "", success: bool = False) -> str:
     storage.ensure_payroll_seed(owner_chat_id)
     months = storage.list_payroll_months(owner_chat_id)
@@ -5934,6 +6222,118 @@ def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
+    if path == "/payables/new" and method == "POST":
+        denied = guard("payables", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        try:
+            counterparty = form.get("counterparty", "").strip()
+            document_ref = form.get("document_ref", "").strip()
+            document_date_raw = form.get("document_date", "").strip()
+            document_date = parse_date(document_date_raw) if document_date_raw else None
+            object_name = form.get("object_name", "").strip()
+            comment = form.get("comment", "").strip()
+            amount = parse_amount(form.get("amount", "0"))
+            due_date = parse_date(form.get("due_date", ""))
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not document_ref:
+                raise ValueError("Укажите документ")
+            if amount <= 0:
+                raise ValueError("Сумма должна быть больше 0")
+            storage.add_payable(
+                current_owner,
+                counterparty,
+                document_ref,
+                document_date,
+                object_name,
+                comment,
+                amount,
+                due_date,
+                current_user.get("id") if current_user else None,
+                current_user.get("full_name", "") if current_user else "",
+            )
+            return redirect(start_response, f"/payables?owner={current_owner}")
+        except Exception as exc:
+            body = render_payables_section(storage, current_owner, current_user, f"Не удалось добавить запись: {exc}")
+            html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/payables/") and path.endswith("/update") and method == "POST":
+        denied = guard("payables", "edit")
+        if denied:
+            return denied
+        payable_id = int(path.split("/")[2])
+        form = read_post_data(environ)
+        try:
+            counterparty = form.get("counterparty", "").strip()
+            document_ref = form.get("document_ref", "").strip()
+            document_date_raw = form.get("document_date", "").strip()
+            document_date = parse_date(document_date_raw) if document_date_raw else None
+            object_name = form.get("object_name", "").strip()
+            comment = form.get("comment", "").strip()
+            amount = parse_amount(form.get("amount", "0"))
+            due_date = parse_date(form.get("due_date", ""))
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not document_ref:
+                raise ValueError("Укажите документ")
+            if amount <= 0:
+                raise ValueError("Сумма должна быть больше 0")
+            if not storage.update_payable_details(current_owner, payable_id, counterparty, document_ref, document_date, object_name, comment, amount, due_date):
+                raise ValueError("Запись не найдена")
+            return redirect(start_response, f"/payables?owner={current_owner}")
+        except Exception as exc:
+            body = render_payables_section(storage, current_owner, current_user, f"Не удалось обновить запись: {exc}")
+            html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/payables/") and path.endswith("/payment") and method == "POST":
+        denied = guard("payables", "edit")
+        if denied:
+            return denied
+        payable_id = int(path.split("/")[2])
+        form = read_post_data(environ)
+        try:
+            entry = storage.get_payable(current_owner, payable_id)
+            if entry is None:
+                raise ValueError("Запись не найдена")
+            amount = parse_amount(form.get("amount", "0"))
+            is_paid = form.get("is_paid") == "1"
+            paid_amount = parse_amount(form.get("paid_amount", "0")) if is_paid else 0.0
+            paid_date = parse_date(form["paid_date"]) if is_paid else None
+            if amount <= 0:
+                raise ValueError("Сумма обязательства должна быть больше 0")
+            if paid_amount < 0:
+                raise ValueError("Сумма оплаты не может быть отрицательной")
+            updated = storage.update_payable_details(
+                current_owner,
+                payable_id,
+                entry.counterparty,
+                entry.document_ref,
+                entry.document_date,
+                entry.object_name,
+                entry.comment,
+                amount,
+                entry.due_date,
+            )
+            if not updated:
+                raise ValueError("Запись не найдена")
+            if not storage.update_payable_payment(current_owner, payable_id, paid_amount if is_paid else 0.0, paid_date):
+                raise ValueError("Не удалось обновить оплату")
+            return redirect(start_response, f"/payables?owner={current_owner}")
+        except Exception as exc:
+            body = render_payables_section(storage, current_owner, current_user, f"Не удалось обновить оплату: {exc}")
+            html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if method == "GET" and (path == "/payables/new" or (path.startswith("/payables/") and (path.endswith("/update") or path.endswith("/payment")))):
+        return redirect(start_response, f"/payables?owner={current_owner}")
+
     if path.startswith("/contracts/") and path.endswith("/settings") and method == "POST":
         if not can_edit_contract_stage_controls(current_user):
             body = render_forbidden_body("Контракты")
@@ -6256,6 +6656,15 @@ def app(environ, start_response):
             return denied
         body = render_placeholder_section(title, subtitle, bullets)
         html = layout(title, body, owners, current_owner, section_id, current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/payables":
+        denied = guard("payables", "view")
+        if denied:
+            return denied
+        body = render_payables_section(storage, current_owner, current_user)
+        html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 

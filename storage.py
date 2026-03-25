@@ -9,7 +9,7 @@ from typing import Optional
 
 
 DATE_FMT = "%Y-%m-%d"
-WEB_SECTION_IDS = ("contracts", "auctions", "expenses", "payroll", "finance", "access")
+WEB_SECTION_IDS = ("contracts", "auctions", "payables", "expenses", "payroll", "finance", "access")
 
 
 @dataclass
@@ -126,6 +126,25 @@ class PayrollRow:
     bonus_paid_amount: float
     bonus_paid_date: Optional[date]
     note: str
+
+
+@dataclass
+class PayableEntry:
+    id: int
+    owner_chat_id: int
+    counterparty: str
+    document_ref: str
+    document_date: Optional[date]
+    object_name: str
+    comment: str
+    amount: float
+    paid_amount: float
+    paid_date: Optional[date]
+    due_date: date
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class Storage:
@@ -328,6 +347,24 @@ class Storage:
                     updated_at TEXT NOT NULL,
                     UNIQUE(owner_chat_id, employee_id, payroll_month),
                     FOREIGN KEY(employee_id) REFERENCES payroll_employees(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS payables (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    counterparty TEXT NOT NULL,
+                    document_ref TEXT NOT NULL DEFAULT '',
+                    document_date TEXT,
+                    object_name TEXT NOT NULL DEFAULT '',
+                    comment TEXT NOT NULL DEFAULT '',
+                    amount REAL NOT NULL DEFAULT 0,
+                    paid_amount REAL NOT NULL DEFAULT 0,
+                    paid_date TEXT,
+                    due_date TEXT NOT NULL,
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
                 """
             )
@@ -2357,6 +2394,204 @@ class Storage:
                 0,
                 "",
             )
+
+    def ensure_payables_seed(self, owner_chat_id: int) -> None:
+        with self.connection() as conn:
+            has_rows = conn.execute(
+                "SELECT 1 FROM payables WHERE owner_chat_id = ? LIMIT 1",
+                (owner_chat_id,),
+            ).fetchone()
+            if has_rows is not None:
+                return
+            self._ensure_default_web_admin(conn, owner_chat_id)
+            demo_rows = [
+                ("ВШ-РСС", "№ ЗЯИ-258", date(2026, 3, 13), "Строитель", "Сверка по подрядчику", 34102.09, 0.0, None, date(2026, 4, 13), None, "Система"),
+                ("ВШ-РСС", "№ ЗЯИ-277", date(2026, 3, 18), "Строитель", "Сверка по подрядчику", 15530.00, 0.0, None, date(2026, 4, 18), None, "Система"),
+                ("Распутная Е.В. ИП (Мансард-Мастер)", "№ 131", date(2026, 3, 16), "Строитель", "Работы по объекту", 1800.00, 0.0, None, date(2026, 3, 16), None, "Система"),
+                ("Сырцова Н. П. ИП", "№ 43", date(2026, 3, 12), "Библиотека №13", "Вывоз мусора", 28000.00, 0.0, None, date(2026, 3, 27), None, "Система"),
+                ("Сырцова Н. П. ИП", "№ 44", date(2026, 3, 14), "Библиотека №13", "Вывоз мусора", 14000.00, 0.0, None, date(2026, 3, 29), None, "Система"),
+                ("Сырцова Н. П. ИП", "№ 46", date(2026, 3, 21), "Библиотека №13", "Вывоз мусора", 17000.00, 0.0, None, date(2026, 4, 5), None, "Система"),
+                ("Придворная Р.О. ИП", "№ 19", date(2026, 3, 16), "Строитель", "Аренда гидромолота", 36000.00, 0.0, None, date(2026, 3, 16), None, "Система"),
+                ("ВЛ Снаб", "№ 18", date(2026, 3, 18), "Строитель", "Щебень", 114000.00, 0.0, None, date(2026, 4, 18), None, "Система"),
+                ("Уютстрой ДВ (Инфострой)", "№ ЦБ-428", date(2026, 3, 12), "Строитель", "Поставка по объекту", 9752.00, 0.0, None, date(2026, 3, 19), None, "Система"),
+                ("Металл Хауз", "№ ЦУ-572", date(2026, 3, 23), "Строитель", "Поставка по объекту", 1280.00, 0.0, None, date(2026, 3, 24), None, "Система"),
+            ]
+            now = datetime.utcnow().isoformat()
+            for counterparty, document_ref, document_date, object_name, comment, amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name in demo_rows:
+                conn.execute(
+                    """
+                    INSERT INTO payables (
+                        owner_chat_id, counterparty, document_ref, document_date, object_name, comment,
+                        amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        owner_chat_id,
+                        counterparty,
+                        document_ref,
+                        document_date.strftime(DATE_FMT) if document_date is not None else None,
+                        object_name,
+                        comment,
+                        amount,
+                        paid_amount,
+                        paid_date.strftime(DATE_FMT) if paid_date is not None else None,
+                        due_date.strftime(DATE_FMT),
+                        created_by_user_id,
+                        created_by_name,
+                        now,
+                        now,
+                    ),
+                )
+
+    def list_payables(self, owner_chat_id: int) -> list[PayableEntry]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    id, owner_chat_id, counterparty, document_ref, document_date, object_name, comment,
+                    amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, created_at, updated_at
+                FROM payables
+                WHERE owner_chat_id = ?
+                ORDER BY counterparty COLLATE NOCASE ASC, due_date ASC, COALESCE(document_date, due_date) ASC, id ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [self._payable_from_row(row) for row in rows]
+
+    def get_payable(self, owner_chat_id: int, payable_id: int) -> PayableEntry | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    id, owner_chat_id, counterparty, document_ref, document_date, object_name, comment,
+                    amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, created_at, updated_at
+                FROM payables
+                WHERE owner_chat_id = ? AND id = ?
+                LIMIT 1
+                """,
+                (owner_chat_id, payable_id),
+            ).fetchone()
+        return self._payable_from_row(row) if row is not None else None
+
+    def add_payable(
+        self,
+        owner_chat_id: int,
+        counterparty: str,
+        document_ref: str,
+        document_date: date | None,
+        object_name: str,
+        comment: str,
+        amount: float,
+        due_date: date,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int:
+        with self.connection() as conn:
+            now = datetime.utcnow().isoformat()
+            cursor = conn.execute(
+                """
+                INSERT INTO payables (
+                    owner_chat_id, counterparty, document_ref, document_date, object_name, comment,
+                    amount, paid_amount, paid_date, due_date, created_by_user_id, created_by_name, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_chat_id,
+                    counterparty.strip(),
+                    document_ref.strip(),
+                    document_date.strftime(DATE_FMT) if document_date is not None else None,
+                    object_name.strip(),
+                    comment.strip(),
+                    amount,
+                    due_date.strftime(DATE_FMT),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    now,
+                    now,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def update_payable_details(
+        self,
+        owner_chat_id: int,
+        payable_id: int,
+        counterparty: str,
+        document_ref: str,
+        document_date: date | None,
+        object_name: str,
+        comment: str,
+        amount: float,
+        due_date: date,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE payables
+                SET counterparty = ?, document_ref = ?, document_date = ?, object_name = ?, comment = ?,
+                    amount = ?, due_date = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (
+                    counterparty.strip(),
+                    document_ref.strip(),
+                    document_date.strftime(DATE_FMT) if document_date is not None else None,
+                    object_name.strip(),
+                    comment.strip(),
+                    amount,
+                    due_date.strftime(DATE_FMT),
+                    datetime.utcnow().isoformat(),
+                    payable_id,
+                    owner_chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def update_payable_payment(
+        self,
+        owner_chat_id: int,
+        payable_id: int,
+        paid_amount: float,
+        paid_date: date | None,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE payables
+                SET paid_amount = ?, paid_date = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (
+                    paid_amount,
+                    paid_date.strftime(DATE_FMT) if paid_date is not None else None,
+                    datetime.utcnow().isoformat(),
+                    payable_id,
+                    owner_chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    @staticmethod
+    def _payable_from_row(row: sqlite3.Row) -> PayableEntry:
+        return PayableEntry(
+            id=int(row["id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            counterparty=row["counterparty"],
+            document_ref=row["document_ref"] or "",
+            document_date=date.fromisoformat(row["document_date"]) if row["document_date"] else None,
+            object_name=row["object_name"] or "",
+            comment=row["comment"] or "",
+            amount=float(row["amount"]),
+            paid_amount=float(row["paid_amount"]),
+            paid_date=date.fromisoformat(row["paid_date"]) if row["paid_date"] else None,
+            due_date=date.fromisoformat(row["due_date"]),
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
 
     def _upsert_payroll_entry(
         self,
