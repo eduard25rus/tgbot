@@ -3046,6 +3046,13 @@ def layout(
       stroke-linecap: round;
       stroke-linejoin: round;
     }}
+    .payables-action-col {{
+      width: 1%;
+      white-space: nowrap;
+      text-align: center;
+      padding-left: 8px;
+      padding-right: 8px;
+    }}
     .auction-added-date {{
       font-size: 12px;
       color: var(--muted);
@@ -5013,7 +5020,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
           <td>{render_payable_payment_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td class="nowrap" style="text-align:center;">{format_amount(payable_metrics(entry)["outstanding"]) if payable_metrics(entry)["outstanding"] > 0.009 else '—'}</td>
           <td class="nowrap" style="text-align:center;">{render_payable_due_cell(entry)}</td>
-          <td class="nowrap" style="text-align:center;">{render_payable_delete_actions(owner_chat_id, entry, active_tab, current_user, counterparty_filter, sort_key, sort_order)}</td>
+          <td class="payables-action-col">{render_payable_delete_actions(owner_chat_id, entry, active_tab, current_user, counterparty_filter, sort_key, sort_order)}</td>
         </tr>
         """
         for entry in entries
@@ -5038,7 +5045,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
             <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Оплата", "paid_amount")}</th>
             <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Остаток", "outstanding")}</th>
             <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Срок оплаты", "due_date")}</th>
-            <th class="nowrap" style="text-align:center;">Действие</th>
+            <th class="payables-action-col"></th>
           </tr>
         </thead>
         <tbody>{rows_html}</tbody>
