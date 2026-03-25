@@ -407,6 +407,42 @@ def preview_role_code(label: str) -> str:
     return f"role_{hashlib.sha1(normalized.encode('utf-8')).hexdigest()[:10]}"
 
 
+def preview_fallback_permissions(preview_role: str) -> dict[str, dict[str, bool]]:
+    permissions = {
+        section_id: {"can_view": False, "can_edit": False}
+        for section_id in WEB_SECTION_IDS
+    }
+    if preview_role == "procurement":
+        permissions["auctions"] = {"can_view": True, "can_edit": True}
+        permissions["contracts"] = {"can_view": True, "can_edit": True}
+    elif preview_role == "management":
+        permissions["auctions"] = {"can_view": True, "can_edit": True}
+        permissions["contracts"] = {"can_view": True, "can_edit": True}
+    elif preview_role == "supply":
+        permissions["auctions"] = {"can_view": True, "can_edit": True}
+    return permissions
+
+
+def resolve_preview_permissions(
+    storage: Storage,
+    owner_chat_id: int | None,
+    preview_role: str,
+) -> dict[str, dict[str, bool]]:
+    if owner_chat_id is None or not preview_role:
+        return {}
+    matched_users = [
+        user
+        for user in storage.list_web_users(owner_chat_id)
+        if not user.get("is_super_admin") and preview_role_code(user.get("role_name", "")) == preview_role
+    ]
+    if matched_users:
+        return {
+            section_id: dict(values)
+            for section_id, values in matched_users[0].get("permissions", {}).items()
+        }
+    return preview_fallback_permissions(preview_role)
+
+
 def preview_role_options(storage: Storage, owner_chat_id: int | None, current_user: dict | None) -> list[tuple[str, str]]:
     options: list[tuple[str, str]] = [("", "Админ")]
     if current_user is None or owner_chat_id is None or not current_user.get("is_super_admin"):
@@ -4952,9 +4988,10 @@ def clear_session_cookie(start_response, location: str):
 def has_permission(current_user: dict | None, section_id: str, mode: str = "view") -> bool:
     if current_user is None:
         return False
-    if current_user.get("is_super_admin"):
+    if current_user.get("is_super_admin") and not current_user.get("preview_role_name"):
         return True
-    permissions = current_user.get("permissions", {}).get(section_id, {})
+    permissions_source = current_user.get("preview_permissions") if current_user.get("preview_role_name") else current_user.get("permissions", {})
+    permissions = permissions_source.get(section_id, {}) if permissions_source else {}
     return bool(permissions.get("can_edit" if mode == "edit" else "can_view"))
 
 
@@ -5066,6 +5103,8 @@ def app(environ, start_response):
     if current_user is not None:
         current_user["preview_role_options"] = current_preview_options
     current_user = with_preview_role(current_user, preview_role)
+    if current_user is not None:
+        current_user["preview_permissions"] = resolve_preview_permissions(storage, current_owner, preview_role)
     current_owner = current_user["owner_chat_id"] if current_user else None
     if current_user is not None:
         current_user["role_notifications"] = compute_role_notifications(storage, current_owner, current_user)
