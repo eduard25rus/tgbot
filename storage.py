@@ -73,6 +73,8 @@ class Auction:
     max_discount_percent: Optional[float]
     min_bid_amount: Optional[float]
     material_cost: Optional[float]
+    work_cost: Optional[float]
+    other_cost: Optional[float]
     estimate_status: str
     estimate_status_updated_at: Optional[datetime]
     estimate_status_updated_by_name: str
@@ -268,6 +270,8 @@ class Storage:
                     max_discount_percent REAL,
                     min_bid_amount REAL,
                     material_cost REAL,
+                    work_cost REAL,
+                    other_cost REAL,
                     estimate_status TEXT NOT NULL DEFAULT 'pending',
                     estimate_status_updated_at TEXT,
                     estimate_status_updated_by_name TEXT NOT NULL DEFAULT '',
@@ -453,6 +457,10 @@ class Storage:
                 conn.execute("ALTER TABLE auctions ADD COLUMN min_bid_amount REAL")
             if "material_cost" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN material_cost REAL")
+            if "work_cost" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN work_cost REAL")
+            if "other_cost" not in auction_columns:
+                conn.execute("ALTER TABLE auctions ADD COLUMN other_cost REAL")
             if "final_bid_amount" not in auction_columns:
                 conn.execute("ALTER TABLE auctions ADD COLUMN final_bid_amount REAL")
             if "result_status_updated_at" not in auction_columns:
@@ -934,7 +942,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost,
+                SELECT id, owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url, max_discount_percent, min_bid_amount, material_cost, work_cost, other_cost,
                        estimate_status, estimate_status_updated_at, estimate_status_updated_by_name, submit_decision_status, submit_status_updated_at, submit_status_updated_by_name,
                        application_status, result_status, result_status_updated_at, result_status_updated_by_name, final_bid_amount, archived_at, deleted_at, created_at
                 FROM auctions
@@ -972,10 +980,10 @@ class Storage:
                 """
                 INSERT INTO auctions (
                     owner_chat_id, registry_position, created_by_user_id, created_by_name, auction_number, bid_deadline, amount, advance_percent, title, city, source_url,
-                    max_discount_percent, min_bid_amount, material_cost, estimate_status, submit_decision_status,
+                    max_discount_percent, min_bid_amount, material_cost, work_cost, other_cost, estimate_status, submit_decision_status,
                     approval_status, application_status, result_status, final_bid_amount, created_at, archived_at, deleted_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 'pending', 'pending', 'new', 'not_submitted', 'pending', NULL, ?, NULL, NULL)
                 """,
                 (
                     owner_chat_id,
@@ -1000,6 +1008,8 @@ class Storage:
         auction_id: int,
         estimate_status: str,
         material_cost: float | None,
+        work_cost: float | None,
+        other_cost: float | None,
         estimate_status_updated_at: datetime | None,
         estimate_status_updated_by_name: str,
         submit_decision_status: str,
@@ -1016,7 +1026,7 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE auctions
-                SET estimate_status = ?, material_cost = ?, estimate_status_updated_at = ?, estimate_status_updated_by_name = ?,
+                SET estimate_status = ?, material_cost = ?, work_cost = ?, other_cost = ?, estimate_status_updated_at = ?, estimate_status_updated_by_name = ?,
                     submit_decision_status = ?, submit_status_updated_at = ?, submit_status_updated_by_name = ?,
                     application_status = ?, result_status = ?, result_status_updated_at = ?, result_status_updated_by_name = ?,
                     final_bid_amount = ?, archived_at = ?
@@ -1025,6 +1035,8 @@ class Storage:
                 (
                     estimate_status,
                     material_cost,
+                    work_cost,
+                    other_cost,
                     estimate_status_updated_at.isoformat() if estimate_status_updated_at is not None else None,
                     estimate_status_updated_by_name,
                     submit_decision_status,
@@ -1972,6 +1984,8 @@ class Storage:
             max_discount_percent=float(row["max_discount_percent"]) if row["max_discount_percent"] is not None else None,
             min_bid_amount=float(row["min_bid_amount"]) if row["min_bid_amount"] is not None else None,
             material_cost=float(row["material_cost"]) if row["material_cost"] is not None else None,
+            work_cost=float(row["work_cost"]) if row["work_cost"] is not None else None,
+            other_cost=float(row["other_cost"]) if row["other_cost"] is not None else None,
             estimate_status=row["estimate_status"],
             estimate_status_updated_at=datetime.fromisoformat(row["estimate_status_updated_at"]) if row["estimate_status_updated_at"] is not None else None,
             estimate_status_updated_by_name=row["estimate_status_updated_by_name"] or "",
