@@ -102,6 +102,7 @@ LEGAL_UPLOAD_MIME = {
     ".pdf": "application/pdf",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
+    ".png": "image/png",
 }
 
 
@@ -4608,7 +4609,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
               </div>
               <div class="field" style="grid-column: 1 / -1;">
                 <label>Файл письма</label>
-                <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg" required>
+                <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png" required>
               </div>
               <button class="submit-btn" type="submit">Добавить письмо</button>
             </form>
@@ -7608,7 +7609,7 @@ def app(environ, start_response):
             original_name = upload.filename.strip()
             lower_name = original_name.lower()
             if not any(lower_name.endswith(ext) for ext in LEGAL_UPLOAD_MIME):
-                raise ValueError("Можно прикреплять только PDF, JPG или JPEG")
+                raise ValueError("Можно прикреплять только PDF, JPG, JPEG или PNG")
             file_bytes = upload.data
             if not file_bytes:
                 raise ValueError("Файл пустой")
