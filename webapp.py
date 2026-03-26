@@ -820,15 +820,17 @@ def render_stage_invoice_form(owner_chat_id: int, contract_id: int, stage, curre
     <details class="status-menu">
       <summary>{display}</summary>
       <div class="status-popover compact">
-        <form class="status-option-list" method="post" action="{action}">
+        <form class="status-option-list stage-invoice-form" method="post" action="{action}">
           <input type="hidden" name="tab" value="{escape(active_tab)}">
           <input type="hidden" name="invoice_kind" value="{invoice_kind}">
-          <div class="field">
+          <input type="hidden" name="issued" value="{("1" if is_issued else "0")}">
+          <div class="field stage-date-field is-hidden">
             <label>Дата выставления</label>
             <input type="date" name="issued_date" value="{issued_date_value or datetime.now(VLADIVOSTOK_TZ).date().isoformat()}">
           </div>
-          <button class="chip ok status-option" type="submit" name="issued" value="1">Счет выставлен</button>
+          <button class="chip ok status-option stage-invoice-picker" type="button" data-stage-invoice-value="1">Счет выставлен</button>
           <button class="chip status-option" type="submit" name="issued" value="0">Счет не выставлен</button>
+          <button class="submit-btn stage-save-btn is-hidden" type="submit">Сохранить</button>
         </form>
       </div>
     </details>
@@ -846,17 +848,19 @@ def render_stage_status_form(owner_chat_id: int, contract_id: int, stage, curren
     <details class="status-menu">
       <summary>{stage_status_chip(stage)}</summary>
       <div class="status-popover">
-        <form class="status-option-list" method="post" action="/contracts/stages/{stage.id}/status?owner={owner_chat_id}&contract_id={contract_id}">
+        <form class="status-option-list stage-status-form" method="post" action="/contracts/stages/{stage.id}/status?owner={owner_chat_id}&contract_id={contract_id}">
           <input type="hidden" name="tab" value="{escape(active_tab)}">
+          <input type="hidden" name="status" value="{escape(stage.status)}">
           <button class="{STATUS_META['not_started'][1]} status-option" type="submit" name="status" value="not_started">Не приступили</button>
           <button class="{STATUS_META['in_progress'][1]} status-option" type="submit" name="status" value="in_progress">В работе</button>
           <button class="{STATUS_META['completed'][1]} status-option" type="submit" name="status" value="completed">Выполнен</button>
-          <div class="field">
+          <div class="field stage-date-field is-hidden">
             <label>Дата для статуса ЕИС</label>
             <input type="date" name="status_date" value="{current_status_date or datetime.now(VLADIVOSTOK_TZ).date().isoformat()}">
           </div>
-          <button class="{STATUS_META['uploaded_eis'][1]} status-option" type="submit" name="status" value="uploaded_eis">Загружен на ЕИС</button>
-          <button class="{STATUS_META['accepted_eis'][1]} status-option" type="submit" name="status" value="accepted_eis">Принят на ЕИС</button>
+          <button class="{STATUS_META['uploaded_eis'][1]} status-option stage-status-picker" type="button" data-stage-status-value="uploaded_eis">Загружен на ЕИС</button>
+          <button class="{STATUS_META['accepted_eis'][1]} status-option stage-status-picker" type="button" data-stage-status-value="accepted_eis">Принят на ЕИС</button>
+          <button class="submit-btn stage-save-btn is-hidden" type="submit">Сохранить</button>
         </form>
       </div>
     </details>
@@ -3228,6 +3232,10 @@ def layout(
     .result-price-field.is-hidden {{
       display: none;
     }}
+    .stage-date-field.is-hidden,
+    .stage-save-btn.is-hidden {{
+      display: none;
+    }}
     .estimate-cost-field.is-hidden {{
       display: none;
     }}
@@ -3582,6 +3590,50 @@ function buildContractStageFields(form, count) {{
 }}
 
 document.addEventListener("click", (event) => {{
+  const stageStatusButton = event.target.closest('.stage-status-form .stage-status-picker');
+  if (stageStatusButton) {{
+    const form = stageStatusButton.closest('.stage-status-form');
+    const hiddenStatus = form ? form.querySelector('input[name="status"]') : null;
+    const dateField = form ? form.querySelector('.stage-date-field') : null;
+    const dateInput = form ? form.querySelector('input[name="status_date"]') : null;
+    const saveButton = form ? form.querySelector('.stage-save-btn') : null;
+    if (hiddenStatus) {{
+      hiddenStatus.value = stageStatusButton.dataset.stageStatusValue || "";
+    }}
+    if (dateField) {{
+      dateField.classList.remove('is-hidden');
+    }}
+    if (saveButton) {{
+      saveButton.classList.remove('is-hidden');
+    }}
+    if (dateInput) {{
+      dateInput.required = true;
+      window.setTimeout(() => dateInput.focus(), 0);
+    }}
+    return;
+  }}
+  const stageInvoiceButton = event.target.closest('.stage-invoice-form .stage-invoice-picker');
+  if (stageInvoiceButton) {{
+    const form = stageInvoiceButton.closest('.stage-invoice-form');
+    const hiddenIssued = form ? form.querySelector('input[name="issued"]') : null;
+    const dateField = form ? form.querySelector('.stage-date-field') : null;
+    const dateInput = form ? form.querySelector('input[name="issued_date"]') : null;
+    const saveButton = form ? form.querySelector('.stage-save-btn') : null;
+    if (hiddenIssued) {{
+      hiddenIssued.value = stageInvoiceButton.dataset.stageInvoiceValue || "1";
+    }}
+    if (dateField) {{
+      dateField.classList.remove('is-hidden');
+    }}
+    if (saveButton) {{
+      saveButton.classList.remove('is-hidden');
+    }}
+    if (dateInput) {{
+      dateInput.required = true;
+      window.setTimeout(() => dateInput.focus(), 0);
+    }}
+    return;
+  }}
   const estimateQuick = event.target.closest('.estimate-form .estimate-quick');
   if (estimateQuick) {{
     const form = estimateQuick.closest('.estimate-form');
