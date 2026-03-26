@@ -21,8 +21,9 @@ from storage import Storage, WEB_SECTION_IDS
 STATUS_META = {
     "not_started": ("Не приступили", "chip"),
     "in_progress": ("В работе", "chip warn"),
-    "completed": ("Выполнен", "chip ok"),
-    "closed_iis": ("Закрыт на ИИС", "chip"),
+    "completed": ("Выполнен", "chip accent"),
+    "uploaded_eis": ("Загружен на ЕИС", "chip accent"),
+    "accepted_eis": ("Принят на ЕИС", "chip ok"),
 }
 
 STAGE_PAYMENT_META = {
@@ -828,7 +829,8 @@ def render_stage_status_form(owner_chat_id: int, contract_id: int, stage, curren
         ("not_started", "Не приступили"),
         ("in_progress", "В работе"),
         ("completed", "Выполнен"),
-        ("closed_iis", "Закрыт на ИИС"),
+        ("uploaded_eis", "Загружен на ЕИС"),
+        ("accepted_eis", "Принят на ЕИС"),
     ]
     buttons = "".join(
         f'<button class="{STATUS_META[value][1]} status-option" type="submit" name="status" value="{value}">{escape(label)}</button>'

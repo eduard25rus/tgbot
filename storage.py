@@ -444,6 +444,13 @@ class Storage:
                 WHERE status IN ('waiting_payment', 'paid')
                 """
             )
+            conn.execute(
+                """
+                UPDATE stages
+                SET status = 'accepted_eis'
+                WHERE status = 'closed_iis'
+                """
+            )
             if "advance_percent" not in contract_columns:
                 conn.execute("ALTER TABLE contracts ADD COLUMN advance_percent REAL")
             if "signed_date" not in contract_columns:
