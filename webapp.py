@@ -86,6 +86,7 @@ AUCTION_RESULT_OPTIONS = [
 MAX_DISCOUNT_OPTIONS = [0.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 22.5, 25.0]
 SESSION_COOKIE = "felis_session"
 PREVIEW_ROLE_COOKIE = "felis_preview_role"
+PREVIEW_THEME_COOKIE = "felis_preview_theme"
 VLADIVOSTOK_TZ = timezone(timedelta(hours=10))
 ROLE_PREVIEW_OPTIONS = [
     ("", "Админ"),
@@ -93,6 +94,100 @@ ROLE_PREVIEW_OPTIONS = [
     ("supply", "Отдел снабжения"),
     ("management", "Руководство компании"),
 ]
+THEME_PREVIEW_OPTIONS = [
+    ("", "Текущая"),
+    ("cool_gray", "Холодный серый"),
+    ("graphite", "Графит"),
+]
+THEME_PREVIEW_LABELS = dict(THEME_PREVIEW_OPTIONS)
+THEME_PREVIEW_CSS = {
+    "cool_gray": """
+    :root {
+      --bg: #e9edf1;
+      --paper: #fbfcfd;
+      --ink: #17212b;
+      --muted: #697480;
+      --line: #d7dde5;
+      --brand: #34414f;
+      --brand-2: #5d6977;
+      --ok: #2d8f5d;
+      --warn: #b97a1f;
+      --danger: #b33c3c;
+      --card-shadow: 0 22px 48px rgba(17, 25, 38, 0.08);
+    }
+    body {
+      background:
+        radial-gradient(circle at top left, rgba(92, 107, 122, 0.10), transparent 24%),
+        radial-gradient(circle at top right, rgba(38, 45, 56, 0.11), transparent 30%),
+        linear-gradient(180deg, #eef2f5 0%, #e4e9ee 100%);
+    }
+    .sidebar {
+      background: linear-gradient(180deg, rgba(27,33,41,0.98), rgba(49,58,69,0.97));
+    }
+    .hero {
+      background: linear-gradient(135deg, rgba(42, 50, 62, 0.98), rgba(24, 30, 39, 0.98));
+    }
+    .stat-card::after {
+      background: linear-gradient(135deg, rgba(46, 59, 71, 0.10), rgba(113, 126, 139, 0.08));
+    }
+    .detail-box {
+      background: linear-gradient(135deg, rgba(49,58,69,0.97), rgba(27,33,41,0.95));
+    }
+    .progress-track {
+      background: #dde5ec;
+    }
+    .progress-bar, .notification-link, .submit-btn {
+      background: linear-gradient(135deg, var(--brand), #202a35);
+    }
+    """,
+    "graphite": """
+    :root {
+      --bg: #dde2e7;
+      --paper: #fcfcfd;
+      --ink: #111821;
+      --muted: #606b77;
+      --line: #cfd5dc;
+      --brand: #222a34;
+      --brand-2: #4a5563;
+      --ok: #2a8c59;
+      --warn: #af761d;
+      --danger: #b23939;
+      --card-shadow: 0 24px 52px rgba(15, 20, 28, 0.10);
+    }
+    body {
+      background:
+        radial-gradient(circle at top left, rgba(93, 101, 115, 0.08), transparent 22%),
+        radial-gradient(circle at top right, rgba(27, 33, 41, 0.10), transparent 28%),
+        linear-gradient(180deg, #e6eaee 0%, #d8dde3 100%);
+    }
+    .sidebar {
+      background: linear-gradient(180deg, rgba(19,24,31,0.99), rgba(40,47,57,0.98));
+    }
+    .hero {
+      background: linear-gradient(135deg, rgba(27, 33, 41, 0.99), rgba(41, 48, 57, 0.97));
+    }
+    .card,
+    .mini-card,
+    .auth-card,
+    .settings-popover,
+    .name-popover,
+    .notification-popover {
+      background: rgba(252,252,253,0.98);
+    }
+    .stat-card::after {
+      background: linear-gradient(135deg, rgba(32, 40, 50, 0.09), rgba(115, 124, 136, 0.07));
+    }
+    .detail-box {
+      background: linear-gradient(135deg, rgba(30, 36, 44, 0.98), rgba(18, 23, 30, 0.96));
+    }
+    .progress-track {
+      background: #d6dde3;
+    }
+    .progress-bar, .notification-link, .submit-btn {
+      background: linear-gradient(135deg, var(--brand), #161c24);
+    }
+    """,
+}
 
 LEGAL_LETTER_META = {
     "incoming": ("← Входящее", "chip danger"),
@@ -2081,6 +2176,10 @@ def layout(
     current_user: dict | None = None,
 ) -> str:
     current_preview_options = current_user.get("preview_role_options", ROLE_PREVIEW_OPTIONS) if current_user else ROLE_PREVIEW_OPTIONS
+    current_theme_options = THEME_PREVIEW_OPTIONS
+    current_theme = current_user.get("preview_theme", "") if current_user else ""
+    current_theme_label = THEME_PREVIEW_LABELS.get(current_theme, THEME_PREVIEW_LABELS[""])
+    theme_css = THEME_PREVIEW_CSS.get(current_theme, "")
     sidebar_notes = ""
     if has_active_admin_mode(current_user):
         sidebar_notes = """
@@ -2169,6 +2268,13 @@ def layout(
           }
           {
             f'''
+          <div class="preview-note">Предпросмотр темы: {escape(current_theme_label)}</div>
+          '''
+            if current_theme
+            else ""
+          }
+          {
+            f'''
           <form class="preview-form" method="post" action="/role-preview">
             <input type="hidden" name="next_path" value="">
             <label class="current-user-email">Режим просмотра роли</label>
@@ -2181,6 +2287,25 @@ def layout(
               }
             </select>
             <button class="preview-btn" type="submit">Применить режим</button>
+          </form>
+          '''
+            if current_user.get("is_super_admin")
+            else ""
+          }
+          {
+            f'''
+          <form class="preview-form" method="post" action="/theme-preview">
+            <input type="hidden" name="next_path" value="">
+            <label class="current-user-email">Предпросмотр темы</label>
+            <select name="preview_theme">
+              {
+                ''.join(
+                    f'<option value="{escape(value)}" {"selected" if current_theme == value else ""}>{escape(label)}</option>'
+                    for value, label in current_theme_options
+                )
+              }
+            </select>
+            <button class="preview-btn" type="submit">Применить тему</button>
           </form>
           '''
             if current_user.get("is_super_admin")
@@ -2217,6 +2342,7 @@ def layout(
       --danger: #b83232;
       --card-shadow: 0 20px 45px rgba(22, 35, 47, 0.08);
     }}
+    {theme_css}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
@@ -6469,6 +6595,7 @@ def app(environ, start_response):
     cookies = parse_cookies(environ)
     current_user = storage.get_web_user_by_session(cookies.get(SESSION_COOKIE, ""))
     preview_role = cookies.get(PREVIEW_ROLE_COOKIE, "") if current_user and current_user.get("is_super_admin") else ""
+    preview_theme = cookies.get(PREVIEW_THEME_COOKIE, "") if current_user and current_user.get("is_super_admin") else ""
     current_owner = current_user["owner_chat_id"] if current_user else None
     current_preview_options = preview_role_options(storage, current_owner, current_user)
     valid_preview_roles = {item[0] for item in current_preview_options}
@@ -6480,11 +6607,14 @@ def app(environ, start_response):
         preview_role = "management"
     if preview_role not in valid_preview_roles:
         preview_role = ""
+    if preview_theme not in {item[0] for item in THEME_PREVIEW_OPTIONS}:
+        preview_theme = ""
     if current_user is not None:
         current_user["preview_role_options"] = current_preview_options
     current_user = with_preview_role(current_user, preview_role)
     if current_user is not None:
         current_user["preview_permissions"] = resolve_preview_permissions(storage, current_owner, preview_role)
+        current_user["preview_theme"] = preview_theme
     current_owner = current_user["owner_chat_id"] if current_user else None
     if current_user is not None:
         current_user["role_notifications"] = compute_role_notifications(storage, current_owner, current_user)
@@ -6555,6 +6685,7 @@ def app(environ, start_response):
             [
                 f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
                 f"{PREVIEW_ROLE_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax",
+                f"{PREVIEW_THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax",
             ],
         )
 
@@ -6569,6 +6700,19 @@ def app(environ, start_response):
         cookie = f"{PREVIEW_ROLE_COOKIE}={preview_role}; Path=/; SameSite=Lax"
         if not preview_role:
             cookie = f"{PREVIEW_ROLE_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax"
+        return redirect_with_cookies(start_response, next_path, [cookie])
+
+    if path == "/theme-preview" and method == "POST":
+        if current_user is None or not current_user.get("is_super_admin"):
+            return redirect(start_response, "/contracts")
+        form = read_post_data(environ)
+        next_path = form.get("next_path", "").strip() or environ.get("HTTP_REFERER", "") or "/contracts"
+        selected_theme = form.get("preview_theme", "")
+        if selected_theme not in {item[0] for item in THEME_PREVIEW_OPTIONS}:
+            selected_theme = ""
+        cookie = f"{PREVIEW_THEME_COOKIE}={selected_theme}; Path=/; SameSite=Lax"
+        if not selected_theme:
+            cookie = f"{PREVIEW_THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax"
         return redirect_with_cookies(start_response, next_path, [cookie])
 
     if current_user is None:
