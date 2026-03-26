@@ -4560,7 +4560,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             <div class="legal-letter-topic">{escape(letter.subject or 'Без темы')}</div>
             {f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''}
           </td>
-          <td><a class="legal-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'Файл')}</a></td>
+          <td><a class="legal-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}">{escape(letter.file_name or 'Файл')}</a></td>
           <td>
             <div class="contract-table-subtle">{escape(letter.created_by_name.strip() or 'Автор неизвестен')}</div>
             <div class="contract-table-subtle">{format_date(letter.created_at.astimezone(VLADIVOSTOK_TZ).date() if letter.created_at.tzinfo else letter.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
@@ -7733,20 +7733,27 @@ def app(environ, start_response):
             file_url = f"/contracts/letters/{letter.id}/file?owner={current_owner}"
             download_url = f"/contracts/letters/{letter.id}/download?owner={current_owner}"
             if content_type == "application/pdf":
-                preview_html = f'<iframe src="{file_url}" style="width:100%; min-height:72vh; border:none; border-radius:22px; background:#fff;"></iframe>'
+                preview_html = f'''
+                <object data="{file_url}" type="application/pdf" style="width:100%; min-height:72vh; border:none; border-radius:22px; background:#fff;">
+                  <div class="contract-table-subtle" style="padding:18px;">
+                    Предпросмотр PDF не загрузился в браузере.
+                    <a class="legal-letter-file" href="{file_url}" target="_blank" rel="noopener">Открыть файл отдельно</a>
+                  </div>
+                </object>
+                '''
             else:
                 preview_html = f'<div style="display:flex; justify-content:center; padding:8px 0 0;"><img src="{file_url}" alt="{escape(safe_filename)}" style="max-width:100%; max-height:72vh; border-radius:22px; object-fit:contain;"></div>'
             body = f"""
             <section class="card panel" style="margin-top:22px;">
               <div class="panel-head">
+                <a class="chip" href="/contracts/{letter.contract_id}?owner={current_owner}">← К контракту</a>
                 <div>
                   <h2 class="panel-title">Предпросмотр вложения</h2>
                   <div class="panel-sub">{escape(letter.subject or safe_filename)}</div>
                 </div>
-                <a class="chip" href="/contracts/{letter.contract_id}?owner={current_owner}">← К контракту</a>
               </div>
               <div class="info-row">
-                <span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META['outgoing'])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META['outgoing'])[0])}</span>
+                <span class="chip">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META['outgoing'])[0])}</span>
                 <span class="chip">{format_date(letter.letter_date)}</span>
               </div>
               <div style="margin-top:18px;">{preview_html}</div>
