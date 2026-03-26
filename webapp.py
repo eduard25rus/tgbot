@@ -180,10 +180,10 @@ THEME_PREVIEW_CSS = {
       background: linear-gradient(135deg, var(--brand), #202a35);
     }
     .hero-watermark {
-      opacity: 0.10;
-      right: 28px;
-      bottom: 18px;
-      width: 220px;
+      opacity: 0.16;
+      right: 22px;
+      bottom: 16px;
+      width: 360px;
     }
     """,
     "graphite": """
@@ -272,7 +272,7 @@ THEME_PREVIEW_CSS = {
       background: linear-gradient(135deg, var(--brand), #161c24);
     }
     .brand-logo-badge {
-      background: rgba(255,255,255,0.96);
+      background: rgba(255,255,255,0.98);
       border-color: rgba(255,255,255,0.10);
       box-shadow: 0 18px 36px rgba(8, 12, 18, 0.22);
     }
@@ -372,10 +372,10 @@ THEME_PREVIEW_CSS = {
       box-shadow: 0 18px 36px rgba(15, 20, 28, 0.16);
     }
     .hero-watermark {
-      opacity: 0.14;
-      right: 24px;
-      bottom: 18px;
-      width: 210px;
+      opacity: 0.18;
+      right: 18px;
+      bottom: 14px;
+      width: 340px;
     }
     """,
 }
@@ -2375,12 +2375,12 @@ def layout(
     show_sidebar_logo = current_theme in {"graphite", "steel_orange"}
     show_hero_logo = current_theme in {"cool_gray", "steel_orange"}
     brand_logo_html = (
-        '<div class="brand-logo-badge"><img class="brand-logo-image" src="/brand/felis-logo.png" alt="Фелис Групп"></div>'
+        '<div class="brand-logo-badge"><img class="brand-logo-image" src="/brand/felis-logo-banner.jpg" alt="Фелис Групп"></div>'
         if show_sidebar_logo
         else ""
     )
     hero_logo_html = (
-        '<img class="hero-watermark" src="/brand/felis-logo.png" alt="" aria-hidden="true">'
+        '<img class="hero-watermark" src="/brand/felis-logo-banner.jpg" alt="" aria-hidden="true">'
         if show_hero_logo
         else ""
     )
@@ -2587,9 +2587,9 @@ def layout(
       opacity: 0.7;
     }}
     .brand-logo-badge {{
-      width: 122px;
-      height: 86px;
-      border-radius: 22px;
+      width: 100%;
+      max-width: 238px;
+      border-radius: 20px;
       border: 1px solid rgba(255,255,255,0.10);
       background: rgba(255,255,255,0.08);
       display: flex;
@@ -2599,7 +2599,7 @@ def layout(
       overflow: hidden;
     }}
     .brand-logo-image {{
-      width: 86px;
+      width: 100%;
       height: auto;
       display: block;
     }}
@@ -2660,7 +2660,7 @@ def layout(
       position: absolute;
       right: 22px;
       bottom: 14px;
-      width: 190px;
+      width: 260px;
       height: auto;
       opacity: 0.08;
       pointer-events: none;
@@ -6857,12 +6857,12 @@ def app(environ, start_response):
     path = environ.get("PATH_INFO", "/")
     method = environ.get("REQUEST_METHOD", "GET").upper()
 
-    if path == "/brand/felis-logo.png" and method == "GET":
-        logo_path = Path(__file__).resolve().with_name("felis-logo.png")
+    if path == "/brand/felis-logo-banner.jpg" and method == "GET":
+        logo_path = Path(__file__).resolve().with_name("felis-logo-banner.jpg")
         if not logo_path.exists():
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Logo not found"]
-        start_response("200 OK", [("Content-Type", "image/png")])
+        start_response("200 OK", [("Content-Type", "image/jpeg")])
         return [logo_path.read_bytes()]
 
     if path == "/login" and method == "POST":
