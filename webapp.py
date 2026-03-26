@@ -549,6 +549,20 @@ def can_edit_contract_stage_controls(current_user: dict | None) -> bool:
     )
 
 
+def can_view_legal_correspondence(current_user: dict | None) -> bool:
+    return bool(
+        current_user
+        and (
+            has_active_admin_mode(current_user)
+            or is_procurement_user(current_user)
+        )
+    )
+
+
+def can_edit_legal_correspondence(current_user: dict | None) -> bool:
+    return has_active_admin_mode(current_user)
+
+
 def guard_contract_stage_controls(current_user: dict | None):
     return can_edit_contract_stage_controls(current_user)
 
@@ -1117,7 +1131,7 @@ def render_stage_amount_form(owner_chat_id: int, contract_id: int, stage, curren
 def render_legal_letter_editor(owner_chat_id: int, contract_id: int, letter, attachments: list, current_user: dict | None) -> str:
     subject_html = f'<div class="legal-letter-topic">{escape(letter.subject or "Без темы")}</div>'
     comment_html = f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''
-    if not has_active_admin_mode(current_user):
+    if not can_edit_legal_correspondence(current_user):
         return f"{subject_html}{comment_html}"
     attachment_html = "".join(
         f"""
@@ -4742,8 +4756,8 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         """
         for payment in payload["payments"]
     ) or '<tr><td colspan="2">Оплат пока нет.</td></tr>'
-    legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract.id) if has_active_admin_mode(current_user) else []
-    legal_attachments = storage.list_legal_letter_attachments_for_contract(owner_chat_id, contract.id) if has_active_admin_mode(current_user) else []
+    legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract.id) if can_view_legal_correspondence(current_user) else []
+    legal_attachments = storage.list_legal_letter_attachments_for_contract(owner_chat_id, contract.id) if can_view_legal_correspondence(current_user) else []
     attachment_map: dict[int, list] = {}
     for attachment in legal_attachments:
         attachment_map.setdefault(attachment.letter_id, []).append(attachment)
@@ -4778,7 +4792,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         for letter in legal_letters
     ) or '<tr><td colspan="5">Юридических писем пока нет.</td></tr>'
     legal_section_html = ""
-    if has_active_admin_mode(current_user):
+    if can_view_legal_correspondence(current_user):
         legal_section_html = f"""
         <section class="card panel" style="margin-top:22px;">
           <div class="panel-head">
@@ -4799,6 +4813,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             </thead>
             <tbody>{legal_letters_html}</tbody>
           </table>
+          {f'''
           <section class="card panel" style="margin-top:18px; background:rgba(255,255,255,0.28);">
             <div class="panel-head">
               <div>
@@ -4833,6 +4848,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
               <button class="submit-btn" type="submit">Добавить письмо</button>
             </form>
           </section>
+          ''' if can_edit_legal_correspondence(current_user) else ''}
         </section>
         """
 
@@ -7801,7 +7817,7 @@ def app(environ, start_response):
         denied = guard("contracts", "edit")
         if denied:
             return denied
-        if not has_active_admin_mode(current_user):
+        if not can_edit_legal_correspondence(current_user):
             body = render_forbidden_body("Контракты")
             html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -7865,7 +7881,7 @@ def app(environ, start_response):
         denied = guard("contracts", "edit")
         if denied:
             return denied
-        if not has_active_admin_mode(current_user):
+        if not can_edit_legal_correspondence(current_user):
             body = render_forbidden_body("Контракты")
             html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -7903,7 +7919,7 @@ def app(environ, start_response):
         denied = guard("contracts", "edit")
         if denied:
             return denied
-        if not has_active_admin_mode(current_user):
+        if not can_edit_legal_correspondence(current_user):
             body = render_forbidden_body("Контракты")
             html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -7949,7 +7965,7 @@ def app(environ, start_response):
         denied = guard("contracts", "view")
         if denied:
             return denied
-        if not has_active_admin_mode(current_user):
+        if not can_view_legal_correspondence(current_user):
             body = render_forbidden_body("Контракты")
             html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -7977,7 +7993,7 @@ def app(environ, start_response):
         denied = guard("contracts", "view")
         if denied:
             return denied
-        if not has_active_admin_mode(current_user):
+        if not can_view_legal_correspondence(current_user):
             body = render_forbidden_body("Контракты")
             html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -8002,7 +8018,7 @@ def app(environ, start_response):
         denied = guard("contracts", "view")
         if denied:
             return denied
-        if not has_active_admin_mode(current_user):
+        if not can_view_legal_correspondence(current_user):
             body = render_forbidden_body("Контракты")
             html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -8031,7 +8047,7 @@ def app(environ, start_response):
         denied = guard("contracts", "view")
         if denied:
             return denied
-        if not has_active_admin_mode(current_user):
+        if not can_view_legal_correspondence(current_user):
             body = render_forbidden_body("Контракты")
             html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -8059,7 +8075,7 @@ def app(environ, start_response):
         denied = guard("contracts", "view")
         if denied:
             return denied
-        if not has_active_admin_mode(current_user):
+        if not can_view_legal_correspondence(current_user):
             body = render_forbidden_body("Контракты")
             html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -8088,7 +8104,7 @@ def app(environ, start_response):
         denied = guard("contracts", "view")
         if denied:
             return denied
-        if not has_active_admin_mode(current_user):
+        if not can_view_legal_correspondence(current_user):
             body = render_forbidden_body("Контракты")
             html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
