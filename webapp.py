@@ -227,6 +227,17 @@ def secure_upload_name(filename: str) -> str:
     return cleaned.strip("._") or "file.pdf"
 
 
+def resolve_legal_letter_file(storage: Storage, letter) -> tuple[Path, str, str]:
+    upload_root = contract_upload_root(storage).resolve()
+    absolute_path = (upload_root / letter.file_path).resolve()
+    if upload_root not in absolute_path.parents and absolute_path != upload_root:
+        raise ValueError("Forbidden")
+    safe_filename = secure_upload_name(letter.file_name or "letter.pdf")
+    suffix = Path(safe_filename).suffix.lower()
+    content_type = LEGAL_UPLOAD_MIME.get(suffix, "application/octet-stream")
+    return absolute_path, safe_filename, content_type
+
+
 def parse_amount(raw: str) -> float:
     amount = float(raw.strip().replace(" ", "").replace(",", "."))
     if amount < 0:
@@ -4549,7 +4560,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             <div class="legal-letter-topic">{escape(letter.subject or 'Без темы')}</div>
             {f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''}
           </td>
-          <td><a class="legal-letter-file" href="/contracts/letters/{letter.id}/file?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'PDF')}</a></td>
+          <td><a class="legal-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'Файл')}</a></td>
           <td>
             <div class="contract-table-subtle">{escape(letter.created_by_name.strip() or 'Автор неизвестен')}</div>
             <div class="contract-table-subtle">{format_date(letter.created_at.astimezone(VLADIVOSTOK_TZ).date() if letter.created_at.tzinfo else letter.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
@@ -7659,17 +7670,10 @@ def app(environ, start_response):
             if letter is None:
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"Letter not found"]
-            upload_root = contract_upload_root(storage).resolve()
-            absolute_path = (upload_root / letter.file_path).resolve()
-            if upload_root not in absolute_path.parents and absolute_path != upload_root:
-                start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
-                return [b"Forbidden"]
+            absolute_path, safe_filename, content_type = resolve_legal_letter_file(storage, letter)
             if not absolute_path.exists():
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
-            safe_filename = secure_upload_name(letter.file_name or "letter.pdf")
-            suffix = Path(safe_filename).suffix.lower()
-            content_type = LEGAL_UPLOAD_MIME.get(suffix, "application/octet-stream")
             headers = [
                 ("Content-Type", content_type),
                 ("Content-Disposition", f'inline; filename="{safe_filename}"'),
@@ -7679,6 +7683,86 @@ def app(environ, start_response):
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
+
+    if path.startswith("/contracts/letters/") and path.endswith("/download") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            letter_id = int(path.split("/")[3])
+            letter = storage.get_legal_letter(current_owner, letter_id)
+            if letter is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Letter not found"]
+            absolute_path, safe_filename, content_type = resolve_legal_letter_file(storage, letter)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            headers = [
+                ("Content-Type", content_type),
+                ("Content-Disposition", f'attachment; filename="{safe_filename}"'),
+            ]
+            start_response("200 OK", headers)
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
+    if path.startswith("/contracts/letters/") and path.endswith("/preview") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            letter_id = int(path.split("/")[3])
+            letter = storage.get_legal_letter(current_owner, letter_id)
+            if letter is None:
+                raise ValueError("Письмо не найдено")
+            absolute_path, safe_filename, content_type = resolve_legal_letter_file(storage, letter)
+            if not absolute_path.exists():
+                raise ValueError("Файл не найден")
+            file_url = f"/contracts/letters/{letter.id}/file?owner={current_owner}"
+            download_url = f"/contracts/letters/{letter.id}/download?owner={current_owner}"
+            if content_type == "application/pdf":
+                preview_html = f'<iframe src="{file_url}" style="width:100%; min-height:72vh; border:none; border-radius:22px; background:#fff;"></iframe>'
+            else:
+                preview_html = f'<div style="display:flex; justify-content:center; padding:8px 0 0;"><img src="{file_url}" alt="{escape(safe_filename)}" style="max-width:100%; max-height:72vh; border-radius:22px; object-fit:contain;"></div>'
+            body = f"""
+            <section class="card panel" style="margin-top:22px;">
+              <div class="panel-head">
+                <div>
+                  <h2 class="panel-title">Предпросмотр вложения</h2>
+                  <div class="panel-sub">{escape(letter.subject or safe_filename)}</div>
+                </div>
+                <a class="chip" href="/contracts/{letter.contract_id}?owner={current_owner}">← К контракту</a>
+              </div>
+              <div class="info-row">
+                <span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META['outgoing'])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META['outgoing'])[0])}</span>
+                <span class="chip">{format_date(letter.letter_date)}</span>
+              </div>
+              <div style="margin-top:18px;">{preview_html}</div>
+              <div style="margin-top:18px; display:flex; justify-content:flex-start;">
+                <a class="submit-btn" href="{download_url}">Скачать файл</a>
+              </div>
+            </section>
+            """
+            html = layout("Юридическая переписка", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        except Exception as exc:
+            body = render_forbidden_body(f"Контракты: {exc}")
+            html = layout("Предпросмотр вложения", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
 
     if path.startswith("/contracts/"):
         denied = guard("contracts", "view")
