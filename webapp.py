@@ -550,17 +550,11 @@ def can_edit_contract_stage_controls(current_user: dict | None) -> bool:
 
 
 def can_view_legal_correspondence(current_user: dict | None) -> bool:
-    return bool(
-        current_user
-        and (
-            has_active_admin_mode(current_user)
-            or is_procurement_user(current_user)
-        )
-    )
+    return has_permission(current_user, "contracts", "view")
 
 
 def can_edit_legal_correspondence(current_user: dict | None) -> bool:
-    return has_active_admin_mode(current_user)
+    return has_permission(current_user, "contracts", "edit")
 
 
 def guard_contract_stage_controls(current_user: dict | None):
