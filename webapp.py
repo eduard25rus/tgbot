@@ -98,6 +98,11 @@ LEGAL_LETTER_META = {
     "incoming": ("← Входящее", "chip danger"),
     "outgoing": ("→ Исходящее", "chip ok"),
 }
+LEGAL_UPLOAD_MIME = {
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
 
 
 @dataclass
@@ -4602,8 +4607,8 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
                 <textarea name="comment" placeholder="Коротко зафиксируйте суть переписки"></textarea>
               </div>
               <div class="field" style="grid-column: 1 / -1;">
-                <label>PDF-файл</label>
-                <input type="file" name="pdf_file" accept="application/pdf,.pdf" required>
+                <label>Файл письма</label>
+                <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg" required>
               </div>
               <button class="submit-btn" type="submit">Добавить письмо</button>
             </form>
@@ -7601,13 +7606,14 @@ def app(environ, start_response):
             if upload is None or not upload.filename.strip():
                 raise ValueError("Прикрепите PDF-файл")
             original_name = upload.filename.strip()
-            if not original_name.lower().endswith(".pdf"):
-                raise ValueError("Можно прикреплять только PDF")
+            lower_name = original_name.lower()
+            if not any(lower_name.endswith(ext) for ext in LEGAL_UPLOAD_MIME):
+                raise ValueError("Можно прикреплять только PDF, JPG или JPEG")
             file_bytes = upload.data
             if not file_bytes:
-                raise ValueError("PDF-файл пустой")
+                raise ValueError("Файл пустой")
             if len(file_bytes) > 20 * 1024 * 1024:
-                raise ValueError("PDF-файл не должен быть больше 20 МБ")
+                raise ValueError("Файл не должен быть больше 20 МБ")
             upload_root = contract_upload_root(storage)
             letters_dir = upload_root / "legal_letters" / str(current_owner) / str(contract_id)
             letters_dir.mkdir(parents=True, exist_ok=True)
@@ -7660,9 +7666,12 @@ def app(environ, start_response):
             if not absolute_path.exists():
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
+            safe_filename = secure_upload_name(letter.file_name or "letter.pdf")
+            suffix = Path(safe_filename).suffix.lower()
+            content_type = LEGAL_UPLOAD_MIME.get(suffix, "application/octet-stream")
             headers = [
-                ("Content-Type", "application/pdf"),
-                ("Content-Disposition", f'inline; filename="{secure_upload_name(letter.file_name or "letter.pdf")}"'),
+                ("Content-Type", content_type),
+                ("Content-Disposition", f'inline; filename="{safe_filename}"'),
             ]
             start_response("200 OK", headers)
             return [absolute_path.read_bytes()]
