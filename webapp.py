@@ -97,8 +97,6 @@ ROLE_PREVIEW_OPTIONS = [
 THEME_PREVIEW_OPTIONS = [
     ("", "Текущая"),
     ("cool_gray", "Холодный серый"),
-    ("steel_orange", "Сталь + оранжевый"),
-    ("steel_amber", "Сталь + янтарный"),
     ("steel_copper", "Сталь + медный"),
 ]
 THEME_PREVIEW_LABELS = dict(THEME_PREVIEW_OPTIONS)
@@ -273,190 +271,6 @@ THEME_PREVIEW_CSS = {
     }
     .brand-mark {
       opacity: 0.62;
-    }
-    """,
-    "steel_orange": """
-    :root {
-      --bg: #e4e8ed;
-      --paper: #fcfcfd;
-      --ink: #111821;
-      --muted: #606b77;
-      --line: #d2d8df;
-      --brand: #222a34;
-      --brand-2: #f2a20c;
-      --ok: #2a8c59;
-      --warn: #c28317;
-      --danger: #b23939;
-      --card-shadow: 0 24px 52px rgba(15, 20, 28, 0.10);
-    }
-    body {
-      background:
-        radial-gradient(circle at top left, rgba(242, 162, 12, 0.08), transparent 18%),
-        radial-gradient(circle at top right, rgba(27, 33, 41, 0.10), transparent 28%),
-        linear-gradient(180deg, #e8edf1 0%, #dde3e8 100%);
-    }
-    .sidebar {
-      background: linear-gradient(180deg, rgba(23,28,35,0.99), rgba(44,51,60,0.98));
-    }
-    .hero {
-      background:
-        linear-gradient(90deg, rgba(242,162,12,0.16), rgba(242,162,12,0.03) 24%, transparent 42%),
-        linear-gradient(135deg, rgba(27, 33, 41, 0.99), rgba(41, 48, 57, 0.97));
-    }
-    .card,
-    .mini-card,
-    .auth-card,
-    .settings-popover,
-    .name-popover,
-    .notification-popover {
-      background: rgba(252,252,253,0.98);
-    }
-    .contract-item,
-    .user-card,
-    .permission-box,
-    .empty {
-      background: linear-gradient(180deg, rgba(252,252,253,0.90), rgba(244,247,250,0.98));
-    }
-    .chip {
-      background: #e8edf2;
-      color: #4a5561;
-      border-color: rgba(91, 102, 116, 0.12);
-    }
-    .status-chip {
-      background: #e8edf2;
-      color: #4a5561;
-    }
-    .status-popover,
-    .autocomplete-list,
-    .settings-popover,
-    .name-popover,
-    .notification-popover,
-    .auth-card {
-      background: rgba(249,250,252,0.99);
-    }
-    .nav-link.active {
-      background: rgba(242,162,12,0.18);
-      border-color: rgba(242,162,12,0.24);
-      color: #fff6e6;
-    }
-    .secondary-btn,
-    .preview-btn,
-    .copy-btn {
-      background: rgba(246,248,250,0.94);
-      border-color: #d2d8df;
-      color: var(--ink);
-    }
-    .secondary-btn:hover,
-    .preview-btn:hover,
-    .copy-btn:hover,
-    .autocomplete-option:hover {
-      background: #e7edf2;
-    }
-    .autocomplete-option {
-      background: rgba(255,255,255,0.94);
-    }
-    .progress-bar, .notification-link, .submit-btn {
-      background: linear-gradient(135deg, #2a313a, #151b22);
-    }
-    .stat-card::after {
-      background: linear-gradient(135deg, rgba(242,162,12,0.13), rgba(90, 102, 117, 0.07));
-    }
-    .brand-logo-badge {
-      background: rgba(255,255,255,0.97);
-      border-color: rgba(242,162,12,0.26);
-      box-shadow: 0 18px 36px rgba(15, 20, 28, 0.16);
-    }
-    """,
-    "steel_amber": """
-    :root {
-      --bg: #e5e9ee;
-      --paper: #fcfcfd;
-      --ink: #111821;
-      --muted: #606b77;
-      --line: #d2d8df;
-      --brand: #222a34;
-      --brand-2: #d89218;
-      --ok: #2a8c59;
-      --warn: #b77a17;
-      --danger: #b23939;
-      --card-shadow: 0 24px 52px rgba(15, 20, 28, 0.10);
-    }
-    body {
-      background:
-        radial-gradient(circle at top left, rgba(216, 146, 24, 0.08), transparent 18%),
-        radial-gradient(circle at top right, rgba(27, 33, 41, 0.10), transparent 28%),
-        linear-gradient(180deg, #e8edf1 0%, #dde3e8 100%);
-    }
-    .sidebar {
-      background: linear-gradient(180deg, rgba(23,28,35,0.99), rgba(44,51,60,0.98));
-    }
-    .hero {
-      background:
-        linear-gradient(90deg, rgba(216,146,24,0.14), rgba(216,146,24,0.03) 22%, transparent 40%),
-        linear-gradient(135deg, rgba(27, 33, 41, 0.99), rgba(41, 48, 57, 0.97));
-    }
-    .card,
-    .mini-card,
-    .auth-card,
-    .settings-popover,
-    .name-popover,
-    .notification-popover {
-      background: rgba(252,252,253,0.98);
-    }
-    .contract-item,
-    .user-card,
-    .permission-box,
-    .empty {
-      background: linear-gradient(180deg, rgba(252,252,253,0.90), rgba(244,247,250,0.98));
-    }
-    .chip {
-      background: #e8edf2;
-      color: #4a5561;
-      border-color: rgba(91, 102, 116, 0.12);
-    }
-    .status-chip {
-      background: #e8edf2;
-      color: #4a5561;
-    }
-    .status-popover,
-    .autocomplete-list,
-    .settings-popover,
-    .name-popover,
-    .notification-popover,
-    .auth-card {
-      background: rgba(249,250,252,0.99);
-    }
-    .nav-link.active {
-      background: rgba(216,146,24,0.18);
-      border-color: rgba(216,146,24,0.24);
-      color: #fff5e6;
-    }
-    .secondary-btn,
-    .preview-btn,
-    .copy-btn {
-      background: rgba(246,248,250,0.94);
-      border-color: #d2d8df;
-      color: var(--ink);
-    }
-    .secondary-btn:hover,
-    .preview-btn:hover,
-    .copy-btn:hover,
-    .autocomplete-option:hover {
-      background: #e7edf2;
-    }
-    .autocomplete-option {
-      background: rgba(255,255,255,0.94);
-    }
-    .progress-bar, .notification-link, .submit-btn {
-      background: linear-gradient(135deg, #2a313a, #151b22);
-    }
-    .stat-card::after {
-      background: linear-gradient(135deg, rgba(216,146,24,0.12), rgba(90, 102, 117, 0.07));
-    }
-    .brand-logo-badge {
-      background: rgba(255,255,255,0.97);
-      border-color: rgba(216,146,24,0.24);
-      box-shadow: 0 18px 36px rgba(15, 20, 28, 0.16);
     }
     """,
     "steel_copper": """
@@ -2545,7 +2359,7 @@ def layout(
     current_theme_label = THEME_PREVIEW_LABELS.get(current_theme, THEME_PREVIEW_LABELS[""])
     theme_css = THEME_PREVIEW_CSS.get(current_theme, "")
     body_theme_class = f' theme-{current_theme}' if current_theme else ""
-    show_sidebar_logo = current_theme in {"cool_gray", "steel_orange", "steel_amber", "steel_copper"}
+    show_sidebar_logo = current_theme in {"cool_gray", "steel_copper"}
     show_hero_logo = False
     brand_logo_html = (
         '<div class="brand-logo-badge"><img class="brand-logo-image" src="/brand/felis-logo-banner.jpg" alt="Фелис Групп"></div>'
@@ -2762,6 +2576,7 @@ def layout(
     .brand-logo-badge {{
       width: 100%;
       max-width: 238px;
+      min-height: 56px;
       border-radius: 20px;
       border: 1px solid rgba(255,255,255,0.10);
       background: rgba(255,255,255,0.08);
@@ -4315,7 +4130,6 @@ def layout(
     <aside class="sidebar">
       <div>
         {brand_logo_html}
-        <div class="brand-mark">ООО СК "ФЕЛИС ГРУПП"</div>
         <div class="brand-title">СИСТЕМА\nУПРАВЛЕНИЯ\nБИЗНЕСОМ</div>
         <div class="brand-sub">
           Начинаем с раздела контрактов и постепенно собираем полноценную строительную CRM.
