@@ -127,6 +127,45 @@ THEME_PREVIEW_CSS = {
     .hero {
       background: linear-gradient(135deg, rgba(42, 50, 62, 0.98), rgba(24, 30, 39, 0.98));
     }
+    .contract-item,
+    .user-card,
+    .permission-box,
+    .empty {
+      background: linear-gradient(180deg, rgba(251,252,253,0.88), rgba(245,248,251,0.98));
+    }
+    .chip {
+      background: #e9edf2;
+      color: #4d5a67;
+      border-color: rgba(103, 116, 130, 0.10);
+    }
+    .status-chip {
+      background: #e9edf2;
+      color: #4d5a67;
+    }
+    .status-popover,
+    .autocomplete-list,
+    .settings-popover,
+    .name-popover,
+    .notification-popover,
+    .auth-card {
+      background: rgba(248,250,252,0.98);
+    }
+    .secondary-btn,
+    .preview-btn,
+    .copy-btn {
+      background: rgba(247,249,251,0.92);
+      border-color: #d7dde5;
+      color: var(--ink);
+    }
+    .secondary-btn:hover,
+    .preview-btn:hover,
+    .copy-btn:hover,
+    .autocomplete-option:hover {
+      background: #e7edf3;
+    }
+    .autocomplete-option {
+      background: rgba(255,255,255,0.92);
+    }
     .stat-card::after {
       background: linear-gradient(135deg, rgba(46, 59, 71, 0.10), rgba(113, 126, 139, 0.08));
     }
@@ -173,6 +212,45 @@ THEME_PREVIEW_CSS = {
     .name-popover,
     .notification-popover {
       background: rgba(252,252,253,0.98);
+    }
+    .contract-item,
+    .user-card,
+    .permission-box,
+    .empty {
+      background: linear-gradient(180deg, rgba(252,252,253,0.90), rgba(244,247,250,0.98));
+    }
+    .chip {
+      background: #e7ebf0;
+      color: #4a5561;
+      border-color: rgba(91, 102, 116, 0.12);
+    }
+    .status-chip {
+      background: #e7ebf0;
+      color: #4a5561;
+    }
+    .status-popover,
+    .autocomplete-list,
+    .settings-popover,
+    .name-popover,
+    .notification-popover,
+    .auth-card {
+      background: rgba(249,250,252,0.99);
+    }
+    .secondary-btn,
+    .preview-btn,
+    .copy-btn {
+      background: rgba(246,248,250,0.94);
+      border-color: #cfd5dc;
+      color: var(--ink);
+    }
+    .secondary-btn:hover,
+    .preview-btn:hover,
+    .copy-btn:hover,
+    .autocomplete-option:hover {
+      background: #e4e9ef;
+    }
+    .autocomplete-option {
+      background: rgba(255,255,255,0.94);
     }
     .stat-card::after {
       background: linear-gradient(135deg, rgba(32, 40, 50, 0.09), rgba(115, 124, 136, 0.07));
