@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-import cgi
 import os
 import hashlib
 import secrets
 import re
 from pathlib import Path
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import date
 from datetime import timedelta
 from datetime import timezone
+from email.parser import BytesParser
+from email.policy import default as email_policy_default
 from http.cookies import SimpleCookie
 from html import escape
 from typing import Iterable
@@ -96,6 +98,13 @@ LEGAL_LETTER_META = {
     "incoming": ("← Входящее", "chip danger"),
     "outgoing": ("→ Исходящее", "chip ok"),
 }
+
+
+@dataclass
+class UploadedFile:
+    filename: str
+    content_type: str
+    data: bytes
 
 
 def format_amount(amount: float) -> str:
@@ -6048,17 +6057,36 @@ def read_post_data(environ) -> dict[str, str]:
     return {key: values[0] for key, values in parsed.items()}
 
 
-def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, cgi.FieldStorage]]:
-    form = cgi.FieldStorage(fp=environ["wsgi.input"], environ=environ, keep_blank_values=True)
+def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, UploadedFile]]:
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "0") or "0")
+    except ValueError:
+        length = 0
+    raw = environ["wsgi.input"].read(length)
+    content_type = environ.get("CONTENT_TYPE", "")
+    if not raw or "multipart/form-data" not in content_type:
+        return {}, {}
+
+    message = BytesParser(policy=email_policy_default).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + raw
+    )
     fields: dict[str, str] = {}
-    files: dict[str, cgi.FieldStorage] = {}
-    if not getattr(form, "list", None):
-        return fields, files
-    for item in form.list:
-        if item.filename:
-            files[item.name] = item
+    files: dict[str, UploadedFile] = {}
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if filename:
+            files[name] = UploadedFile(
+                filename=filename,
+                content_type=part.get_content_type(),
+                data=payload,
+            )
         else:
-            fields[item.name] = item.value
+            charset = part.get_content_charset() or "utf-8"
+            fields[name] = payload.decode(charset, errors="replace")
     return fields, files
 
 
@@ -7570,12 +7598,12 @@ def app(environ, start_response):
             if not subject:
                 raise ValueError("Укажите, о чем письмо")
             upload = files.get("pdf_file")
-            if upload is None or not getattr(upload, "filename", "").strip():
+            if upload is None or not upload.filename.strip():
                 raise ValueError("Прикрепите PDF-файл")
             original_name = upload.filename.strip()
             if not original_name.lower().endswith(".pdf"):
                 raise ValueError("Можно прикреплять только PDF")
-            file_bytes = upload.file.read()
+            file_bytes = upload.data
             if not file_bytes:
                 raise ValueError("PDF-файл пустой")
             if len(file_bytes) > 20 * 1024 * 1024:
