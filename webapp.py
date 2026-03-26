@@ -184,6 +184,12 @@ def parse_date(raw: str) -> date:
     raise ValueError("Нужен формат даты DD-MM-YYYY")
 
 
+def local_date_to_utc_naive(value: date) -> datetime:
+    local_now = datetime.now(VLADIVOSTOK_TZ)
+    local_dt = datetime.combine(value, local_now.time().replace(tzinfo=None, microsecond=0))
+    return local_dt.replace(tzinfo=VLADIVOSTOK_TZ).astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def parse_amount(raw: str) -> float:
     amount = float(raw.strip().replace(" ", "").replace(",", "."))
     if amount < 0:
@@ -803,6 +809,9 @@ def render_stage_invoice_form(owner_chat_id: int, contract_id: int, stage, curre
     is_issued = stage.advance_invoice_issued if is_advance else stage.final_invoice_issued
     issued_at = stage.advance_invoice_issued_at if is_advance else stage.final_invoice_issued_at
     issued_by_name = stage.advance_invoice_issued_by_name if is_advance else stage.final_invoice_issued_by_name
+    issued_date_value = ""
+    if issued_at is not None:
+        issued_date_value = issued_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date().isoformat() if issued_at.tzinfo is None else issued_at.astimezone(VLADIVOSTOK_TZ).date().isoformat()
     display = stage_invoice_chip(is_issued, issued_at, issued_by_name)
     if not can_edit_contract_stage_controls(current_user):
         return display
@@ -814,6 +823,10 @@ def render_stage_invoice_form(owner_chat_id: int, contract_id: int, stage, curre
         <form class="status-option-list" method="post" action="{action}">
           <input type="hidden" name="tab" value="{escape(active_tab)}">
           <input type="hidden" name="invoice_kind" value="{invoice_kind}">
+          <div class="field">
+            <label>Дата выставления</label>
+            <input type="date" name="issued_date" value="{issued_date_value or datetime.now(VLADIVOSTOK_TZ).date().isoformat()}">
+          </div>
           <button class="chip ok status-option" type="submit" name="issued" value="1">Счет выставлен</button>
           <button class="chip status-option" type="submit" name="issued" value="0">Счет не выставлен</button>
         </form>
@@ -825,24 +838,25 @@ def render_stage_invoice_form(owner_chat_id: int, contract_id: int, stage, curre
 def render_stage_status_form(owner_chat_id: int, contract_id: int, stage, current_user: dict | None, active_tab: str = "detail") -> str:
     if not can_edit_contract_stage_controls(current_user):
         return stage_status_chip(stage)
-    options = [
-        ("not_started", "Не приступили"),
-        ("in_progress", "В работе"),
-        ("completed", "Выполнен"),
-        ("uploaded_eis", "Загружен на ЕИС"),
-        ("accepted_eis", "Принят на ЕИС"),
-    ]
-    buttons = "".join(
-        f'<button class="{STATUS_META[value][1]} status-option" type="submit" name="status" value="{value}">{escape(label)}</button>'
-        for value, label in options
-    )
+    current_status_date = ""
+    if stage.status_updated_at is not None:
+        localized = stage.status_updated_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ) if stage.status_updated_at.tzinfo is None else stage.status_updated_at.astimezone(VLADIVOSTOK_TZ)
+        current_status_date = localized.date().isoformat()
     return f"""
     <details class="status-menu">
       <summary>{stage_status_chip(stage)}</summary>
       <div class="status-popover">
         <form class="status-option-list" method="post" action="/contracts/stages/{stage.id}/status?owner={owner_chat_id}&contract_id={contract_id}">
           <input type="hidden" name="tab" value="{escape(active_tab)}">
-          {buttons}
+          <button class="{STATUS_META['not_started'][1]} status-option" type="submit" name="status" value="not_started">Не приступили</button>
+          <button class="{STATUS_META['in_progress'][1]} status-option" type="submit" name="status" value="in_progress">В работе</button>
+          <button class="{STATUS_META['completed'][1]} status-option" type="submit" name="status" value="completed">Выполнен</button>
+          <div class="field">
+            <label>Дата для статуса ЕИС</label>
+            <input type="date" name="status_date" value="{current_status_date or datetime.now(VLADIVOSTOK_TZ).date().isoformat()}">
+          </div>
+          <button class="{STATUS_META['uploaded_eis'][1]} status-option" type="submit" name="status" value="uploaded_eis">Загружен на ЕИС</button>
+          <button class="{STATUS_META['accepted_eis'][1]} status-option" type="submit" name="status" value="accepted_eis">Принят на ЕИС</button>
         </form>
       </div>
     </details>
@@ -7155,7 +7169,13 @@ def app(environ, start_response):
             if stage is None:
                 raise ValueError("Этап не найден")
             actor_name = current_user.get("full_name", "").strip() if current_user else ""
-            updated = storage.update_stage_status(current_owner, stage_id, status, datetime.utcnow(), actor_name)
+            status_updated_at = datetime.utcnow()
+            if status in {"uploaded_eis", "accepted_eis"}:
+                status_date_raw = form.get("status_date", "").strip()
+                if not status_date_raw:
+                    raise ValueError("Укажите дату установки статуса")
+                status_updated_at = local_date_to_utc_naive(parse_date(status_date_raw))
+            updated = storage.update_stage_status(current_owner, stage_id, status, status_updated_at, actor_name)
             if not updated:
                 raise ValueError("Этап не найден")
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
@@ -7207,12 +7227,18 @@ def app(environ, start_response):
                 raise ValueError("Некорректный тип счета")
             issued = form.get("issued") == "1"
             actor_name = current_user.get("full_name", "").strip() if current_user else ""
+            issued_at = None
+            if issued:
+                issued_date_raw = form.get("issued_date", "").strip()
+                if not issued_date_raw:
+                    raise ValueError("Укажите дату выставления счета")
+                issued_at = local_date_to_utc_naive(parse_date(issued_date_raw))
             updated = storage.update_stage_invoice_status(
                 current_owner,
                 stage_id,
                 invoice_kind,
                 issued,
-                datetime.utcnow() if issued else None,
+                issued_at,
                 actor_name,
             )
             if not updated:
