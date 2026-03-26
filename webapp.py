@@ -179,12 +179,6 @@ THEME_PREVIEW_CSS = {
     .progress-bar, .notification-link, .submit-btn {
       background: linear-gradient(135deg, var(--brand), #202a35);
     }
-    .hero-watermark {
-      opacity: 0.16;
-      right: 22px;
-      bottom: 16px;
-      width: 360px;
-    }
     """,
     "graphite": """
     :root {
@@ -370,12 +364,6 @@ THEME_PREVIEW_CSS = {
       background: rgba(255,255,255,0.97);
       border-color: rgba(242,162,12,0.26);
       box-shadow: 0 18px 36px rgba(15, 20, 28, 0.16);
-    }
-    .hero-watermark {
-      opacity: 0.18;
-      right: 18px;
-      bottom: 14px;
-      width: 340px;
     }
     """,
 }
@@ -2372,8 +2360,8 @@ def layout(
     current_theme_label = THEME_PREVIEW_LABELS.get(current_theme, THEME_PREVIEW_LABELS[""])
     theme_css = THEME_PREVIEW_CSS.get(current_theme, "")
     body_theme_class = f' theme-{current_theme}' if current_theme else ""
-    show_sidebar_logo = current_theme in {"graphite", "steel_orange"}
-    show_hero_logo = current_theme in {"cool_gray", "steel_orange"}
+    show_sidebar_logo = current_theme in {"cool_gray", "graphite", "steel_orange"}
+    show_hero_logo = False
     brand_logo_html = (
         '<div class="brand-logo-badge"><img class="brand-logo-image" src="/brand/felis-logo-banner.jpg" alt="Фелис Групп"></div>'
         if show_sidebar_logo
@@ -2655,17 +2643,6 @@ def layout(
       position: relative;
       z-index: 5;
       overflow: visible;
-    }}
-    .hero-watermark {{
-      position: absolute;
-      right: 22px;
-      bottom: 14px;
-      width: 260px;
-      height: auto;
-      opacity: 0.08;
-      pointer-events: none;
-      user-select: none;
-      filter: saturate(0.95) contrast(1.02);
     }}
     .hero-top {{
       display: flex;
