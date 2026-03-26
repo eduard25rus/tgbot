@@ -1951,6 +1951,36 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
+    def update_legal_letter(
+        self,
+        chat_id: int,
+        letter_id: int,
+        direction: str,
+        letter_date: date,
+        subject: str,
+        comment: str,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE legal_letters
+                SET direction = ?, letter_date = ?, subject = ?, comment = ?
+                WHERE id = ?
+                  AND contract_id IN (
+                      SELECT id FROM contracts WHERE chat_id = ?
+                  )
+                """,
+                (
+                    direction,
+                    letter_date.strftime(DATE_FMT),
+                    subject.strip(),
+                    comment.strip(),
+                    letter_id,
+                    chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
     def get_payment(self, chat_id: int, payment_id: int) -> Payment | None:
         with self.connection() as conn:
             row = conn.execute(
@@ -1994,6 +2024,23 @@ class Storage:
                 (attachment_id, chat_id),
             ).fetchone()
         return self._legal_letter_attachment_from_row(row) if row else None
+
+    def delete_legal_letter_attachment(self, chat_id: int, attachment_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM legal_letter_attachments
+                WHERE id = ?
+                  AND letter_id IN (
+                      SELECT l.id
+                      FROM legal_letters l
+                      JOIN contracts c ON c.id = l.contract_id
+                      WHERE c.chat_id = ?
+                  )
+                """,
+                (attachment_id, chat_id),
+            )
+            return cursor.rowcount > 0
 
     def update_payment(self, chat_id: int, payment_id: int, payment_date: date, amount: float) -> bool:
         with self.connection() as conn:

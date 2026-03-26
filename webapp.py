@@ -333,6 +333,29 @@ def render_legal_file_preview_page(file_url: str, download_url: str, safe_filena
 </html>"""
 
 
+def save_legal_letter_uploads(storage: Storage, owner_chat_id: int, contract_id: int, letter_id: int, uploads: list[UploadedFile]) -> None:
+    upload_root = contract_upload_root(storage)
+    letters_dir = upload_root / "legal_letters" / str(owner_chat_id) / str(contract_id)
+    letters_dir.mkdir(parents=True, exist_ok=True)
+    for upload in uploads:
+        original_name = upload.filename.strip()
+        lower_name = original_name.lower()
+        if not any(lower_name.endswith(ext) for ext in LEGAL_UPLOAD_MIME):
+            raise ValueError("Можно прикреплять только PDF, JPG, JPEG, PNG, DOC или DOCX")
+        file_bytes = upload.data
+        if not file_bytes:
+            raise ValueError("Один из файлов пустой")
+        if len(file_bytes) > 20 * 1024 * 1024:
+            raise ValueError("Каждый файл должен быть не больше 20 МБ")
+        safe_name = secure_upload_name(original_name)
+        final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
+        file_path = letters_dir / final_name
+        file_path.write_bytes(file_bytes)
+        relative_path = file_path.relative_to(upload_root).as_posix()
+        if storage.add_legal_letter_attachment(owner_chat_id, letter_id, original_name, relative_path) is None:
+            raise ValueError("Не удалось сохранить вложение")
+
+
 def parse_amount(raw: str) -> float:
     amount = float(raw.strip().replace(" ", "").replace(",", "."))
     if amount < 0:
@@ -1086,6 +1109,64 @@ def render_stage_amount_form(owner_chat_id: int, contract_id: int, stage, curren
           </div>
           <button class="submit-btn" type="submit">Сохранить сумму</button>
         </form>
+      </div>
+    </details>
+    """
+
+
+def render_legal_letter_editor(owner_chat_id: int, contract_id: int, letter, attachments: list, current_user: dict | None) -> str:
+    subject_html = f'<div class="legal-letter-topic">{escape(letter.subject or "Без темы")}</div>'
+    comment_html = f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''
+    if not has_active_admin_mode(current_user):
+        return f"{subject_html}{comment_html}"
+    attachment_html = "".join(
+        f"""
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-top:1px solid var(--line);">
+          <a class="legal-letter-file" href="/contracts/letter-files/{attachment.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(attachment.file_name or 'Файл')}</a>
+          <form method="post" action="/contracts/letter-files/{attachment.id}/delete?owner={owner_chat_id}&contract_id={contract_id}">
+            <button class="chip danger" type="submit">Удалить</button>
+          </form>
+        </div>
+        """
+        for attachment in attachments
+    ) or '<div class="contract-table-subtle" style="padding-top:8px;">Файлов пока нет</div>'
+    return f"""
+    <details class="status-menu">
+      <summary>
+        {subject_html}
+        {comment_html}
+      </summary>
+      <div class="status-popover" style="min-width:420px;">
+        <form class="form-grid" method="post" action="/contracts/letters/{letter.id}/update?owner={owner_chat_id}&contract_id={contract_id}" enctype="multipart/form-data">
+          <div class="field">
+            <label>Тип письма</label>
+            <select name="direction" required>
+              <option value="outgoing"{" selected" if letter.direction == "outgoing" else ""}>Исходящее</option>
+              <option value="incoming"{" selected" if letter.direction == "incoming" else ""}>Входящее</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Дата письма</label>
+            <input type="date" name="letter_date" value="{letter.letter_date.isoformat()}" required>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>О чем письмо</label>
+            <input type="text" name="subject" value="{escape(letter.subject)}" required>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Комментарий</label>
+            <textarea name="comment">{escape(letter.comment)}</textarea>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Догрузить файлы</label>
+            <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" multiple>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить письмо</button>
+        </form>
+        <div style="margin-top:14px;">
+          <div class="contract-table-subtle" style="margin-top:0;">Вложения</div>
+          {attachment_html}
+        </div>
       </div>
     </details>
     """
@@ -4672,8 +4753,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
           <td style="text-align:center;"><span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span></td>
           <td class="nowrap">{format_date(letter.letter_date)}</td>
           <td>
-            <div class="legal-letter-topic">{escape(letter.subject or 'Без темы')}</div>
-            {f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''}
+            {render_legal_letter_editor(storage, owner_chat_id, contract.id, letter, attachment_map.get(letter.id, []), current_user)}
           </td>
           <td>
             {"".join(
@@ -7745,9 +7825,6 @@ def app(environ, start_response):
             uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
             if not uploads:
                 raise ValueError("Прикрепите хотя бы один файл")
-            upload_root = contract_upload_root(storage)
-            letters_dir = upload_root / "legal_letters" / str(current_owner) / str(contract_id)
-            letters_dir.mkdir(parents=True, exist_ok=True)
             created = storage.add_legal_letter(
                 current_owner,
                 contract_id,
@@ -7762,26 +7839,9 @@ def app(environ, start_response):
             )
             if created is None:
                 raise ValueError("Не удалось сохранить письмо")
-            first_relative_path = ""
-            for index, upload in enumerate(uploads):
-                original_name = upload.filename.strip()
-                lower_name = original_name.lower()
-                if not any(lower_name.endswith(ext) for ext in LEGAL_UPLOAD_MIME):
-                    raise ValueError("Можно прикреплять только PDF, JPG, JPEG, PNG, DOC или DOCX")
-                file_bytes = upload.data
-                if not file_bytes:
-                    raise ValueError("Один из файлов пустой")
-                if len(file_bytes) > 20 * 1024 * 1024:
-                    raise ValueError("Каждый файл должен быть не больше 20 МБ")
-                safe_name = secure_upload_name(original_name)
-                final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
-                file_path = letters_dir / final_name
-                file_path.write_bytes(file_bytes)
-                relative_path = file_path.relative_to(upload_root).as_posix()
-                if index == 0:
-                    first_relative_path = relative_path
-                if storage.add_legal_letter_attachment(current_owner, created, original_name, relative_path) is None:
-                    raise ValueError("Не удалось сохранить вложение")
+            save_legal_letter_uploads(storage, current_owner, contract_id, created, uploads)
+            first_attachment = storage.list_legal_letter_attachments_for_contract(current_owner, contract_id)
+            first_relative_path = next((item.file_path for item in first_attachment if item.letter_id == created), "")
             if first_relative_path:
                 with storage.connection() as conn:
                     conn.execute(
@@ -7797,6 +7857,90 @@ def app(environ, start_response):
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить письмо: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/letters/") and path.endswith("/update") and method == "POST":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        contract_id = -1
+        try:
+            letter_id = int(path.split("/")[3])
+            contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0])
+            letter = storage.get_legal_letter(current_owner, letter_id)
+            if letter is None:
+                raise ValueError("Письмо не найдено")
+            form, files = read_multipart_form_data(environ)
+            direction = form.get("direction", "outgoing").strip()
+            if direction not in LEGAL_LETTER_META:
+                raise ValueError("Некорректный тип письма")
+            letter_date_raw = form.get("letter_date", "").strip()
+            if not letter_date_raw:
+                raise ValueError("Укажите дату письма")
+            subject = form.get("subject", "").strip()
+            if not subject:
+                raise ValueError("Укажите, о чем письмо")
+            if not storage.update_legal_letter(current_owner, letter_id, direction, parse_date(letter_date_raw), subject, form.get("comment", "")):
+                raise ValueError("Не удалось обновить письмо")
+            uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
+            if uploads:
+                save_legal_letter_uploads(storage, current_owner, contract_id, letter_id, uploads)
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить письмо: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/letter-files/") and path.endswith("/delete") and method == "POST":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0] or "0")
+        try:
+            attachment_id = int(path.split("/")[3])
+            attachment = storage.get_legal_letter_attachment(current_owner, attachment_id)
+            if attachment is None:
+                raise ValueError("Вложение не найдено")
+            try:
+                absolute_path, _, _ = resolve_legal_letter_file(storage, attachment)
+            except Exception:
+                absolute_path = None
+            if not storage.delete_legal_letter_attachment(current_owner, attachment_id):
+                raise ValueError("Не удалось удалить вложение")
+            if absolute_path is not None and absolute_path.exists():
+                try:
+                    absolute_path.unlink()
+                except OSError:
+                    pass
+            remaining = [item for item in storage.list_legal_letter_attachments_for_contract(current_owner, attachment.contract_id) if item.letter_id == attachment.letter_id]
+            next_file_path = remaining[0].file_path if remaining else ""
+            with storage.connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE legal_letters
+                    SET file_path = ?, file_name = ?
+                    WHERE id = ? AND contract_id IN (
+                        SELECT id FROM contracts WHERE chat_id = ?
+                    )
+                    """,
+                    (next_file_path, remaining[0].file_name if remaining else "", attachment.letter_id, current_owner),
+                )
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось удалить вложение: {exc}")
             html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
