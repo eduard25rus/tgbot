@@ -98,6 +98,7 @@ THEME_PREVIEW_OPTIONS = [
     ("", "Текущая"),
     ("cool_gray", "Холодный серый"),
     ("graphite", "Графит"),
+    ("steel_orange", "Сталь + оранжевый"),
 ]
 THEME_PREVIEW_LABELS = dict(THEME_PREVIEW_OPTIONS)
 THEME_PREVIEW_CSS = {
@@ -177,6 +178,12 @@ THEME_PREVIEW_CSS = {
     }
     .progress-bar, .notification-link, .submit-btn {
       background: linear-gradient(135deg, var(--brand), #202a35);
+    }
+    .hero-watermark {
+      opacity: 0.10;
+      right: 28px;
+      bottom: 18px;
+      width: 220px;
     }
     """,
     "graphite": """
@@ -263,6 +270,112 @@ THEME_PREVIEW_CSS = {
     }
     .progress-bar, .notification-link, .submit-btn {
       background: linear-gradient(135deg, var(--brand), #161c24);
+    }
+    .brand-logo-badge {
+      background: rgba(255,255,255,0.96);
+      border-color: rgba(255,255,255,0.10);
+      box-shadow: 0 18px 36px rgba(8, 12, 18, 0.22);
+    }
+    .brand-mark {
+      opacity: 0.62;
+    }
+    """,
+    "steel_orange": """
+    :root {
+      --bg: #e4e8ed;
+      --paper: #fcfcfd;
+      --ink: #111821;
+      --muted: #606b77;
+      --line: #d2d8df;
+      --brand: #222a34;
+      --brand-2: #f2a20c;
+      --ok: #2a8c59;
+      --warn: #c28317;
+      --danger: #b23939;
+      --card-shadow: 0 24px 52px rgba(15, 20, 28, 0.10);
+    }
+    body {
+      background:
+        radial-gradient(circle at top left, rgba(242, 162, 12, 0.08), transparent 18%),
+        radial-gradient(circle at top right, rgba(27, 33, 41, 0.10), transparent 28%),
+        linear-gradient(180deg, #e8edf1 0%, #dde3e8 100%);
+    }
+    .sidebar {
+      background: linear-gradient(180deg, rgba(23,28,35,0.99), rgba(44,51,60,0.98));
+    }
+    .hero {
+      background:
+        linear-gradient(90deg, rgba(242,162,12,0.16), rgba(242,162,12,0.03) 24%, transparent 42%),
+        linear-gradient(135deg, rgba(27, 33, 41, 0.99), rgba(41, 48, 57, 0.97));
+    }
+    .card,
+    .mini-card,
+    .auth-card,
+    .settings-popover,
+    .name-popover,
+    .notification-popover {
+      background: rgba(252,252,253,0.98);
+    }
+    .contract-item,
+    .user-card,
+    .permission-box,
+    .empty {
+      background: linear-gradient(180deg, rgba(252,252,253,0.90), rgba(244,247,250,0.98));
+    }
+    .chip {
+      background: #e8edf2;
+      color: #4a5561;
+      border-color: rgba(91, 102, 116, 0.12);
+    }
+    .status-chip {
+      background: #e8edf2;
+      color: #4a5561;
+    }
+    .status-popover,
+    .autocomplete-list,
+    .settings-popover,
+    .name-popover,
+    .notification-popover,
+    .auth-card {
+      background: rgba(249,250,252,0.99);
+    }
+    .nav-link.active {
+      background: rgba(242,162,12,0.18);
+      border-color: rgba(242,162,12,0.24);
+      color: #fff6e6;
+    }
+    .secondary-btn,
+    .preview-btn,
+    .copy-btn {
+      background: rgba(246,248,250,0.94);
+      border-color: #d2d8df;
+      color: var(--ink);
+    }
+    .secondary-btn:hover,
+    .preview-btn:hover,
+    .copy-btn:hover,
+    .autocomplete-option:hover {
+      background: #e7edf2;
+    }
+    .autocomplete-option {
+      background: rgba(255,255,255,0.94);
+    }
+    .progress-bar, .notification-link, .submit-btn {
+      background: linear-gradient(135deg, #2a313a, #151b22);
+    }
+    .stat-card::after {
+      background: linear-gradient(135deg, rgba(242,162,12,0.13), rgba(90, 102, 117, 0.07));
+    }
+    .brand-logo-badge {
+      background: rgba(255,255,255,0.97);
+      border-color: rgba(242,162,12,0.26);
+      box-shadow: 0 18px 36px rgba(15, 20, 28, 0.16);
+    }
+    .hero-watermark {
+      opacity: 0.14;
+      right: 24px;
+      bottom: 18px;
+      width: 210px;
     }
     """,
 }
@@ -2258,6 +2371,19 @@ def layout(
     current_theme = current_user.get("preview_theme", "") if current_user else ""
     current_theme_label = THEME_PREVIEW_LABELS.get(current_theme, THEME_PREVIEW_LABELS[""])
     theme_css = THEME_PREVIEW_CSS.get(current_theme, "")
+    body_theme_class = f' theme-{current_theme}' if current_theme else ""
+    show_sidebar_logo = current_theme in {"graphite", "steel_orange"}
+    show_hero_logo = current_theme in {"cool_gray", "steel_orange"}
+    brand_logo_html = (
+        '<div class="brand-logo-badge"><img class="brand-logo-image" src="/brand/felis-logo.png" alt="Фелис Групп"></div>'
+        if show_sidebar_logo
+        else ""
+    )
+    hero_logo_html = (
+        '<img class="hero-watermark" src="/brand/felis-logo.png" alt="" aria-hidden="true">'
+        if show_hero_logo
+        else ""
+    )
     sidebar_notes = ""
     if has_active_admin_mode(current_user):
         sidebar_notes = """
@@ -2460,6 +2586,23 @@ def layout(
       text-transform: uppercase;
       opacity: 0.7;
     }}
+    .brand-logo-badge {{
+      width: 122px;
+      height: 86px;
+      border-radius: 22px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }}
+    .brand-logo-image {{
+      width: 86px;
+      height: auto;
+      display: block;
+    }}
     .brand-title {{
       font-size: 28px;
       font-weight: 800;
@@ -2512,6 +2655,17 @@ def layout(
       position: relative;
       z-index: 5;
       overflow: visible;
+    }}
+    .hero-watermark {{
+      position: absolute;
+      right: 22px;
+      bottom: 14px;
+      width: 190px;
+      height: auto;
+      opacity: 0.08;
+      pointer-events: none;
+      user-select: none;
+      filter: saturate(0.95) contrast(1.02);
     }}
     .hero-top {{
       display: flex;
@@ -3994,10 +4148,11 @@ def layout(
     {theme_css}
   </style>
 </head>
-<body>
+<body class="{body_theme_class.strip()}">
   <div class="shell">
     <aside class="sidebar">
       <div>
+        {brand_logo_html}
         <div class="brand-mark">ООО СК "ФЕЛИС ГРУПП"</div>
         <div class="brand-title">СИСТЕМА\nУПРАВЛЕНИЯ\nБИЗНЕСОМ</div>
         <div class="brand-sub">
@@ -4009,6 +4164,7 @@ def layout(
     </aside>
     <div class="content">
       <header class="hero">
+        {hero_logo_html}
         <div class="hero-top">
         <div>
           <div class="eyebrow">CRM Draft</div>
@@ -6700,6 +6856,14 @@ def app(environ, start_response):
 
     path = environ.get("PATH_INFO", "/")
     method = environ.get("REQUEST_METHOD", "GET").upper()
+
+    if path == "/brand/felis-logo.png" and method == "GET":
+        logo_path = Path(__file__).resolve().with_name("felis-logo.png")
+        if not logo_path.exists():
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Logo not found"]
+        start_response("200 OK", [("Content-Type", "image/png")])
+        return [logo_path.read_bytes()]
 
     if path == "/login" and method == "POST":
         form = read_post_data(environ)
