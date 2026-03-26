@@ -787,7 +787,11 @@ def stage_status_chip(stage) -> str:
     tooltip = ""
     if stage.status != "not_started":
         tooltip = status_tooltip(stage.status_updated_at, stage.status_updated_by_name, show_unknown_author=True)
-    return auction_chip(stage.status, STATUS_META, tooltip)
+    chip_html = auction_chip(stage.status, STATUS_META, tooltip)
+    if stage.status in {"uploaded_eis", "accepted_eis"} and stage.status_updated_at is not None:
+        localized = stage.status_updated_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ) if stage.status_updated_at.tzinfo is None else stage.status_updated_at.astimezone(VLADIVOSTOK_TZ)
+        return f'{chip_html}<div class="contract-table-subtle">{format_date(localized.date())}</div>'
+    return chip_html
 
 
 def stage_payment_chip(stage) -> str:
@@ -801,7 +805,11 @@ def stage_invoice_chip(is_issued: bool, issued_at: datetime | None, issued_by_na
     tooltip = status_tooltip(issued_at, issued_by_name, show_unknown_author=True) if is_issued else ""
     label = "✓" if is_issued else "○"
     css_class = "chip ok" if is_issued else "chip"
-    return f'<span class="status-chip-tooltip" data-tooltip="{escape(tooltip)}"><span class="{css_class}">{label}</span></span>' if tooltip else f'<span class="{css_class}">{label}</span>'
+    chip_html = f'<span class="status-chip-tooltip" data-tooltip="{escape(tooltip)}"><span class="{css_class}">{label}</span></span>' if tooltip else f'<span class="{css_class}">{label}</span>'
+    if is_issued and issued_at is not None:
+        localized = issued_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ) if issued_at.tzinfo is None else issued_at.astimezone(VLADIVOSTOK_TZ)
+        return f'{chip_html}<div class="contract-table-subtle">{format_date(localized.date())}</div>'
+    return chip_html
 
 
 def render_stage_invoice_form(owner_chat_id: int, contract_id: int, stage, current_user: dict | None, invoice_kind: str, active_tab: str = "detail") -> str:
