@@ -2574,6 +2574,23 @@ def layout(
     .contract-table tbody tr:hover {{
       background: rgba(255,255,255,0.42);
     }}
+    .contract-stage-table th:nth-child(2),
+    .contract-stage-table td:nth-child(2) {{
+      text-align: center;
+    }}
+    .contract-stage-table td:nth-child(2) .status-menu,
+    .contract-stage-table td:nth-child(2) .chip,
+    .contract-stage-table td:nth-child(2) .contract-table-subtle {{
+      margin-left: auto;
+      margin-right: auto;
+      text-align: center;
+    }}
+    .contract-stage-table td:nth-child(2) .status-menu {{
+      width: fit-content;
+    }}
+    .contract-stage-table td:nth-child(2) .contract-table-subtle {{
+      width: fit-content;
+    }}
     .stage-builder-card {{
       display: grid;
       gap: 12px;
@@ -4521,7 +4538,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         </div>
         {add_stage_button}
       </div>
-      <table class="table contract-table">
+      <table class="table contract-table contract-stage-table">
         <thead>
           <tr>
             <th>Этап</th>
