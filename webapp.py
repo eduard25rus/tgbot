@@ -2342,7 +2342,6 @@ def layout(
       --danger: #b83232;
       --card-shadow: 0 20px 45px rgba(22, 35, 47, 0.08);
     }}
-    {theme_css}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
@@ -3914,6 +3913,7 @@ def layout(
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       }}
     }}
+    {theme_css}
   </style>
 </head>
 <body>
