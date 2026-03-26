@@ -810,7 +810,7 @@ def render_stage_invoice_form(owner_chat_id: int, contract_id: int, stage, curre
     return f"""
     <details class="status-menu">
       <summary>{display}</summary>
-      <div class="status-popover">
+      <div class="status-popover compact">
         <form class="status-option-list" method="post" action="{action}">
           <input type="hidden" name="tab" value="{escape(active_tab)}">
           <input type="hidden" name="invoice_kind" value="{invoice_kind}">
@@ -3169,6 +3169,14 @@ def layout(
       display: grid;
       gap: 8px;
     }}
+    .status-popover.compact {{
+      min-width: 150px;
+      width: max-content;
+    }}
+    .status-option-list {{
+      display: grid;
+      gap: 8px;
+    }}
     .status-option {{
       width: 100%;
       text-align: center;
@@ -3180,6 +3188,10 @@ def layout(
       display: inline-flex;
       align-items: center;
       justify-content: center;
+    }}
+    .status-popover.compact .status-option {{
+      padding: 10px 12px;
+      white-space: nowrap;
     }}
     .discount-menu summary {{
       display: inline-block;
