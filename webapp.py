@@ -87,6 +87,7 @@ MAX_DISCOUNT_OPTIONS = [0.0, 2.5, 5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 22.5, 
 SESSION_COOKIE = "felis_session"
 PREVIEW_ROLE_COOKIE = "felis_preview_role"
 PREVIEW_THEME_COOKIE = "felis_preview_theme"
+DEFAULT_THEME = "steel_copper"
 VLADIVOSTOK_TZ = timezone(timedelta(hours=10))
 ROLE_PREVIEW_OPTIONS = [
     ("", "Админ"),
@@ -95,7 +96,7 @@ ROLE_PREVIEW_OPTIONS = [
     ("management", "Руководство компании"),
 ]
 THEME_PREVIEW_OPTIONS = [
-    ("", "Текущая"),
+    ("", "Боевая: сталь + медный"),
     ("cool_gray", "Холодный серый"),
     ("steel_copper", "Сталь + медный"),
 ]
@@ -2355,8 +2356,9 @@ def layout(
 ) -> str:
     current_preview_options = current_user.get("preview_role_options", ROLE_PREVIEW_OPTIONS) if current_user else ROLE_PREVIEW_OPTIONS
     current_theme_options = THEME_PREVIEW_OPTIONS
-    current_theme = current_user.get("preview_theme", "") if current_user else ""
-    current_theme_label = THEME_PREVIEW_LABELS.get(current_theme, THEME_PREVIEW_LABELS[""])
+    preview_theme = current_user.get("preview_theme", "") if current_user else ""
+    current_theme = preview_theme or DEFAULT_THEME
+    current_theme_label = THEME_PREVIEW_LABELS.get(preview_theme, THEME_PREVIEW_LABELS[""])
     theme_css = THEME_PREVIEW_CSS.get(current_theme, "")
     body_theme_class = f' theme-{current_theme}' if current_theme else ""
     show_sidebar_logo = current_theme in {"cool_gray", "steel_copper"}
@@ -2461,7 +2463,7 @@ def layout(
             f'''
           <div class="preview-note">Предпросмотр темы: {escape(current_theme_label)}</div>
           '''
-            if current_theme
+            if preview_theme
             else ""
           }
           {
