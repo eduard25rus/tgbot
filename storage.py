@@ -63,6 +63,23 @@ class Payment:
 
 
 @dataclass
+class LegalLetter:
+    id: int
+    contract_id: int
+    direction: str
+    letter_date: date
+    subject: str
+    comment: str
+    file_name: str
+    file_path: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+    contract_title: str
+    chat_id: int
+
+
+@dataclass
 class Auction:
     id: int
     owner_chat_id: int
@@ -248,6 +265,21 @@ class Storage:
                     contract_id INTEGER NOT NULL,
                     payment_date TEXT NOT NULL,
                     amount REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS legal_letters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    contract_id INTEGER NOT NULL,
+                    direction TEXT NOT NULL DEFAULT 'outgoing',
+                    letter_date TEXT NOT NULL,
+                    subject TEXT NOT NULL DEFAULT '',
+                    comment TEXT NOT NULL DEFAULT '',
+                    file_name TEXT NOT NULL DEFAULT '',
+                    file_path TEXT NOT NULL DEFAULT '',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
                 );
@@ -1829,6 +1861,53 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
+    def add_legal_letter(
+        self,
+        chat_id: int,
+        contract_id: int,
+        direction: str,
+        letter_date: date,
+        subject: str,
+        comment: str,
+        file_name: str,
+        file_path: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int | None:
+        with self.connection() as conn:
+            contract = conn.execute(
+                """
+                SELECT id
+                FROM contracts
+                WHERE id = ? AND chat_id = ?
+                """,
+                (contract_id, chat_id),
+            ).fetchone()
+            if contract is None:
+                return None
+            cursor = conn.execute(
+                """
+                INSERT INTO legal_letters (
+                    contract_id, direction, letter_date, subject, comment,
+                    file_name, file_path, created_by_user_id, created_by_name, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    contract_id,
+                    direction,
+                    letter_date.strftime(DATE_FMT),
+                    subject.strip(),
+                    comment.strip(),
+                    file_name.strip(),
+                    file_path.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
     def get_payment(self, chat_id: int, payment_id: int) -> Payment | None:
         with self.connection() as conn:
             row = conn.execute(
@@ -1842,6 +1921,21 @@ class Storage:
                 (chat_id, payment_id),
             ).fetchone()
         return self._payment_from_row(row) if row else None
+
+    def get_legal_letter(self, chat_id: int, letter_id: int) -> LegalLetter | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT l.id, l.contract_id, l.direction, l.letter_date, l.subject, l.comment,
+                       l.file_name, l.file_path, l.created_by_user_id, l.created_by_name, l.created_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM legal_letters l
+                JOIN contracts c ON c.id = l.contract_id
+                WHERE c.chat_id = ? AND l.id = ?
+                """,
+                (chat_id, letter_id),
+            ).fetchone()
+        return self._legal_letter_from_row(row) if row else None
 
     def update_payment(self, chat_id: int, payment_id: int, payment_date: date, amount: float) -> bool:
         with self.connection() as conn:
@@ -1886,6 +1980,22 @@ class Storage:
                 (chat_id, contract_id),
             ).fetchall()
         return [self._payment_from_row(row) for row in rows]
+
+    def list_legal_letters_for_contract(self, chat_id: int, contract_id: int) -> list[LegalLetter]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT l.id, l.contract_id, l.direction, l.letter_date, l.subject, l.comment,
+                       l.file_name, l.file_path, l.created_by_user_id, l.created_by_name, l.created_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM legal_letters l
+                JOIN contracts c ON c.id = l.contract_id
+                WHERE c.chat_id = ? AND c.id = ?
+                ORDER BY l.letter_date DESC, l.id DESC
+                """,
+                (chat_id, contract_id),
+            ).fetchall()
+        return [self._legal_letter_from_row(row) for row in rows]
 
     def contract_payment_total(self, chat_id: int, contract_id: int) -> float:
         with self.connection() as conn:
@@ -2114,6 +2224,24 @@ class Storage:
             contract_id=row["contract_id"],
             payment_date=date.fromisoformat(row["payment_date"]),
             amount=float(row["amount"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            contract_title=row["contract_title"],
+            chat_id=row["chat_id"],
+        )
+
+    @staticmethod
+    def _legal_letter_from_row(row: sqlite3.Row) -> LegalLetter:
+        return LegalLetter(
+            id=row["id"],
+            contract_id=row["contract_id"],
+            direction=row["direction"] or "outgoing",
+            letter_date=date.fromisoformat(row["letter_date"]),
+            subject=row["subject"] or "",
+            comment=row["comment"] or "",
+            file_name=row["file_name"] or "",
+            file_path=row["file_path"] or "",
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],

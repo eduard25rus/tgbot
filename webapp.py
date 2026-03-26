@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import cgi
 import os
 import hashlib
 import secrets
 import re
+from pathlib import Path
 from datetime import datetime
 from datetime import date
 from datetime import timedelta
@@ -89,6 +91,11 @@ ROLE_PREVIEW_OPTIONS = [
     ("supply", "Отдел снабжения"),
     ("management", "Руководство компании"),
 ]
+
+LEGAL_LETTER_META = {
+    "incoming": ("← Входящее", "chip danger"),
+    "outgoing": ("→ Исходящее", "chip ok"),
+}
 
 
 def format_amount(amount: float) -> str:
@@ -188,6 +195,21 @@ def local_date_to_utc_naive(value: date) -> datetime:
     local_now = datetime.now(VLADIVOSTOK_TZ)
     local_dt = datetime.combine(value, local_now.time().replace(tzinfo=None, microsecond=0))
     return local_dt.replace(tzinfo=VLADIVOSTOK_TZ).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def contract_upload_root(storage: Storage) -> Path:
+    explicit = os.getenv("UPLOAD_DIR", "").strip()
+    if explicit:
+        root = Path(explicit).expanduser()
+    else:
+        root = storage.db_path.parent / "uploads"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def secure_upload_name(filename: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", filename.strip())
+    return cleaned.strip("._") or "file.pdf"
 
 
 def parse_amount(raw: str) -> float:
@@ -2591,6 +2613,19 @@ def layout(
     .contract-stage-table td:nth-child(2) .contract-table-subtle {{
       width: fit-content;
     }}
+    .legal-letter-topic {{
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.35;
+    }}
+    .legal-letter-file {{
+      color: var(--brand-deep);
+      text-decoration: none;
+      font-weight: 600;
+    }}
+    .legal-letter-file:hover {{
+      text-decoration: underline;
+    }}
     .stage-builder-card {{
       display: grid;
       gap: 12px;
@@ -4489,6 +4524,83 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         """
         for payment in payload["payments"]
     ) or '<tr><td colspan="2">Оплат пока нет.</td></tr>'
+    legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract.id) if has_active_admin_mode(current_user) else []
+    legal_letters_html = "".join(
+        f"""
+        <tr>
+          <td style="text-align:center;"><span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span></td>
+          <td class="nowrap">{format_date(letter.letter_date)}</td>
+          <td>
+            <div class="legal-letter-topic">{escape(letter.subject or 'Без темы')}</div>
+            {f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''}
+          </td>
+          <td><a class="legal-letter-file" href="/contracts/letters/{letter.id}/file?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'PDF')}</a></td>
+          <td>
+            <div class="contract-table-subtle">{escape(letter.created_by_name.strip() or 'Автор неизвестен')}</div>
+            <div class="contract-table-subtle">{format_date(letter.created_at.astimezone(VLADIVOSTOK_TZ).date() if letter.created_at.tzinfo else letter.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
+          </td>
+        </tr>
+        """
+        for letter in legal_letters
+    ) or '<tr><td colspan="5">Юридических писем пока нет.</td></tr>'
+    legal_section_html = ""
+    if has_active_admin_mode(current_user):
+        legal_section_html = f"""
+        <section class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Юридическая переписка</h2>
+              <div class="panel-sub">Входящие и исходящие письма по контракту с PDF-вложениями.</div>
+            </div>
+          </div>
+          <table class="table contract-table">
+            <thead>
+              <tr>
+                <th class="nowrap">Тип</th>
+                <th class="nowrap">Дата</th>
+                <th>О чем письмо</th>
+                <th class="nowrap">PDF</th>
+                <th class="nowrap">Добавил</th>
+              </tr>
+            </thead>
+            <tbody>{legal_letters_html}</tbody>
+          </table>
+          <section class="card panel" style="margin-top:18px; background:rgba(255,255,255,0.28);">
+            <div class="panel-head">
+              <div>
+                <h3 class="panel-title" style="font-size:22px;">Добавить письмо</h3>
+                <div class="panel-sub">Зафиксируйте входящее или исходящее письмо и прикрепите PDF.</div>
+              </div>
+            </div>
+            <form class="form-grid" method="post" action="/contracts/{contract.id}/letters/new?owner={owner_chat_id}" enctype="multipart/form-data">
+              <div class="field">
+                <label>Тип письма</label>
+                <select name="direction" required>
+                  <option value="outgoing">Исходящее</option>
+                  <option value="incoming">Входящее</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Дата письма</label>
+                <input type="date" name="letter_date" required>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>О чем письмо</label>
+                <input type="text" name="subject" placeholder="Например, просьба согласовать замену материалов" required>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Комментарий</label>
+                <textarea name="comment" placeholder="Коротко зафиксируйте суть переписки"></textarea>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>PDF-файл</label>
+                <input type="file" name="pdf_file" accept="application/pdf,.pdf" required>
+              </div>
+              <button class="submit-btn" type="submit">Добавить письмо</button>
+            </form>
+          </section>
+        </section>
+        """
 
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     return f"""
@@ -4555,6 +4667,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <tbody>{stages_html}</tbody>
       </table>
     </section>
+    {legal_section_html}
     <section class="grid" style="margin-top:22px;">
       <section class="card panel">
         <div class="panel-head">
@@ -5933,6 +6046,20 @@ def read_post_data(environ) -> dict[str, str]:
     raw = environ["wsgi.input"].read(length).decode("utf-8")
     parsed = parse_qs(raw)
     return {key: values[0] for key, values in parsed.items()}
+
+
+def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, cgi.FieldStorage]]:
+    form = cgi.FieldStorage(fp=environ["wsgi.input"], environ=environ, keep_blank_values=True)
+    fields: dict[str, str] = {}
+    files: dict[str, cgi.FieldStorage] = {}
+    if not getattr(form, "list", None):
+        return fields, files
+    for item in form.list:
+        if item.filename:
+            files[item.name] = item
+        else:
+            fields[item.name] = item.value
+    return fields, files
 
 
 def redirect(start_response, location: str):
@@ -7416,6 +7543,104 @@ def app(environ, start_response):
             html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/") and path.endswith("/letters/new") and method == "POST":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        contract_id = -1
+        try:
+            contract_id = int(path.split("/")[2])
+            contract = storage.get_contract(current_owner, contract_id)
+            if contract is None:
+                raise ValueError("Контракт не найден")
+            form, files = read_multipart_form_data(environ)
+            direction = form.get("direction", "outgoing").strip()
+            if direction not in LEGAL_LETTER_META:
+                raise ValueError("Некорректный тип письма")
+            letter_date_raw = form.get("letter_date", "").strip()
+            if not letter_date_raw:
+                raise ValueError("Укажите дату письма")
+            subject = form.get("subject", "").strip()
+            if not subject:
+                raise ValueError("Укажите, о чем письмо")
+            upload = files.get("pdf_file")
+            if upload is None or not getattr(upload, "filename", "").strip():
+                raise ValueError("Прикрепите PDF-файл")
+            original_name = upload.filename.strip()
+            if not original_name.lower().endswith(".pdf"):
+                raise ValueError("Можно прикреплять только PDF")
+            file_bytes = upload.file.read()
+            if not file_bytes:
+                raise ValueError("PDF-файл пустой")
+            if len(file_bytes) > 20 * 1024 * 1024:
+                raise ValueError("PDF-файл не должен быть больше 20 МБ")
+            upload_root = contract_upload_root(storage)
+            letters_dir = upload_root / "legal_letters" / str(current_owner) / str(contract_id)
+            letters_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = secure_upload_name(original_name)
+            final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
+            file_path = letters_dir / final_name
+            file_path.write_bytes(file_bytes)
+            relative_path = file_path.relative_to(upload_root).as_posix()
+            created = storage.add_legal_letter(
+                current_owner,
+                contract_id,
+                direction,
+                parse_date(letter_date_raw),
+                subject,
+                form.get("comment", ""),
+                original_name,
+                relative_path,
+                current_user.get("id") if current_user else None,
+                current_user.get("full_name", "").strip() if current_user else "",
+            )
+            if created is None:
+                raise ValueError("Не удалось сохранить письмо")
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить письмо: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/letters/") and path.endswith("/file") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            letter_id = int(path.split("/")[3])
+            letter = storage.get_legal_letter(current_owner, letter_id)
+            if letter is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Letter not found"]
+            upload_root = contract_upload_root(storage).resolve()
+            absolute_path = (upload_root / letter.file_path).resolve()
+            if upload_root not in absolute_path.parents and absolute_path != upload_root:
+                start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Forbidden"]
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            headers = [
+                ("Content-Type", "application/pdf"),
+                ("Content-Disposition", f'inline; filename="{secure_upload_name(letter.file_name or "letter.pdf")}"'),
+            ]
+            start_response("200 OK", headers)
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
 
     if path.startswith("/contracts/"):
         denied = guard("contracts", "view")
