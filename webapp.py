@@ -227,14 +227,34 @@ def secure_upload_name(filename: str) -> str:
     return cleaned.strip("._") or "file.pdf"
 
 
+def detect_legal_file_type(file_path: Path, fallback_name: str) -> tuple[str, str]:
+    safe_filename = secure_upload_name(fallback_name or file_path.name or "file")
+    suffix = Path(safe_filename).suffix.lower()
+    try:
+        header = file_path.read_bytes()[:16]
+    except OSError:
+        header = b""
+    if header.startswith(b"%PDF"):
+        if suffix != ".pdf":
+            safe_filename = f"{Path(safe_filename).stem}.pdf"
+        return safe_filename, "application/pdf"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        if suffix != ".png":
+            safe_filename = f"{Path(safe_filename).stem}.png"
+        return safe_filename, "image/png"
+    if header.startswith(b"\xff\xd8\xff"):
+        if suffix not in {".jpg", ".jpeg"}:
+            safe_filename = f"{Path(safe_filename).stem}.jpg"
+        return safe_filename, "image/jpeg"
+    return safe_filename, LEGAL_UPLOAD_MIME.get(suffix, "application/octet-stream")
+
+
 def resolve_legal_letter_file(storage: Storage, letter) -> tuple[Path, str, str]:
     upload_root = contract_upload_root(storage).resolve()
     absolute_path = (upload_root / letter.file_path).resolve()
     if upload_root not in absolute_path.parents and absolute_path != upload_root:
         raise ValueError("Forbidden")
-    safe_filename = secure_upload_name(letter.file_name or "letter.pdf")
-    suffix = Path(safe_filename).suffix.lower()
-    content_type = LEGAL_UPLOAD_MIME.get(suffix, "application/octet-stream")
+    safe_filename, content_type = detect_legal_file_type(absolute_path, letter.file_name or absolute_path.name or "file")
     return absolute_path, safe_filename, content_type
 
 
