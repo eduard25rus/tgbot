@@ -103,6 +103,8 @@ LEGAL_UPLOAD_MIME = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
 
@@ -246,6 +248,13 @@ def detect_legal_file_type(file_path: Path, fallback_name: str) -> tuple[str, st
         if suffix not in {".jpg", ".jpeg"}:
             safe_filename = f"{Path(safe_filename).stem}.jpg"
         return safe_filename, "image/jpeg"
+    if header.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+        if suffix != ".doc":
+            safe_filename = f"{Path(safe_filename).stem}.doc"
+        return safe_filename, "application/msword"
+    if header.startswith(b"PK\x03\x04"):
+        if suffix == ".docx":
+            return safe_filename, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     return safe_filename, LEGAL_UPLOAD_MIME.get(suffix, "application/octet-stream")
 
 
@@ -256,6 +265,72 @@ def resolve_legal_letter_file(storage: Storage, letter) -> tuple[Path, str, str]
         raise ValueError("Forbidden")
     safe_filename, content_type = detect_legal_file_type(absolute_path, letter.file_name or absolute_path.name or "file")
     return absolute_path, safe_filename, content_type
+
+
+def render_legal_file_preview_page(file_url: str, download_url: str, safe_filename: str, content_type: str) -> str:
+    if content_type == "application/pdf":
+        preview_html = f'''
+        <object data="{file_url}" type="application/pdf" style="width:100%; height:100vh; border:none; background:#f7f3ec;">
+          <div style="padding:24px; font-family:inherit;">
+            Предпросмотр PDF не загрузился.
+          </div>
+        </object>
+        '''
+    elif content_type.startswith("image/"):
+        preview_html = f'<div style="display:flex; justify-content:center; align-items:center; min-height:100vh; background:#f7f3ec; padding:24px;"><img src="{file_url}" alt="{escape(safe_filename)}" style="max-width:100%; max-height:90vh; object-fit:contain; border-radius:16px;"></div>'
+    else:
+        preview_html = f'''
+        <div style="min-height:100vh; display:flex; align-items:center; justify-content:center; background:#f7f3ec; padding:24px;">
+          <div style="max-width:640px; width:100%; background:#fffaf2; border:1px solid #d5c8b7; border-radius:24px; padding:28px; text-align:center; font-family:inherit;">
+            <div style="font-size:28px; font-weight:700; color:#1d2a3a; margin-bottom:10px;">Предпросмотр недоступен</div>
+            <div style="font-size:16px; color:#6d7a86; line-height:1.5; margin-bottom:18px;">Для файлов DOC и DOCX браузерный просмотр нестабилeн. Файл можно сразу скачать и открыть локально.</div>
+            <a href="{download_url}" style="display:inline-flex; align-items:center; justify-content:center; padding:14px 22px; border-radius:999px; background:#285f64; color:#fff; text-decoration:none; font-weight:700;">Скачать файл</a>
+          </div>
+        </div>
+        '''
+    return f"""<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{escape(safe_filename)}</title>
+    <style>
+      html, body {{
+        margin: 0;
+        padding: 0;
+        min-height: 100%;
+        background: #f7f3ec;
+      }}
+      body {{
+        font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+      }}
+      .download-bar {{
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        z-index: 10;
+      }}
+      .download-btn {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 18px;
+        border-radius: 999px;
+        background: #285f64;
+        color: #fff;
+        text-decoration: none;
+        font-weight: 700;
+        box-shadow: 0 12px 28px rgba(21, 44, 52, 0.18);
+      }}
+    </style>
+  </head>
+  <body>
+    {preview_html}
+    <div class="download-bar">
+      <a class="download-btn" href="{download_url}">Скачать файл</a>
+    </div>
+  </body>
+</html>"""
 
 
 def parse_amount(raw: str) -> float:
@@ -4587,6 +4662,10 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         for payment in payload["payments"]
     ) or '<tr><td colspan="2">Оплат пока нет.</td></tr>'
     legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract.id) if has_active_admin_mode(current_user) else []
+    legal_attachments = storage.list_legal_letter_attachments_for_contract(owner_chat_id, contract.id) if has_active_admin_mode(current_user) else []
+    attachment_map: dict[int, list] = {}
+    for attachment in legal_attachments:
+        attachment_map.setdefault(attachment.letter_id, []).append(attachment)
     legal_letters_html = "".join(
         f"""
         <tr>
@@ -4597,10 +4676,18 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             {f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''}
           </td>
           <td>
-            <div class="legal-letter-file-stack">
-              <a class="legal-letter-file" href="/contracts/letters/{letter.id}/file?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'Файл')}</a>
-              <a class="legal-letter-download" href="/contracts/letters/{letter.id}/download?owner={owner_chat_id}">Скачать</a>
-            </div>
+            {"".join(
+              f'''<div class="legal-letter-file-stack">
+                    <a class="legal-letter-file" href="/contracts/letter-files/{attachment.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(attachment.file_name or 'Файл')}</a>
+                    <a class="legal-letter-download" href="/contracts/letter-files/{attachment.id}/download?owner={owner_chat_id}">Скачать</a>
+                  </div>'''
+              for attachment in attachment_map.get(letter.id, [])
+            ) or (
+              f'''<div class="legal-letter-file-stack">
+                    <a class="legal-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'Файл')}</a>
+                    <a class="legal-letter-download" href="/contracts/letters/{letter.id}/download?owner={owner_chat_id}">Скачать</a>
+                  </div>''' if letter.file_path else '<span class="contract-table-subtle">Файл не прикреплен</span>'
+            )}
           </td>
           <td>
             <div class="contract-table-subtle">{escape(letter.created_by_name.strip() or 'Автор неизвестен')}</div>
@@ -4660,8 +4747,8 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
                 <textarea name="comment" placeholder="Коротко зафиксируйте суть переписки"></textarea>
               </div>
               <div class="field" style="grid-column: 1 / -1;">
-                <label>Файл письма</label>
-                <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png" required>
+                <label>Файлы письма</label>
+                <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" multiple required>
               </div>
               <button class="submit-btn" type="submit">Добавить письмо</button>
             </form>
@@ -6115,7 +6202,7 @@ def read_post_data(environ) -> dict[str, str]:
     return {key: values[0] for key, values in parsed.items()}
 
 
-def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, UploadedFile]]:
+def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, list[UploadedFile]]]:
     try:
         length = int(environ.get("CONTENT_LENGTH", "0") or "0")
     except ValueError:
@@ -6129,7 +6216,7 @@ def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, Uploade
         f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + raw
     )
     fields: dict[str, str] = {}
-    files: dict[str, UploadedFile] = {}
+    files: dict[str, list[UploadedFile]] = {}
     for part in message.iter_parts():
         name = part.get_param("name", header="content-disposition")
         if not name:
@@ -6137,11 +6224,11 @@ def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, Uploade
         filename = part.get_filename()
         payload = part.get_payload(decode=True) or b""
         if filename:
-            files[name] = UploadedFile(
+            files.setdefault(name, []).append(UploadedFile(
                 filename=filename,
                 content_type=part.get_content_type(),
                 data=payload,
-            )
+            ))
         else:
             charset = part.get_content_charset() or "utf-8"
             fields[name] = payload.decode(charset, errors="replace")
@@ -7655,26 +7742,12 @@ def app(environ, start_response):
             subject = form.get("subject", "").strip()
             if not subject:
                 raise ValueError("Укажите, о чем письмо")
-            upload = files.get("pdf_file")
-            if upload is None or not upload.filename.strip():
-                raise ValueError("Прикрепите PDF-файл")
-            original_name = upload.filename.strip()
-            lower_name = original_name.lower()
-            if not any(lower_name.endswith(ext) for ext in LEGAL_UPLOAD_MIME):
-                raise ValueError("Можно прикреплять только PDF, JPG, JPEG или PNG")
-            file_bytes = upload.data
-            if not file_bytes:
-                raise ValueError("Файл пустой")
-            if len(file_bytes) > 20 * 1024 * 1024:
-                raise ValueError("Файл не должен быть больше 20 МБ")
+            uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
+            if not uploads:
+                raise ValueError("Прикрепите хотя бы один файл")
             upload_root = contract_upload_root(storage)
             letters_dir = upload_root / "legal_letters" / str(current_owner) / str(contract_id)
             letters_dir.mkdir(parents=True, exist_ok=True)
-            safe_name = secure_upload_name(original_name)
-            final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
-            file_path = letters_dir / final_name
-            file_path.write_bytes(file_bytes)
-            relative_path = file_path.relative_to(upload_root).as_posix()
             created = storage.add_legal_letter(
                 current_owner,
                 contract_id,
@@ -7682,13 +7755,45 @@ def app(environ, start_response):
                 parse_date(letter_date_raw),
                 subject,
                 form.get("comment", ""),
-                original_name,
-                relative_path,
+                uploads[0].filename.strip(),
+                "",
                 current_user.get("id") if current_user else None,
                 current_user.get("full_name", "").strip() if current_user else "",
             )
             if created is None:
                 raise ValueError("Не удалось сохранить письмо")
+            first_relative_path = ""
+            for index, upload in enumerate(uploads):
+                original_name = upload.filename.strip()
+                lower_name = original_name.lower()
+                if not any(lower_name.endswith(ext) for ext in LEGAL_UPLOAD_MIME):
+                    raise ValueError("Можно прикреплять только PDF, JPG, JPEG, PNG, DOC или DOCX")
+                file_bytes = upload.data
+                if not file_bytes:
+                    raise ValueError("Один из файлов пустой")
+                if len(file_bytes) > 20 * 1024 * 1024:
+                    raise ValueError("Каждый файл должен быть не больше 20 МБ")
+                safe_name = secure_upload_name(original_name)
+                final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
+                file_path = letters_dir / final_name
+                file_path.write_bytes(file_bytes)
+                relative_path = file_path.relative_to(upload_root).as_posix()
+                if index == 0:
+                    first_relative_path = relative_path
+                if storage.add_legal_letter_attachment(current_owner, created, original_name, relative_path) is None:
+                    raise ValueError("Не удалось сохранить вложение")
+            if first_relative_path:
+                with storage.connection() as conn:
+                    conn.execute(
+                        """
+                        UPDATE legal_letters
+                        SET file_path = ?
+                        WHERE id = ? AND contract_id IN (
+                            SELECT id FROM contracts WHERE chat_id = ?
+                        )
+                        """,
+                        (first_relative_path, created, current_owner),
+                    )
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить письмо: {exc}")
@@ -7720,6 +7825,88 @@ def app(environ, start_response):
             ]
             start_response("200 OK", headers)
             return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
+    if path.startswith("/contracts/letter-files/") and path.endswith("/file") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            attachment_id = int(path.split("/")[3])
+            attachment = storage.get_legal_letter_attachment(current_owner, attachment_id)
+            if attachment is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Attachment not found"]
+            absolute_path, safe_filename, content_type = resolve_legal_letter_file(storage, attachment)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            start_response("200 OK", [("Content-Type", content_type)])
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
+    if path.startswith("/contracts/letter-files/") and path.endswith("/download") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            attachment_id = int(path.split("/")[3])
+            attachment = storage.get_legal_letter_attachment(current_owner, attachment_id)
+            if attachment is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Attachment not found"]
+            absolute_path, safe_filename, content_type = resolve_legal_letter_file(storage, attachment)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            headers = [
+                ("Content-Type", content_type),
+                ("Content-Disposition", f'attachment; filename="{safe_filename}"'),
+            ]
+            start_response("200 OK", headers)
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
+    if path.startswith("/contracts/letter-files/") and path.endswith("/preview") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            attachment_id = int(path.split("/")[3])
+            attachment = storage.get_legal_letter_attachment(current_owner, attachment_id)
+            if attachment is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Attachment not found"]
+            absolute_path, safe_filename, content_type = resolve_legal_letter_file(storage, attachment)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            file_url = f"/contracts/letter-files/{attachment.id}/file?owner={current_owner}"
+            download_url = f"/contracts/letter-files/{attachment.id}/download?owner={current_owner}"
+            html = render_legal_file_preview_page(file_url, download_url, safe_filename, content_type)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
@@ -7766,50 +7953,20 @@ def app(environ, start_response):
             letter_id = int(path.split("/")[3])
             letter = storage.get_legal_letter(current_owner, letter_id)
             if letter is None:
-                raise ValueError("Письмо не найдено")
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Letter not found"]
             absolute_path, safe_filename, content_type = resolve_legal_letter_file(storage, letter)
             if not absolute_path.exists():
-                raise ValueError("Файл не найден")
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
             file_url = f"/contracts/letters/{letter.id}/file?owner={current_owner}"
             download_url = f"/contracts/letters/{letter.id}/download?owner={current_owner}"
-            if content_type == "application/pdf":
-                preview_html = f'''
-                <object data="{file_url}" type="application/pdf" style="width:100%; min-height:72vh; border:none; border-radius:22px; background:#fff;">
-                  <div class="contract-table-subtle" style="padding:18px;">
-                    Предпросмотр PDF не загрузился в браузере.
-                    <a class="legal-letter-file" href="{file_url}" target="_blank" rel="noopener">Открыть файл отдельно</a>
-                  </div>
-                </object>
-                '''
-            else:
-                preview_html = f'<div style="display:flex; justify-content:center; padding:8px 0 0;"><img src="{file_url}" alt="{escape(safe_filename)}" style="max-width:100%; max-height:72vh; border-radius:22px; object-fit:contain;"></div>'
-            body = f"""
-            <section class="card panel" style="margin-top:22px;">
-              <div class="panel-head">
-                <a class="chip" href="/contracts/{letter.contract_id}?owner={current_owner}">← К контракту</a>
-                <div>
-                  <h2 class="panel-title">Предпросмотр вложения</h2>
-                  <div class="panel-sub">{escape(letter.subject or safe_filename)}</div>
-                </div>
-              </div>
-              <div class="info-row">
-                <span class="chip">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META['outgoing'])[0])}</span>
-                <span class="chip">{format_date(letter.letter_date)}</span>
-              </div>
-              <div style="margin-top:18px;">{preview_html}</div>
-              <div style="margin-top:18px; display:flex; justify-content:flex-start;">
-                <a class="submit-btn" href="{download_url}">Скачать файл</a>
-              </div>
-            </section>
-            """
-            html = layout("Юридическая переписка", body, owners, current_owner, "contracts", current_user)
+            html = render_legal_file_preview_page(file_url, download_url, safe_filename, content_type)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
-        except Exception as exc:
-            body = render_forbidden_body(f"Контракты: {exc}")
-            html = layout("Предпросмотр вложения", body, owners, current_owner, "contracts", current_user)
-            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
-            return [html.encode("utf-8")]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
 
     if path.startswith("/contracts/"):
         denied = guard("contracts", "view")

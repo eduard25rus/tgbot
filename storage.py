@@ -80,6 +80,18 @@ class LegalLetter:
 
 
 @dataclass
+class LegalLetterAttachment:
+    id: int
+    letter_id: int
+    contract_id: int
+    file_name: str
+    file_path: str
+    created_at: datetime
+    contract_title: str
+    chat_id: int
+
+
+@dataclass
 class Auction:
     id: int
     owner_chat_id: int
@@ -282,6 +294,15 @@ class Storage:
                     created_by_name TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS legal_letter_attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    letter_id INTEGER NOT NULL,
+                    file_name TEXT NOT NULL DEFAULT '',
+                    file_path TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(letter_id) REFERENCES legal_letters(id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS web_users (
@@ -1908,6 +1929,28 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
+    def add_legal_letter_attachment(self, chat_id: int, letter_id: int, file_name: str, file_path: str) -> int | None:
+        with self.connection() as conn:
+            letter = conn.execute(
+                """
+                SELECT l.id
+                FROM legal_letters l
+                JOIN contracts c ON c.id = l.contract_id
+                WHERE l.id = ? AND c.chat_id = ?
+                """,
+                (letter_id, chat_id),
+            ).fetchone()
+            if letter is None:
+                return None
+            cursor = conn.execute(
+                """
+                INSERT INTO legal_letter_attachments (letter_id, file_name, file_path, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (letter_id, file_name.strip(), file_path.strip(), datetime.utcnow().isoformat()),
+            )
+            return int(cursor.lastrowid)
+
     def get_payment(self, chat_id: int, payment_id: int) -> Payment | None:
         with self.connection() as conn:
             row = conn.execute(
@@ -1936,6 +1979,21 @@ class Storage:
                 (chat_id, letter_id),
             ).fetchone()
         return self._legal_letter_from_row(row) if row else None
+
+    def get_legal_letter_attachment(self, chat_id: int, attachment_id: int) -> LegalLetterAttachment | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT a.id, a.letter_id, l.contract_id, a.file_name, a.file_path, a.created_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM legal_letter_attachments a
+                JOIN legal_letters l ON l.id = a.letter_id
+                JOIN contracts c ON c.id = l.contract_id
+                WHERE a.id = ? AND c.chat_id = ?
+                """,
+                (attachment_id, chat_id),
+            ).fetchone()
+        return self._legal_letter_attachment_from_row(row) if row else None
 
     def update_payment(self, chat_id: int, payment_id: int, payment_date: date, amount: float) -> bool:
         with self.connection() as conn:
@@ -1996,6 +2054,22 @@ class Storage:
                 (chat_id, contract_id),
             ).fetchall()
         return [self._legal_letter_from_row(row) for row in rows]
+
+    def list_legal_letter_attachments_for_contract(self, chat_id: int, contract_id: int) -> list[LegalLetterAttachment]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT a.id, a.letter_id, l.contract_id, a.file_name, a.file_path, a.created_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM legal_letter_attachments a
+                JOIN legal_letters l ON l.id = a.letter_id
+                JOIN contracts c ON c.id = l.contract_id
+                WHERE c.chat_id = ? AND c.id = ?
+                ORDER BY a.id ASC
+                """,
+                (chat_id, contract_id),
+            ).fetchall()
+        return [self._legal_letter_attachment_from_row(row) for row in rows]
 
     def contract_payment_total(self, chat_id: int, contract_id: int) -> float:
         with self.connection() as conn:
@@ -2242,6 +2316,19 @@ class Storage:
             file_path=row["file_path"] or "",
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
             created_by_name=row["created_by_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
+            contract_title=row["contract_title"],
+            chat_id=row["chat_id"],
+        )
+
+    @staticmethod
+    def _legal_letter_attachment_from_row(row: sqlite3.Row) -> LegalLetterAttachment:
+        return LegalLetterAttachment(
+            id=row["id"],
+            letter_id=row["letter_id"],
+            contract_id=row["contract_id"],
+            file_name=row["file_name"] or "",
+            file_path=row["file_path"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],
