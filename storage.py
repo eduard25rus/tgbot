@@ -36,6 +36,12 @@ class Stage:
     payment_status: str
     payment_status_updated_at: Optional[datetime]
     payment_status_updated_by_name: str
+    advance_invoice_issued: bool
+    advance_invoice_issued_at: Optional[datetime]
+    advance_invoice_issued_by_name: str
+    final_invoice_issued: bool
+    final_invoice_issued_at: Optional[datetime]
+    final_invoice_issued_by_name: str
     notes: str
     start_date: Optional[date]
     end_date: date
@@ -197,6 +203,12 @@ class Storage:
                     payment_status TEXT NOT NULL DEFAULT 'unpaid',
                     payment_status_updated_at TEXT,
                     payment_status_updated_by_name TEXT NOT NULL DEFAULT '',
+                    advance_invoice_issued INTEGER NOT NULL DEFAULT 0,
+                    advance_invoice_issued_at TEXT,
+                    advance_invoice_issued_by_name TEXT NOT NULL DEFAULT '',
+                    final_invoice_issued INTEGER NOT NULL DEFAULT 0,
+                    final_invoice_issued_at TEXT,
+                    final_invoice_issued_by_name TEXT NOT NULL DEFAULT '',
                     notes TEXT NOT NULL DEFAULT '',
                     start_date TEXT,
                     end_date TEXT NOT NULL,
@@ -398,6 +410,18 @@ class Storage:
                 conn.execute("ALTER TABLE stages ADD COLUMN payment_status_updated_at TEXT")
             if "payment_status_updated_by_name" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN payment_status_updated_by_name TEXT NOT NULL DEFAULT ''")
+            if "advance_invoice_issued" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN advance_invoice_issued INTEGER NOT NULL DEFAULT 0")
+            if "advance_invoice_issued_at" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN advance_invoice_issued_at TEXT")
+            if "advance_invoice_issued_by_name" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN advance_invoice_issued_by_name TEXT NOT NULL DEFAULT ''")
+            if "final_invoice_issued" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN final_invoice_issued INTEGER NOT NULL DEFAULT 0")
+            if "final_invoice_issued_at" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN final_invoice_issued_at TEXT")
+            if "final_invoice_issued_by_name" not in columns:
+                conn.execute("ALTER TABLE stages ADD COLUMN final_invoice_issued_by_name TEXT NOT NULL DEFAULT ''")
             if "start_date" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN start_date TEXT")
             conn.execute(
@@ -1456,9 +1480,12 @@ class Storage:
                 """
                 INSERT INTO stages (
                     contract_id, position, name, status, status_updated_at, status_updated_by_name,
-                    payment_status, payment_status_updated_at, payment_status_updated_by_name, notes, start_date, end_date, amount, created_at
+                    payment_status, payment_status_updated_at, payment_status_updated_by_name,
+                    advance_invoice_issued, advance_invoice_issued_at, advance_invoice_issued_by_name,
+                    final_invoice_issued, final_invoice_issued_at, final_invoice_issued_by_name,
+                    notes, start_date, end_date, amount, created_at
                 )
-                VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', 0, NULL, '', 0, NULL, '', ?, ?, ?, ?, ?)
                 """,
                 (
                     contract_id,
@@ -1480,6 +1507,8 @@ class Storage:
                 """
                 SELECT s.id, s.contract_id, s.position, s.name, s.status, s.status_updated_at, s.status_updated_by_name,
                        s.payment_status, s.payment_status_updated_at, s.payment_status_updated_by_name,
+                       s.advance_invoice_issued, s.advance_invoice_issued_at, s.advance_invoice_issued_by_name,
+                       s.final_invoice_issued, s.final_invoice_issued_at, s.final_invoice_issued_by_name,
                        s.notes, s.start_date, s.end_date, s.amount, s.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM stages s
@@ -1563,6 +1592,45 @@ class Storage:
                     payment_status,
                     payment_status_updated_at.isoformat() if payment_status_updated_at is not None else None,
                     payment_status_updated_by_name,
+                    stage_id,
+                    chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def update_stage_invoice_status(
+        self,
+        chat_id: int,
+        stage_id: int,
+        invoice_kind: str,
+        issued: bool,
+        issued_at: datetime | None,
+        issued_by_name: str,
+    ) -> bool:
+        if invoice_kind == "advance":
+            issued_column = "advance_invoice_issued"
+            at_column = "advance_invoice_issued_at"
+            by_column = "advance_invoice_issued_by_name"
+        elif invoice_kind == "final":
+            issued_column = "final_invoice_issued"
+            at_column = "final_invoice_issued_at"
+            by_column = "final_invoice_issued_by_name"
+        else:
+            return False
+        with self.connection() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE stages
+                SET {issued_column} = ?, {at_column} = ?, {by_column} = ?
+                WHERE id = ?
+                  AND contract_id IN (
+                      SELECT id FROM contracts WHERE chat_id = ?
+                  )
+                """,
+                (
+                    1 if issued else 0,
+                    issued_at.isoformat() if issued and issued_at is not None else None,
+                    issued_by_name if issued else "",
                     stage_id,
                     chat_id,
                 ),
@@ -1668,9 +1736,12 @@ class Storage:
                     """
                     INSERT INTO stages (
                         contract_id, position, name, status, status_updated_at, status_updated_by_name,
-                        payment_status, payment_status_updated_at, payment_status_updated_by_name, notes, start_date, end_date, amount, created_at
+                        payment_status, payment_status_updated_at, payment_status_updated_by_name,
+                        advance_invoice_issued, advance_invoice_issued_at, advance_invoice_issued_by_name,
+                        final_invoice_issued, final_invoice_issued_at, final_invoice_issued_by_name,
+                        notes, start_date, end_date, amount, created_at
                     )
-                    VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', '', ?, ?, ?, ?)
+                    VALUES (?, ?, ?, 'not_started', NULL, '', 'unpaid', NULL, '', 0, NULL, '', 0, NULL, '', '', ?, ?, ?, ?)
                     """,
                     (
                         contract_id,
@@ -1853,6 +1924,8 @@ class Storage:
                 """
                 SELECT s.id, s.contract_id, s.position, s.name, s.status, s.status_updated_at, s.status_updated_by_name,
                        s.payment_status, s.payment_status_updated_at, s.payment_status_updated_by_name,
+                       s.advance_invoice_issued, s.advance_invoice_issued_at, s.advance_invoice_issued_by_name,
+                       s.final_invoice_issued, s.final_invoice_issued_at, s.final_invoice_issued_by_name,
                        s.notes, s.start_date, s.end_date, s.amount, s.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM stages s
@@ -2012,6 +2085,12 @@ class Storage:
             payment_status=row["payment_status"] or "unpaid",
             payment_status_updated_at=datetime.fromisoformat(row["payment_status_updated_at"]) if row["payment_status_updated_at"] is not None else None,
             payment_status_updated_by_name=row["payment_status_updated_by_name"] or "",
+            advance_invoice_issued=bool(row["advance_invoice_issued"]),
+            advance_invoice_issued_at=datetime.fromisoformat(row["advance_invoice_issued_at"]) if row["advance_invoice_issued_at"] is not None else None,
+            advance_invoice_issued_by_name=row["advance_invoice_issued_by_name"] or "",
+            final_invoice_issued=bool(row["final_invoice_issued"]),
+            final_invoice_issued_at=datetime.fromisoformat(row["final_invoice_issued_at"]) if row["final_invoice_issued_at"] is not None else None,
+            final_invoice_issued_by_name=row["final_invoice_issued_by_name"] or "",
             notes=row["notes"],
             start_date=date.fromisoformat(row["start_date"]) if row["start_date"] is not None else None,
             end_date=date.fromisoformat(row["end_date"]),
