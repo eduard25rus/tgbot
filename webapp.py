@@ -4753,7 +4753,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
           <td style="text-align:center;"><span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span></td>
           <td class="nowrap">{format_date(letter.letter_date)}</td>
           <td>
-            {render_legal_letter_editor(storage, owner_chat_id, contract.id, letter, attachment_map.get(letter.id, []), current_user)}
+            {render_legal_letter_editor(owner_chat_id, contract.id, letter, attachment_map.get(letter.id, []), current_user)}
           </td>
           <td>
             {"".join(
