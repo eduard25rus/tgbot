@@ -2672,9 +2672,14 @@ def layout(
     .legal-letter-file:hover {{
       text-decoration: underline;
     }}
+    .legal-letter-file-stack {{
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+    }}
     .legal-letter-download {{
       display: inline-block;
-      margin-top: 6px;
       font-size: 12px;
       color: var(--muted);
       text-decoration: none;
@@ -4592,8 +4597,10 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             {f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''}
           </td>
           <td>
-            <a class="legal-letter-file" href="/contracts/letters/{letter.id}/file?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'Файл')}</a>
-            <a class="legal-letter-download" href="/contracts/letters/{letter.id}/download?owner={owner_chat_id}">Скачать</a>
+            <div class="legal-letter-file-stack">
+              <a class="legal-letter-file" href="/contracts/letters/{letter.id}/file?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'Файл')}</a>
+              <a class="legal-letter-download" href="/contracts/letters/{letter.id}/download?owner={owner_chat_id}">Скачать</a>
+            </div>
           </td>
           <td>
             <div class="contract-table-subtle">{escape(letter.created_by_name.strip() or 'Автор неизвестен')}</div>
