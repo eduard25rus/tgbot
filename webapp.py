@@ -2652,6 +2652,17 @@ def layout(
     .legal-letter-file:hover {{
       text-decoration: underline;
     }}
+    .legal-letter-download {{
+      display: inline-block;
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      text-decoration: none;
+    }}
+    .legal-letter-download:hover {{
+      text-decoration: underline;
+      color: var(--brand-deep);
+    }}
     .stage-builder-card {{
       display: grid;
       gap: 12px;
@@ -4560,7 +4571,10 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             <div class="legal-letter-topic">{escape(letter.subject or 'Без темы')}</div>
             {f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''}
           </td>
-          <td><a class="legal-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}">{escape(letter.file_name or 'Файл')}</a></td>
+          <td>
+            <a class="legal-letter-file" href="/contracts/letters/{letter.id}/file?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'Файл')}</a>
+            <a class="legal-letter-download" href="/contracts/letters/{letter.id}/download?owner={owner_chat_id}">Скачать</a>
+          </td>
           <td>
             <div class="contract-table-subtle">{escape(letter.created_by_name.strip() or 'Автор неизвестен')}</div>
             <div class="contract-table-subtle">{format_date(letter.created_at.astimezone(VLADIVOSTOK_TZ).date() if letter.created_at.tzinfo else letter.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
@@ -7676,7 +7690,6 @@ def app(environ, start_response):
                 return [b"File not found"]
             headers = [
                 ("Content-Type", content_type),
-                ("Content-Disposition", f'inline; filename="{safe_filename}"'),
             ]
             start_response("200 OK", headers)
             return [absolute_path.read_bytes()]
