@@ -17,6 +17,8 @@ class Contract:
     id: int
     chat_id: int
     title: str
+    contract_number: str
+    eis_url: str
     description: str
     signed_date: Optional[date]
     end_date: date
@@ -213,6 +215,8 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER NOT NULL,
                     title TEXT NOT NULL,
+                    contract_number TEXT NOT NULL DEFAULT '',
+                    eis_url TEXT NOT NULL DEFAULT '',
                     description TEXT NOT NULL DEFAULT '',
                     signed_date TEXT,
                     end_date TEXT NOT NULL,
@@ -515,6 +519,10 @@ class Storage:
                     WHERE signed_date IS NULL OR signed_date = ''
                     """
                 )
+            if "contract_number" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN contract_number TEXT NOT NULL DEFAULT ''")
+            if "eis_url" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN eis_url TEXT NOT NULL DEFAULT ''")
             payroll_alters = [
                 ("advance_card_paid_amount", "REAL NOT NULL DEFAULT 0"),
                 ("advance_card_paid_date", "TEXT"),
@@ -1493,7 +1501,7 @@ class Storage:
                 (viewer_username, viewer_name, owner_chat_id, viewer_user_id),
             )
 
-    def add_contract(self, chat_id: int, title: str, description: str, signed_date: date | None, end_date: date, advance_percent: float | None = None) -> int:
+    def add_contract(self, chat_id: int, title: str, contract_number: str, eis_url: str, description: str, signed_date: date | None, end_date: date, advance_percent: float | None = None) -> int:
         with self.connection() as conn:
             conn.execute(
                 """
@@ -1504,12 +1512,14 @@ class Storage:
             )
             cursor = conn.execute(
                 """
-                INSERT INTO contracts (chat_id, title, description, signed_date, end_date, advance_percent, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO contracts (chat_id, title, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
                     title.strip(),
+                    contract_number.strip(),
+                    eis_url.strip(),
                     description.strip(),
                     signed_date.strftime(DATE_FMT) if signed_date is not None else None,
                     end_date.strftime(DATE_FMT),
@@ -1518,6 +1528,18 @@ class Storage:
                 ),
             )
             return int(cursor.lastrowid)
+
+    def update_contract_identity(self, chat_id: int, contract_id: int, contract_number: str, eis_url: str) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE contracts
+                SET contract_number = ?, eis_url = ?
+                WHERE id = ? AND chat_id = ?
+                """,
+                (contract_number.strip(), eis_url.strip(), contract_id, chat_id),
+            )
+            return cursor.rowcount > 0
 
     def add_stage(self, contract_id: int, position: int, notes: str, start_date: date | None, end_date: date, amount: float) -> int:
         with self.connection() as conn:
@@ -2135,7 +2157,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, chat_id, title, description, signed_date, end_date, advance_percent, created_at
+                SELECT id, chat_id, title, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ?
                 ORDER BY end_date ASC, id ASC
@@ -2148,7 +2170,7 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT id, chat_id, title, description, signed_date, end_date, advance_percent, created_at
+                SELECT id, chat_id, title, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ? AND id = ?
                 """,
@@ -2303,6 +2325,8 @@ class Storage:
             id=row["id"],
             chat_id=row["chat_id"],
             title=row["title"],
+            contract_number=row["contract_number"] or "",
+            eis_url=row["eis_url"] or "",
             description=row["description"],
             signed_date=date.fromisoformat(row["signed_date"]) if row["signed_date"] is not None and row["signed_date"] != "" else None,
             end_date=date.fromisoformat(row["end_date"]),

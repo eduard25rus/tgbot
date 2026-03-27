@@ -1509,6 +1509,42 @@ def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user:
     """
 
 
+def render_contract_identity_block(owner_chat_id: int, contract, current_user: dict | None) -> str:
+    contract_number = contract.contract_number.strip() or "Не указан"
+    eis_url = contract.eis_url.strip()
+    eis_button = (
+        f'<a class="secondary-btn" href="{escape(eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>'
+        if eis_url
+        else '<span class="contract-table-subtle">Ссылка на ЕИС не указана</span>'
+    )
+    display = f"""
+    <div class="action-row" style="justify-content:flex-start; gap:10px; margin-top:6px; flex-wrap:wrap;">
+      <span class="contract-table-subtle">Контракт № {escape(contract_number)}</span>
+      {eis_button}
+    </div>
+    """
+    if not can_edit_contract_stage_controls(current_user):
+        return display
+    return f"""
+    <details class="status-menu lot-menu" style="margin-top:6px;">
+      <summary>{display}</summary>
+      <div class="status-popover lot-form">
+        <form class="form-grid" method="post" action="/contracts/{contract.id}/identity?owner={owner_chat_id}">
+          <div class="field">
+            <label>Номер контракта</label>
+            <input type="text" name="contract_number" value="{escape(contract.contract_number)}" inputmode="numeric" pattern="[0-9]+" required>
+          </div>
+          <div class="field">
+            <label>Ссылка на ЕИС</label>
+            <input type="url" name="eis_url" value="{escape(contract.eis_url)}" placeholder="https://..." required>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить реквизиты</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
 def render_auction_status_form(
     owner_chat_id: int,
     auction_id: int,
@@ -4952,6 +4988,14 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
             <input type="text" name="title" required>
           </div>
           <div class="field">
+            <label>Номер контракта</label>
+            <input type="text" name="contract_number" inputmode="numeric" pattern="[0-9]+" placeholder="Только цифры" required>
+          </div>
+          <div class="field">
+            <label>Ссылка на ЕИС</label>
+            <input type="url" name="eis_url" placeholder="https://..." required>
+          </div>
+          <div class="field">
             <label>Общая сумма</label>
             <input type="text" name="total_amount" placeholder="15000000" data-money-input="1" required>
           </div>
@@ -5188,11 +5232,11 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
           <div class="panel-sub">
             {escape(contract.description) if contract.description else 'Описание пока не заполнено.'}
           </div>
+          {render_contract_identity_block(owner_chat_id, contract, current_user)}
         </div>
         <a class="chip" href="/?owner={owner_chat_id}">← Назад к дашборду</a>
       </div>
       <div class="info-row">
-        <span class="chip">ID: {contract.id}</span>
         {render_contract_signed_date_chip(owner_chat_id, contract, current_user)}
         <span class="chip">Старт работ: {format_date(payload["first_stage_start_date"]) if payload["first_stage_start_date"] is not None else "Не задан"}</span>
         <span class="chip">Дедлайн: {format_date(contract.end_date)}</span>
@@ -6971,6 +7015,8 @@ def app(environ, start_response):
         form = read_post_data(environ)
         try:
             title = form["title"].strip()
+            contract_number = form.get("contract_number", "").strip()
+            eis_url = form.get("eis_url", "").strip()
             description = form.get("description", "").strip()
             total_amount = parse_amount(form["total_amount"])
             signed_date = parse_date(form["signed_date"])
@@ -6979,6 +7025,10 @@ def app(environ, start_response):
             advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
             if not title:
                 raise ValueError("Название контракта обязательно")
+            if not contract_number or not contract_number.isdigit():
+                raise ValueError("В номере контракта должны быть только цифры")
+            if not eis_url:
+                raise ValueError("Ссылка на ЕИС обязательна")
             if total_amount <= 0:
                 raise ValueError("Общая сумма контракта должна быть больше 0")
             if stage_count < 1:
@@ -7005,7 +7055,7 @@ def app(environ, start_response):
             if abs(stage_total - total_amount) > 0.01:
                 raise ValueError("Сумма этапов должна совпадать с общей суммой контракта")
             contract_end_date = max(item[3] for item in stage_specs)
-            contract_id = storage.add_contract(current_owner, title, description, signed_date, contract_end_date, advance_percent)
+            contract_id = storage.add_contract(current_owner, title, contract_number, eis_url, description, signed_date, contract_end_date, advance_percent)
             for index, amount, start_date, end_date, notes in stage_specs:
                 storage.add_stage(contract_id, index, notes, start_date, end_date, amount)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
@@ -7904,6 +7954,31 @@ def app(environ, start_response):
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить дату контракта: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/") and path.endswith("/identity") and method == "POST":
+        if not can_edit_contract_stage_controls(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            contract_id = int(path.split("/")[2])
+            form = read_post_data(environ)
+            contract_number = form.get("contract_number", "").strip()
+            eis_url = form.get("eis_url", "").strip()
+            if not contract_number or not contract_number.isdigit():
+                raise ValueError("В номере контракта должны быть только цифры")
+            if not eis_url:
+                raise ValueError("Ссылка на ЕИС обязательна")
+            updated = storage.update_contract_identity(current_owner, contract_id, contract_number, eis_url)
+            if not updated:
+                raise ValueError("Контракт не найден")
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить реквизиты контракта: {exc}")
             html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
