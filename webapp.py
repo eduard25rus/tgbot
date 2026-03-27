@@ -6275,10 +6275,27 @@ def render_payable_added_meta(entry) -> str:
 
 
 def render_payable_amount_cell(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
+    return f'<div class="nowrap">{render_payable_amount_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</div>'
+
+
+def render_payable_comment_cell(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
+    comment_html = render_payable_text_cell_editor(
+        owner_chat_id,
+        entry,
+        current_user,
+        "comment",
+        "Комментарий",
+        entry.comment,
+        "Например, щебень",
+        active_tab,
+        counterparty_filter,
+        sort_key,
+        sort_order,
+    )
     return f"""
-    <div style="display:grid; gap:6px; justify-items:center;">
-      <div class="nowrap">{render_payable_amount_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</div>
-      <div class="contract-table-subtle" style="text-align:center; max-width:220px;">{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</div>
+    <div style="display:grid; gap:6px;">
+      <div>{comment_html}</div>
+      <div class="payable-document-note" style="max-width:260px;">{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</div>
     </div>
     """
 
@@ -6474,7 +6491,7 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
             </span>
           </td>
           <td>{render_payable_text_cell_editor(owner_chat_id, entry, current_user, "object_name", "Объект", entry.object_name, "Например, Строитель", active_tab, counterparty_filter, sort_key, sort_order)}</td>
-          <td>{render_payable_text_cell_editor(owner_chat_id, entry, current_user, "comment", "Комментарий", entry.comment, "Например, щебень", active_tab, counterparty_filter, sort_key, sort_order)}</td>
+          <td>{render_payable_comment_cell(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td class="nowrap" style="text-align:center;">{render_payable_amount_cell(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td>{render_payable_payment_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td class="nowrap" style="text-align:center;">{format_amount(payable_metrics(entry)["outstanding"]) if payable_metrics(entry)["outstanding"] > 0.009 else '—'}</td>
