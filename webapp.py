@@ -3291,6 +3291,10 @@ def layout(
       table-layout: fixed;
       width: 100%;
     }}
+    .contract-registry-table th:first-child,
+    .contract-registry-table td:first-child {{
+      width: 36%;
+    }}
     .contract-registry-table th:nth-child(n+2),
     .contract-registry-table td:nth-child(n+2) {{
       text-align: center;
