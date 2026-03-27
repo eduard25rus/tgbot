@@ -3046,6 +3046,14 @@ def layout(
     .contract-chip-menu summary {{
       display: inline-flex;
       align-items: center;
+      margin: 0;
+      padding: 0;
+      line-height: 1;
+    }}
+    .contract-chip-menu summary .chip {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }}
     .panel-title {{
       font-size: 22px;
