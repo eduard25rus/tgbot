@@ -813,14 +813,7 @@ def is_management_user(current_user: dict | None) -> bool:
 
 
 def can_edit_contract_stage_controls(current_user: dict | None) -> bool:
-    return bool(
-        current_user
-        and (
-            has_active_admin_mode(current_user)
-            or is_management_user(current_user)
-            or is_procurement_user(current_user)
-        )
-    )
+    return has_permission(current_user, "contracts", "edit")
 
 
 def can_view_legal_correspondence(current_user: dict | None) -> bool:
