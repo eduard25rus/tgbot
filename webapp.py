@@ -2114,13 +2114,14 @@ def render_discount_form(
 
 def render_deadline_form(owner_chat_id: int, auction_id: int, current_date: date, note: str, is_danger: bool, active_tab: str) -> str:
     note_block = ""
+    date_class = "deadline-date danger" if is_danger else "deadline-date"
     if note:
         note_class = "deadline-meta danger" if is_danger else "deadline-meta"
         note_block = f'<div class="{note_class}">{escape(note)}</div>'
     return f"""
     <details class="status-menu">
       <summary>
-        <div>{format_date(current_date)}</div>
+        <div class="{date_class}">{format_date(current_date)}</div>
         {note_block}
       </summary>
       <form class="status-popover deadline-form" method="post" action="/auctions/{auction_id}/deadline?owner={owner_chat_id}&tab={escape(active_tab)}">
@@ -2138,12 +2139,13 @@ def render_deadline_form(owner_chat_id: int, auction_id: int, current_date: date
 
 def render_deadline_display(current_date: date, note: str, is_danger: bool) -> str:
     note_block = ""
+    date_class = "deadline-date danger" if is_danger else "deadline-date"
     if note:
         note_class = "deadline-meta danger" if is_danger else "deadline-meta"
         note_block = f'<div class="{note_class}">{escape(note)}</div>'
     return f"""
     <div>
-      <div>{format_date(current_date)}</div>
+      <div class="{date_class}">{format_date(current_date)}</div>
       {note_block}
     </div>
     """
@@ -2501,13 +2503,17 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
     management_user = is_management_user(current_user)
     restricted_user = procurement_user or supply_user or management_user
     days_left = (item.bid_deadline - date.today()).days
-    show_deadline_note = days_left > 0
+    show_deadline_note = days_left != 0 or (
+        item.submit_decision_status not in {"submitted", "rejected"}
+    )
     is_deadline_danger = (
         item.submit_decision_status not in {"submitted", "rejected"}
-        and 0 < days_left <= 2
+        and days_left <= 2
     )
     if not show_deadline_note:
         deadline_note = ""
+    elif item.submit_decision_status not in {"submitted", "rejected"} and days_left <= 0:
+        deadline_note = "Просрочен"
     else:
         deadline_note = f"Осталось {days_left} дн."
     lot_cell = render_auction_details_display(item, row_number) if restricted_user else render_auction_details_form(owner_chat_id, item, active_tab, row_number)
@@ -4326,6 +4332,10 @@ def layout(
       font-size: 12px;
       color: var(--muted);
       white-space: nowrap;
+    }}
+    .deadline-date.danger {{
+      color: var(--danger);
+      font-weight: 700;
     }}
     .deadline-meta.danger {{
       color: var(--danger);
