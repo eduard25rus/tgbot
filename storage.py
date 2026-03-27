@@ -96,6 +96,22 @@ class LegalLetterAttachment:
 
 
 @dataclass
+class ContractEvent:
+    id: int
+    chat_id: int
+    contract_id: int
+    stage_id: Optional[int]
+    event_date: date
+    event_type: str
+    source_kind: str
+    source_ref: str
+    title: str
+    description: str
+    actor_name: str
+    created_at: datetime
+
+
+@dataclass
 class Auction:
     id: int
     owner_chat_id: int
@@ -311,6 +327,23 @@ class Storage:
                     file_path TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(letter_id) REFERENCES legal_letters(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS contract_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    contract_id INTEGER NOT NULL,
+                    stage_id INTEGER,
+                    event_date TEXT NOT NULL,
+                    event_type TEXT NOT NULL DEFAULT '',
+                    source_kind TEXT NOT NULL DEFAULT '',
+                    source_ref TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    actor_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE,
+                    FOREIGN KEY(stage_id) REFERENCES stages(id) ON DELETE SET NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS web_users (
@@ -1934,6 +1967,54 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
+    def add_contract_event(
+        self,
+        chat_id: int,
+        contract_id: int,
+        event_date: date,
+        event_type: str,
+        title: str,
+        description: str = "",
+        actor_name: str = "",
+        stage_id: int | None = None,
+        source_kind: str = "",
+        source_ref: str = "",
+    ) -> int | None:
+        with self.connection() as conn:
+            contract = conn.execute(
+                """
+                SELECT id
+                FROM contracts
+                WHERE id = ? AND chat_id = ?
+                """,
+                (contract_id, chat_id),
+            ).fetchone()
+            if contract is None:
+                return None
+            cursor = conn.execute(
+                """
+                INSERT INTO contract_events (
+                    chat_id, contract_id, stage_id, event_date, event_type,
+                    source_kind, source_ref, title, description, actor_name, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chat_id,
+                    contract_id,
+                    stage_id,
+                    event_date.strftime(DATE_FMT),
+                    event_type.strip(),
+                    source_kind.strip(),
+                    source_ref.strip(),
+                    title.strip(),
+                    description.strip(),
+                    actor_name.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
     def add_legal_letter(
         self,
         chat_id: int,
@@ -2169,6 +2250,20 @@ class Storage:
                 (chat_id, contract_id),
             ).fetchall()
         return [self._legal_letter_attachment_from_row(row) for row in rows]
+
+    def list_contract_events(self, chat_id: int, contract_id: int) -> list[ContractEvent]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, chat_id, contract_id, stage_id, event_date, event_type,
+                       source_kind, source_ref, title, description, actor_name, created_at
+                FROM contract_events
+                WHERE chat_id = ? AND contract_id = ?
+                ORDER BY event_date DESC, created_at DESC, id DESC
+                """,
+                (chat_id, contract_id),
+            ).fetchall()
+        return [self._contract_event_from_row(row) for row in rows]
 
     def contract_payment_total(self, chat_id: int, contract_id: int) -> float:
         with self.connection() as conn:
@@ -2435,6 +2530,23 @@ class Storage:
             created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],
+        )
+
+    @staticmethod
+    def _contract_event_from_row(row: sqlite3.Row) -> ContractEvent:
+        return ContractEvent(
+            id=row["id"],
+            chat_id=row["chat_id"],
+            contract_id=row["contract_id"],
+            stage_id=int(row["stage_id"]) if row["stage_id"] is not None else None,
+            event_date=date.fromisoformat(row["event_date"]),
+            event_type=row["event_type"] or "",
+            source_kind=row["source_kind"] or "",
+            source_ref=row["source_ref"] or "",
+            title=row["title"] or "",
+            description=row["description"] or "",
+            actor_name=row["actor_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
     @staticmethod

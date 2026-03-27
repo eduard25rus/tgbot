@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import csv
 import hashlib
+import io
 import secrets
 import re
 from pathlib import Path
@@ -824,6 +826,10 @@ def can_edit_legal_correspondence(current_user: dict | None) -> bool:
     return has_permission(current_user, "contracts", "edit")
 
 
+def can_view_contract_timeline(current_user: dict | None) -> bool:
+    return has_active_admin_mode(current_user) or is_management_user(current_user)
+
+
 def guard_contract_stage_controls(current_user: dict | None):
     return can_edit_contract_stage_controls(current_user)
 
@@ -1567,6 +1573,206 @@ def render_contract_title_block(owner_chat_id: int, contract, current_user: dict
         </form>
       </div>
     </details>
+    """
+
+
+def local_contract_event_date(value: datetime) -> date:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date()
+    return value.astimezone(VLADIVOSTOK_TZ).date()
+
+
+def contract_timeline_badge(item: dict) -> str:
+    kind = item.get("kind", "")
+    if kind == "legal_incoming":
+        return '<span class="chip danger">Входящее</span>'
+    if kind == "legal_outgoing":
+        return '<span class="chip ok">Исходящее</span>'
+    if kind == "invoice":
+        return '<span class="chip warn">Счет</span>'
+    if kind == "stage_status":
+        css = item.get("badge_css", "chip")
+        label = item.get("badge_label", "Статус")
+        return f'<span class="{escape(css)}">{escape(label)}</span>'
+    if kind == "payment":
+        return '<span class="chip ok">Оплата</span>'
+    if kind == "letter_update":
+        return '<span class="chip">Изменение</span>'
+    if kind == "stage":
+        return '<span class="chip">Этап</span>'
+    return '<span class="chip">Событие</span>'
+
+
+def build_contract_timeline_items(storage: Storage, owner_chat_id: int, contract_id: int) -> list[dict]:
+    logged_events = storage.list_contract_events(owner_chat_id, contract_id)
+    stages = storage.list_stages_for_contract(owner_chat_id, contract_id)
+    legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract_id)
+    payments = storage.list_payments_for_contract(owner_chat_id, contract_id)
+
+    logged_refs = {
+        (item.source_kind, item.source_ref)
+        for item in logged_events
+        if item.source_kind and item.source_ref
+    }
+    timeline_items: list[dict] = []
+
+    for item in logged_events:
+        timeline_items.append(
+            {
+                "sort_date": item.event_date,
+                "title": item.title,
+                "description": item.description,
+                "actor_name": item.actor_name.strip() or "Автор неизвестен",
+                "kind": item.event_type or "event",
+                "badge_label": "Статус" if item.event_type == "stage_status" else "",
+                "badge_css": "chip",
+            }
+        )
+
+    for letter in legal_letters:
+        source_ref = str(letter.id)
+        if ("legal_letter_create", source_ref) in logged_refs:
+            continue
+        direction_label, badge_class = LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])
+        timeline_items.append(
+            {
+                "sort_date": letter.letter_date,
+                "title": letter.subject.strip() or "Юридическое письмо",
+                "description": letter.comment.strip(),
+                "actor_name": letter.created_by_name.strip() or "Автор неизвестен",
+                "kind": "legal_incoming" if letter.direction == "incoming" else "legal_outgoing",
+                "badge_label": direction_label,
+                "badge_css": badge_class,
+            }
+        )
+
+    for payment in payments:
+        source_ref = str(payment.id)
+        if ("payment_create", source_ref) in logged_refs:
+            continue
+        timeline_items.append(
+            {
+                "sort_date": payment.payment_date,
+                "title": f"Добавлена оплата по контракту на {format_amount(payment.amount)}",
+                "description": "",
+                "actor_name": "Автор неизвестен",
+                "kind": "payment",
+                "badge_label": "Оплата",
+                "badge_css": "chip ok",
+            }
+        )
+
+    for stage in stages:
+        if stage.status_updated_at is not None and stage.status != "not_started":
+            status_date = local_contract_event_date(stage.status_updated_at)
+            status_ref = f"{stage.id}:{stage.status}:{status_date.isoformat()}"
+            if ("stage_status", status_ref) not in logged_refs:
+                status_label, status_css = STATUS_META.get(stage.status, ("Статус изменен", "chip"))
+                timeline_items.append(
+                    {
+                        "sort_date": status_date,
+                        "title": f"{stage.name}: {status_label}",
+                        "description": "",
+                        "actor_name": stage.status_updated_by_name.strip() or "Автор неизвестен",
+                        "kind": "stage_status",
+                        "badge_label": status_label,
+                        "badge_css": status_css,
+                    }
+                )
+        if stage.advance_invoice_issued and stage.advance_invoice_issued_at is not None:
+            invoice_date = local_contract_event_date(stage.advance_invoice_issued_at)
+            invoice_ref = f"{stage.id}:advance:1:{invoice_date.isoformat()}"
+            if ("invoice_status", invoice_ref) not in logged_refs:
+                timeline_items.append(
+                    {
+                        "sort_date": invoice_date,
+                        "title": f"{stage.name}: выставлен счет на аванс",
+                        "description": "",
+                        "actor_name": stage.advance_invoice_issued_by_name.strip() or "Автор неизвестен",
+                        "kind": "invoice",
+                        "badge_label": "Счет",
+                        "badge_css": "chip warn",
+                    }
+                )
+        if stage.final_invoice_issued and stage.final_invoice_issued_at is not None:
+            invoice_date = local_contract_event_date(stage.final_invoice_issued_at)
+            invoice_ref = f"{stage.id}:final:1:{invoice_date.isoformat()}"
+            if ("invoice_status", invoice_ref) not in logged_refs:
+                timeline_items.append(
+                    {
+                        "sort_date": invoice_date,
+                        "title": f"{stage.name}: выставлен счет на остаток",
+                        "description": "",
+                        "actor_name": stage.final_invoice_issued_by_name.strip() or "Автор неизвестен",
+                        "kind": "invoice",
+                        "badge_label": "Счет",
+                        "badge_css": "chip warn",
+                    }
+                )
+
+    timeline_items.sort(
+        key=lambda item: (
+            item["sort_date"],
+            item["title"],
+            item["description"],
+            item["actor_name"],
+        ),
+        reverse=True,
+    )
+    return timeline_items
+
+
+def render_contract_timeline_page(storage: Storage, owner_chat_id: int, contract_id: int, current_user: dict | None, flash_message: str = "") -> str:
+    contract = storage.get_contract(owner_chat_id, contract_id)
+    if contract is None:
+        return '<div class="card panel"><div class="empty">Контракт не найден.</div></div>'
+
+    object_name = contract.object_name.strip() or contract.title
+    object_address = contract.object_address.strip()
+    title_line = f"{object_name}, {object_address}" if object_address else object_name
+    timeline_items = build_contract_timeline_items(storage, owner_chat_id, contract_id)
+    flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
+    export_link = f"/contracts/{contract_id}/timeline/export?owner={owner_chat_id}"
+    rows_html = "".join(
+        f"""
+        <div class="timeline-item">
+          <div class="timeline-date">{format_date(item["sort_date"])}</div>
+          <div>
+            <div style="margin-bottom:8px;">{contract_timeline_badge(item)}</div>
+            <div class="timeline-title">{escape(item["title"])}</div>
+            {f'<div class="contract-table-subtle" style="margin-bottom:6px;">{escape(item["description"])}</div>' if item["description"] else ''}
+            <div class="contract-table-subtle">Ответственный: {escape(item["actor_name"])}</div>
+          </div>
+        </div>
+        """
+        for item in timeline_items
+    ) or '<div class="empty">По контракту еще нет зафиксированных событий.</div>'
+
+    return f"""
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head contract-detail-head">
+        <div>
+          <h2 class="panel-title">Хронология контракта</h2>
+          <div class="panel-sub">{escape(title_line)}</div>
+        </div>
+        <a class="chip contract-back-link" href="/contracts/{contract_id}?owner={owner_chat_id}">← Назад к контракту</a>
+      </div>
+      <div class="info-row">
+        <span class="chip">Событий: {len(timeline_items)}</span>
+        <span class="chip">Контракт № {escape(contract.contract_number.strip() or 'Не указан')}</span>
+        <a class="secondary-btn info-row-end" href="{export_link}">Выгрузить CSV</a>
+      </div>
+    </section>
+    {flash_html}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Хронология</h2>
+          <div class="panel-sub">Единый журнал писем, статусов этапов, счетов и других действий по контракту.</div>
+        </div>
+      </div>
+      <div class="timeline">{rows_html}</div>
+    </section>
     """
 
 
@@ -5324,6 +5530,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <span class="chip">Дедлайн: {format_date(contract.end_date)}</span>
         <span class="chip">Этапов: {len(payload["stages"])}</span>
         <span class="chip">Оплат: {len(payload["payments"])}</span>
+        {f'<a class="secondary-btn" href="/contracts/{contract.id}/timeline?owner={owner_chat_id}">Хронология</a>' if can_view_contract_timeline(current_user) else ''}
         {f'<a class="secondary-btn info-row-end" href="{escape(contract.eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>' if contract.eis_url else ''}
       </div>
     </section>
@@ -8207,6 +8414,19 @@ def app(environ, start_response):
             updated = storage.update_stage_status(current_owner, stage_id, status, status_updated_at, actor_name)
             if not updated:
                 raise ValueError("Этап не найден")
+            event_date = local_contract_event_date(status_updated_at)
+            status_label = STATUS_META.get(status, ("Статус изменен", "chip"))[0]
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                event_date,
+                "stage_status",
+                f"{stage.name}: {status_label}",
+                actor_name=actor_name,
+                stage_id=stage_id,
+                source_kind="stage_status",
+                source_ref=f"{stage_id}:{status}:{event_date.isoformat()}",
+            )
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить статус этапа: {exc}")
@@ -8234,6 +8454,19 @@ def app(environ, start_response):
             updated = storage.update_stage_payment_status(current_owner, stage_id, payment_status, datetime.utcnow(), actor_name)
             if not updated:
                 raise ValueError("Этап не найден")
+            event_date = datetime.now(VLADIVOSTOK_TZ).date()
+            payment_label = STAGE_PAYMENT_META.get(payment_status, ("Статус оплаты изменен", "chip"))[0]
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                event_date,
+                "payment",
+                f"{stage.name}: {payment_label}",
+                actor_name=actor_name,
+                stage_id=stage_id,
+                source_kind="stage_payment_status",
+                source_ref=f"{stage_id}:{payment_status}:{event_date.isoformat()}",
+            )
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить оплату этапа: {exc}")
@@ -8254,6 +8487,9 @@ def app(environ, start_response):
             invoice_kind = form.get("invoice_kind", "").strip()
             if invoice_kind not in {"advance", "final"}:
                 raise ValueError("Некорректный тип счета")
+            stage = storage.get_stage(current_owner, stage_id)
+            if stage is None:
+                raise ValueError("Этап не найден")
             issued = form.get("issued", form.get("selected_issued", "0")) == "1"
             actor_name = current_user.get("full_name", "").strip() if current_user else ""
             issued_at = None
@@ -8272,6 +8508,20 @@ def app(environ, start_response):
             )
             if not updated:
                 raise ValueError("Этап не найден")
+            event_date = parse_date(issued_date_raw) if issued else datetime.now(VLADIVOSTOK_TZ).date()
+            invoice_label = "счет на аванс" if invoice_kind == "advance" else "счет на остаток"
+            title = f"{stage.name}: {'выставлен ' if issued else 'отменен '}{invoice_label}"
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                event_date,
+                "invoice",
+                title,
+                actor_name=actor_name,
+                stage_id=stage_id,
+                source_kind="invoice_status",
+                source_ref=f"{stage_id}:{invoice_kind}:{'1' if issued else '0'}:{event_date.isoformat()}",
+            )
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить счет этапа: {exc}")
@@ -8342,7 +8592,22 @@ def app(environ, start_response):
             if end_date > contract.end_date:
                 raise ValueError(f"Этап не может быть позже дедлайна контракта ({format_date(contract.end_date)})")
             amount = parse_amount(form["amount"])
-            storage.add_stage(contract_id, position, form.get("notes", ""), end_date, amount)
+            start_date_raw = form.get("start_date", "").strip()
+            start_date = parse_date(start_date_raw) if start_date_raw else None
+            created_stage_id = storage.add_stage(contract_id, position, form.get("notes", ""), start_date, end_date, amount)
+            created_stage = storage.get_stage(current_owner, created_stage_id)
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                datetime.now(VLADIVOSTOK_TZ).date(),
+                "stage",
+                f"Добавлен {created_stage.name if created_stage is not None else f'Этап {position}'}",
+                description=form.get("notes", ""),
+                actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                stage_id=created_stage_id,
+                source_kind="stage_create",
+                source_ref=str(created_stage_id),
+            )
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить этап: {exc}")
@@ -8362,6 +8627,16 @@ def app(environ, start_response):
             created = storage.add_payment(current_owner, contract_id, payment_date, amount)
             if created is None:
                 raise ValueError("Контракт не найден")
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                payment_date,
+                "payment",
+                f"Добавлена оплата по контракту на {format_amount(amount)}",
+                actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                source_kind="payment_create",
+                source_ref=str(created),
+            )
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить оплату: {exc}")
@@ -8426,6 +8701,17 @@ def app(environ, start_response):
                         """,
                         (first_relative_path, created, current_owner),
                     )
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                parse_date(letter_date_raw),
+                "legal_incoming" if direction == "incoming" else "legal_outgoing",
+                subject,
+                description=form.get("comment", ""),
+                actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                source_kind="legal_letter_create",
+                source_ref=str(created),
+            )
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить письмо: {exc}")
@@ -8464,6 +8750,17 @@ def app(environ, start_response):
             uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
             if uploads:
                 save_legal_letter_uploads(storage, current_owner, contract_id, letter_id, uploads)
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                parse_date(letter_date_raw),
+                "letter_update",
+                f"Обновлено письмо: {subject}",
+                description=form.get("comment", ""),
+                actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                source_kind="legal_letter_update",
+                source_ref=f"{letter_id}:{parse_date(letter_date_raw).isoformat()}",
+            )
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить письмо: {exc}")
@@ -8683,6 +8980,94 @@ def app(environ, start_response):
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
+
+    if path.startswith("/contracts/") and path.endswith("/timeline/export") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not can_view_contract_timeline(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            contract_id = int(path.split("/")[2])
+        except ValueError:
+            contract_id = -1
+        contract = storage.get_contract(current_owner, contract_id)
+        if contract is None:
+            body = render_contract_timeline_page(storage, current_owner, contract_id, current_user, "Контракт не найден")
+            html = layout(
+                "Хронология контракта",
+                body,
+                owners,
+                current_owner,
+                "contracts",
+                current_user,
+                hero_title_override="Хронология контракта",
+                hero_copy_override="Единый журнал всех ключевых действий по контракту.",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        output = io.StringIO()
+        writer = csv.writer(output, delimiter=";")
+        writer.writerow(["Дата", "Тип", "Событие", "Описание", "Ответственный"])
+        for item in build_contract_timeline_items(storage, current_owner, contract_id):
+            badge = {
+                "legal_incoming": "Входящее",
+                "legal_outgoing": "Исходящее",
+                "invoice": "Счет",
+                "stage_status": "Статус этапа",
+                "payment": "Оплата",
+                "letter_update": "Изменение письма",
+                "stage": "Этап",
+            }.get(item.get("kind", ""), "Событие")
+            writer.writerow(
+                [
+                    format_date(item["sort_date"]),
+                    badge,
+                    item["title"],
+                    item["description"],
+                    item["actor_name"],
+                ]
+            )
+        filename = f"contract-timeline-{contract_id}.csv"
+        payload = ("\ufeff" + output.getvalue()).encode("utf-8")
+        start_response(
+            "200 OK",
+            [
+                ("Content-Type", "text/csv; charset=utf-8"),
+                ("Content-Disposition", f'attachment; filename="{filename}"'),
+            ],
+        )
+        return [payload]
+
+    if path.startswith("/contracts/") and path.endswith("/timeline") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not can_view_contract_timeline(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            contract_id = int(path.split("/")[2])
+        except ValueError:
+            contract_id = -1
+        body = render_contract_timeline_page(storage, current_owner, contract_id, current_user)
+        html = layout(
+            "Хронология контракта",
+            body,
+            owners,
+            current_owner,
+            "contracts",
+            current_user,
+            hero_title_override="Хронология контракта",
+            hero_copy_override="Единый журнал всех ключевых действий по контракту.",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
 
     if path.startswith("/contracts/"):
         denied = guard("contracts", "view")
