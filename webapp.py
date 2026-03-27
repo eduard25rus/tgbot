@@ -1781,15 +1781,18 @@ def render_contract_timeline_page(storage: Storage, owner_chat_id: int, contract
 
 
 def auction_timeline_badge(item: dict) -> str:
-    badge_map = {
-        "created": ("Добавлено", "chip"),
-        "deadline": ("Дедлайн", "chip danger"),
-        "estimate": ("Считать", "chip"),
-        "submit": ("Заявка", "chip warn"),
-        "discount": ("Снижение", "chip"),
-        "result": ("Итог", "chip accent"),
-    }
-    label, css = badge_map.get(item.get("kind", ""), ("Событие", "chip"))
+    label = item.get("badge_label")
+    css = item.get("badge_css")
+    if not label or not css:
+        badge_map = {
+            "created": ("Добавлено", "chip"),
+            "deadline": ("Просрочен", "chip danger"),
+            "estimate": ("Считать", "chip"),
+            "submit": ("Заявка", "chip warn"),
+            "discount": ("Снижение", "chip"),
+            "result": ("Итог", "chip accent"),
+        }
+        label, css = badge_map.get(item.get("kind", ""), ("Событие", "chip"))
     return f'<span class="{css}">{escape(label)}</span>'
 
 
@@ -1805,6 +1808,29 @@ def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_i
     }
     items: list[dict] = []
     for event in logged_events:
+        badge_label = ""
+        badge_css = "chip"
+        if event.event_type == "estimate":
+            for key, (label, css) in AUCTION_ESTIMATE_META.items():
+                if label and label in event.title:
+                    badge_label, badge_css = label, css
+                    break
+        elif event.event_type == "submit":
+            for key, (label, css) in AUCTION_SUBMIT_DECISION_META.items():
+                if label and label in event.title:
+                    badge_label, badge_css = label, css
+                    break
+        elif event.event_type == "result":
+            for key, (label, css) in AUCTION_RESULT_META.items():
+                if label and label in event.title:
+                    badge_label, badge_css = label, css
+                    break
+        elif event.event_type == "discount":
+            badge_label, badge_css = "Снижение", "chip"
+        elif event.event_type == "deadline":
+            badge_label, badge_css = "Просрочен", "chip danger"
+        elif event.event_type == "created":
+            badge_label, badge_css = "Добавлено", "chip"
         items.append(
             {
                 "sort_date": event.event_date,
@@ -1812,6 +1838,8 @@ def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_i
                 "description": event.description,
                 "actor_name": event.actor_name.strip() or "Автор неизвестен",
                 "kind": event.event_type or "event",
+                "badge_label": badge_label,
+                "badge_css": badge_css,
             }
         )
 
@@ -1824,6 +1852,8 @@ def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_i
                 "description": "",
                 "actor_name": auction.created_by_name.strip() or "Автор неизвестен",
                 "kind": "created",
+                "badge_label": "Добавлено",
+                "badge_css": "chip",
             }
         )
 
@@ -1835,10 +1865,12 @@ def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_i
             items.append(
                 {
                     "sort_date": estimate_date,
-                    "title": f"Колонка «Считать»: {label}",
+                    "title": label,
                     "description": auction.estimate_comment.strip(),
                     "actor_name": auction.estimate_status_updated_by_name.strip() or "Автор неизвестен",
                     "kind": "estimate",
+                    "badge_label": label,
+                    "badge_css": status_css,
                 }
             )
 
@@ -1850,10 +1882,12 @@ def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_i
             items.append(
                 {
                     "sort_date": submit_date,
-                    "title": f"Колонка «Заявка»: {label}",
+                    "title": label,
                     "description": "",
                     "actor_name": auction.submit_status_updated_by_name.strip() or "Автор неизвестен",
                     "kind": "submit",
+                    "badge_label": label,
+                    "badge_css": AUCTION_SUBMIT_DECISION_META.get(auction.submit_decision_status, ("Статус изменен", "chip"))[1],
                 }
             )
 
@@ -1872,6 +1906,8 @@ def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_i
                     ),
                     "actor_name": auction.max_discount_updated_by_name.strip() or "Автор неизвестен",
                     "kind": "discount",
+                    "badge_label": "Снижение",
+                    "badge_css": "chip",
                 }
             )
 
@@ -1886,10 +1922,12 @@ def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_i
             items.append(
                 {
                     "sort_date": result_date,
-                    "title": f"Колонка «Итог»: {label}",
+                    "title": label,
                     "description": result_description,
                     "actor_name": auction.result_status_updated_by_name.strip() or "Автор неизвестен",
                     "kind": "result",
+                    "badge_label": label,
+                    "badge_css": AUCTION_RESULT_META.get(auction.result_status, ("Статус изменен", "chip"))[1],
                 }
             )
 
@@ -1902,10 +1940,12 @@ def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_i
             items.append(
                 {
                     "sort_date": auction.bid_deadline,
-                    "title": "Срок подачи аукциона просрочен",
+                    "title": "Аукцион просрочен",
                     "description": f"Дедлайн подачи: {format_date(auction.bid_deadline)}",
                     "actor_name": "Система",
                     "kind": "deadline",
+                    "badge_label": "Просрочен",
+                    "badge_css": "chip danger",
                 }
             )
 
@@ -7791,7 +7831,7 @@ def app(environ, start_response):
                     auction_id,
                     event_date,
                     "estimate",
-                    f"Колонка «Считать»: {AUCTION_ESTIMATE_META.get(estimate_status, ('Статус изменен', 'chip'))[0]}",
+                    AUCTION_ESTIMATE_META.get(estimate_status, ("Статус изменен", "chip"))[0],
                     description=estimate_comment if estimate_status == "calculated" else "",
                     actor_name=estimate_status_updated_by_name,
                     source_kind="estimate_status",
@@ -7804,7 +7844,7 @@ def app(environ, start_response):
                     auction_id,
                     event_date,
                     "submit",
-                    f"Колонка «Заявка»: {AUCTION_SUBMIT_DECISION_META.get(submit_decision_status, ('Статус изменен', 'chip'))[0]}",
+                    AUCTION_SUBMIT_DECISION_META.get(submit_decision_status, ("Статус изменен", "chip"))[0],
                     actor_name=submit_status_updated_by_name,
                     source_kind="submit_status",
                     source_ref=f"{auction_id}:{submit_decision_status}:{event_date.isoformat()}",
@@ -7819,7 +7859,7 @@ def app(environ, start_response):
                     auction_id,
                     event_date,
                     "result",
-                    f"Колонка «Итог»: {AUCTION_RESULT_META.get(result_status, ('Статус изменен', 'chip'))[0]}",
+                    AUCTION_RESULT_META.get(result_status, ("Статус изменен", "chip"))[0],
                     description=result_description,
                     actor_name=result_status_updated_by_name,
                     source_kind="result_status",
