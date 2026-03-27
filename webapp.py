@@ -3287,6 +3287,14 @@ def layout(
       table-layout: fixed;
       width: 100%;
     }}
+    .contract-registry-table {{
+      table-layout: fixed;
+      width: 100%;
+    }}
+    .contract-registry-table th:nth-child(n+2),
+    .contract-registry-table td:nth-child(n+2) {{
+      text-align: center;
+    }}
     .table th, .table td {{
       padding: 12px 10px;
       border-bottom: 1px solid var(--line);
@@ -4969,7 +4977,7 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
       </div>
       {
         f'''
-        <table class="table contract-table">
+        <table class="table contract-table contract-registry-table">
           <thead>
             <tr>
               <th>Контракт</th>
