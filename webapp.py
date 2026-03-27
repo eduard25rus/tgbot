@@ -1537,9 +1537,11 @@ def render_contract_identity_block(owner_chat_id: int, contract, current_user: d
 
 
 def render_contract_title_block(owner_chat_id: int, contract, current_user: dict | None) -> str:
+    object_name = contract.object_name.strip() or contract.title
+    object_address = contract.object_address.strip()
     description_text = escape(contract.description) if contract.description else "Описание пока не заполнено."
     display = f"""
-    <h2 class="panel-title">{escape(contract.title)}</h2>
+    <h2 class="panel-title">{escape(f"{object_name}, {object_address}" if object_address else object_name)}</h2>
     <div class="panel-sub">{description_text}</div>
     """
     if not can_edit_contract_stage_controls(current_user):
@@ -1550,8 +1552,12 @@ def render_contract_title_block(owner_chat_id: int, contract, current_user: dict
       <div class="status-popover lot-form">
         <form class="form-grid" method="post" action="/contracts/{contract.id}/main-info?owner={owner_chat_id}">
           <div class="field">
-            <label>Название контракта</label>
-            <input type="text" name="title" value="{escape(contract.title)}" required>
+            <label>Объект</label>
+            <input type="text" name="object_name" value="{escape(contract.object_name or contract.title)}" required>
+          </div>
+          <div class="field">
+            <label>Адрес объекта</label>
+            <input type="text" name="object_address" value="{escape(contract.object_address)}">
           </div>
           <div class="field">
             <label>Описание</label>
@@ -4946,6 +4952,8 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
     contract_rows = []
     for index, item in enumerate(payload, start=1):
         contract = item["contract"]
+        contract_object = contract.object_name.strip() or contract.title
+        contract_address = contract.object_address.strip()
         progress_width = round(item["paid_ratio"] * 100, 1)
         deadline_tooltip = ""
         if item["first_stage_start_date"] is not None:
@@ -4958,9 +4966,9 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
                   <div class="auction-head">
                     <div class="auction-seq">#{index}</div>
                   </div>
-                  <div class="timeline-title">{escape(contract.title)}</div>
+                  <div class="timeline-title">{escape(contract_object)}</div>
                 </a>
-                <div class="contract-table-subtle">{escape(contract.description) if contract.description else 'Описание пока не заполнено'}</div>
+                <div class="contract-table-subtle">{escape(contract_address) if contract_address else 'Адрес пока не заполнен'}</div>
                 <div class="action-row" style="justify-content: space-between; align-items: center; margin-top: 6px;">
                   {f'<a class="secondary-btn mini" href="{escape(contract.eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>' if contract.eis_url else '<span></span>'}
                   <div class="contract-table-subtle">{f'Заключен: {format_date(contract.signed_date)}' if contract.signed_date is not None else 'Еще не подписан'}</div>
@@ -5048,8 +5056,12 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
       <form class="form-grid contract-create-form" method="post" action="/contracts/new?owner={owner_chat_id}">
         <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
           <div class="field">
-            <label>Название контракта</label>
-            <input type="text" name="title" required>
+            <label>Объект</label>
+            <input type="text" name="object_name" required>
+          </div>
+          <div class="field">
+            <label>Адрес объекта</label>
+            <input type="text" name="object_address" required>
           </div>
           <div class="field">
             <label>Номер контракта</label>
@@ -7076,7 +7088,8 @@ def app(environ, start_response):
             return denied
         form = read_post_data(environ)
         try:
-            title = form["title"].strip()
+            object_name = form.get("object_name", "").strip()
+            object_address = form.get("object_address", "").strip()
             contract_number = form.get("contract_number", "").strip()
             eis_url = form.get("eis_url", "").strip()
             description = form.get("description", "").strip()
@@ -7085,8 +7098,10 @@ def app(environ, start_response):
             stage_count = int(form.get("stage_count", "1"))
             has_advance = form.get("has_advance") == "1"
             advance_percent = parse_optional_number(form.get("advance_percent", "")) if has_advance else None
-            if not title:
-                raise ValueError("Название контракта обязательно")
+            if not object_name:
+                raise ValueError("Объект обязателен")
+            if not object_address:
+                raise ValueError("Адрес объекта обязателен")
             if not contract_number or not contract_number.isdigit():
                 raise ValueError("В номере контракта должны быть только цифры")
             if not eis_url:
@@ -7117,7 +7132,7 @@ def app(environ, start_response):
             if abs(stage_total - total_amount) > 0.01:
                 raise ValueError("Сумма этапов должна совпадать с общей суммой контракта")
             contract_end_date = max(item[3] for item in stage_specs)
-            contract_id = storage.add_contract(current_owner, title, contract_number, eis_url, description, signed_date, contract_end_date, advance_percent)
+            contract_id = storage.add_contract(current_owner, object_name, object_address, contract_number, eis_url, description, signed_date, contract_end_date, advance_percent)
             for index, amount, start_date, end_date, notes in stage_specs:
                 storage.add_stage(contract_id, index, notes, start_date, end_date, amount)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
@@ -8054,11 +8069,12 @@ def app(environ, start_response):
         try:
             contract_id = int(path.split("/")[2])
             form = read_post_data(environ)
-            title = form.get("title", "").strip()
+            object_name = form.get("object_name", "").strip()
+            object_address = form.get("object_address", "").strip()
             description = form.get("description", "").strip()
-            if not title:
-                raise ValueError("Название контракта обязательно")
-            updated = storage.update_contract_main_info(current_owner, contract_id, title, description)
+            if not object_name:
+                raise ValueError("Объект обязателен")
+            updated = storage.update_contract_main_info(current_owner, contract_id, object_name, object_address, description)
             if not updated:
                 raise ValueError("Контракт не найден")
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")

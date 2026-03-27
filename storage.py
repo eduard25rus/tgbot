@@ -17,6 +17,8 @@ class Contract:
     id: int
     chat_id: int
     title: str
+    object_name: str
+    object_address: str
     contract_number: str
     eis_url: str
     description: str
@@ -215,6 +217,8 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER NOT NULL,
                     title TEXT NOT NULL,
+                    object_name TEXT NOT NULL DEFAULT '',
+                    object_address TEXT NOT NULL DEFAULT '',
                     contract_number TEXT NOT NULL DEFAULT '',
                     eis_url TEXT NOT NULL DEFAULT '',
                     description TEXT NOT NULL DEFAULT '',
@@ -523,6 +527,11 @@ class Storage:
                 conn.execute("ALTER TABLE contracts ADD COLUMN contract_number TEXT NOT NULL DEFAULT ''")
             if "eis_url" not in contract_columns:
                 conn.execute("ALTER TABLE contracts ADD COLUMN eis_url TEXT NOT NULL DEFAULT ''")
+            if "object_name" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN object_name TEXT NOT NULL DEFAULT ''")
+                conn.execute("UPDATE contracts SET object_name = title WHERE object_name = ''")
+            if "object_address" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN object_address TEXT NOT NULL DEFAULT ''")
             payroll_alters = [
                 ("advance_card_paid_amount", "REAL NOT NULL DEFAULT 0"),
                 ("advance_card_paid_date", "TEXT"),
@@ -1501,7 +1510,7 @@ class Storage:
                 (viewer_username, viewer_name, owner_chat_id, viewer_user_id),
             )
 
-    def add_contract(self, chat_id: int, title: str, contract_number: str, eis_url: str, description: str, signed_date: date | None, end_date: date, advance_percent: float | None = None) -> int:
+    def add_contract(self, chat_id: int, object_name: str, object_address: str, contract_number: str, eis_url: str, description: str, signed_date: date | None, end_date: date, advance_percent: float | None = None) -> int:
         with self.connection() as conn:
             conn.execute(
                 """
@@ -1512,12 +1521,14 @@ class Storage:
             )
             cursor = conn.execute(
                 """
-                INSERT INTO contracts (chat_id, title, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO contracts (chat_id, title, object_name, object_address, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
-                    title.strip(),
+                    f"{object_name.strip()}, {object_address.strip()}" if object_address.strip() else object_name.strip(),
+                    object_name.strip(),
+                    object_address.strip(),
                     contract_number.strip(),
                     eis_url.strip(),
                     description.strip(),
@@ -1799,15 +1810,22 @@ class Storage:
             )
             return cursor.rowcount > 0
 
-    def update_contract_main_info(self, chat_id: int, contract_id: int, title: str, description: str) -> bool:
+    def update_contract_main_info(self, chat_id: int, contract_id: int, object_name: str, object_address: str, description: str) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE contracts
-                SET title = ?, description = ?
+                SET title = ?, object_name = ?, object_address = ?, description = ?
                 WHERE id = ? AND chat_id = ?
                 """,
-                (title.strip(), description.strip(), contract_id, chat_id),
+                (
+                    f"{object_name.strip()}, {object_address.strip()}" if object_address.strip() else object_name.strip(),
+                    object_name.strip(),
+                    object_address.strip(),
+                    description.strip(),
+                    contract_id,
+                    chat_id,
+                ),
             )
             return cursor.rowcount > 0
 
@@ -2169,7 +2187,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, chat_id, title, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at
+                SELECT id, chat_id, title, object_name, object_address, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ?
                 ORDER BY end_date ASC, id ASC
@@ -2182,7 +2200,7 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT id, chat_id, title, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at
+                SELECT id, chat_id, title, object_name, object_address, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ? AND id = ?
                 """,
@@ -2337,6 +2355,8 @@ class Storage:
             id=row["id"],
             chat_id=row["chat_id"],
             title=row["title"],
+            object_name=row["object_name"] or row["title"] or "",
+            object_address=row["object_address"] or "",
             contract_number=row["contract_number"] or "",
             eis_url=row["eis_url"] or "",
             description=row["description"],
