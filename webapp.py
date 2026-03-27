@@ -1279,7 +1279,7 @@ def render_stage_invoice_form(owner_chat_id: int, contract_id: int, stage, curre
         <form class="status-option-list stage-invoice-form" method="post" action="{action}">
           <input type="hidden" name="tab" value="{escape(active_tab)}">
           <input type="hidden" name="invoice_kind" value="{invoice_kind}">
-          <input type="hidden" name="issued" value="{("1" if is_issued else "0")}">
+          <input type="hidden" name="selected_issued" value="{("1" if is_issued else "0")}">
           <div class="field stage-date-field is-hidden">
             <label>Дата выставления</label>
             <input type="date" name="issued_date" value="{issued_date_value or datetime.now(VLADIVOSTOK_TZ).date().isoformat()}">
@@ -1306,7 +1306,7 @@ def render_stage_status_form(owner_chat_id: int, contract_id: int, stage, curren
       <div class="status-popover">
         <form class="status-option-list stage-status-form" method="post" action="/contracts/stages/{stage.id}/status?owner={owner_chat_id}&contract_id={contract_id}">
           <input type="hidden" name="tab" value="{escape(active_tab)}">
-          <input type="hidden" name="status" value="{escape(stage.status)}">
+          <input type="hidden" name="selected_status" value="{escape(stage.status)}">
           <button class="{STATUS_META['not_started'][1]} status-option" type="submit" name="status" value="not_started">Не приступили</button>
           <button class="{STATUS_META['in_progress'][1]} status-option" type="submit" name="status" value="in_progress">В работе</button>
           <button class="{STATUS_META['completed'][1]} status-option" type="submit" name="status" value="completed">Выполнен</button>
@@ -4218,7 +4218,7 @@ document.addEventListener("click", (event) => {{
   if (stageStatusButton) {{
     event.preventDefault();
     const form = stageStatusButton.closest('.stage-status-form');
-    const hiddenStatus = form ? form.querySelector('input[name="status"]') : null;
+    const hiddenStatus = form ? form.querySelector('input[name="selected_status"]') : null;
     const dateField = form ? form.querySelector('.stage-date-field') : null;
     const dateInput = form ? form.querySelector('input[name="status_date"]') : null;
     const saveButton = form ? form.querySelector('.stage-save-btn') : null;
@@ -4241,7 +4241,7 @@ document.addEventListener("click", (event) => {{
   if (stageInvoiceButton) {{
     event.preventDefault();
     const form = stageInvoiceButton.closest('.stage-invoice-form');
-    const hiddenIssued = form ? form.querySelector('input[name="issued"]') : null;
+    const hiddenIssued = form ? form.querySelector('input[name="selected_issued"]') : null;
     const dateField = form ? form.querySelector('.stage-date-field') : null;
     const dateInput = form ? form.querySelector('input[name="issued_date"]') : null;
     const saveButton = form ? form.querySelector('.stage-save-btn') : null;
@@ -7995,7 +7995,7 @@ def app(environ, start_response):
             stage_id = int(path.split("/")[3])
             contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0])
             form = read_post_data(environ)
-            status = form.get("status", "not_started")
+            status = form.get("status", form.get("selected_status", "not_started"))
             if status not in STATUS_META:
                 raise ValueError("Некорректный статус этапа")
             stage = storage.get_stage(current_owner, stage_id)
@@ -8058,7 +8058,7 @@ def app(environ, start_response):
             invoice_kind = form.get("invoice_kind", "").strip()
             if invoice_kind not in {"advance", "final"}:
                 raise ValueError("Некорректный тип счета")
-            issued = form.get("issued") == "1"
+            issued = form.get("issued", form.get("selected_issued", "0")) == "1"
             actor_name = current_user.get("full_name", "").strip() if current_user else ""
             issued_at = None
             if issued:
