@@ -4910,8 +4910,10 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
                   <div class="timeline-title">{escape(contract.title)}</div>
                 </a>
                 <div class="contract-table-subtle">{escape(contract.description) if contract.description else 'Описание пока не заполнено'}</div>
-                {f'<a class="secondary-btn mini" href="{escape(contract.eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>' if contract.eis_url else ''}
-                <div class="contract-table-subtle" style="text-align:right;">{f'Заключен: {format_date(contract.signed_date)}' if contract.signed_date is not None else 'Еще не подписан'}</div>
+                <div class="action-row" style="justify-content: space-between; align-items: center; margin-top: 6px;">
+                  {f'<a class="secondary-btn mini" href="{escape(contract.eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>' if contract.eis_url else '<span></span>'}
+                  <div class="contract-table-subtle">{f'Заключен: {format_date(contract.signed_date)}' if contract.signed_date is not None else 'Еще не подписан'}</div>
+                </div>
               </td>
               <td class="nowrap" style="text-align:center;">
                 <div{deadline_tooltip}>{format_date(contract.end_date)}</div>
