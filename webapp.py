@@ -1491,7 +1491,7 @@ def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user:
         return f'<span class="chip">{escape(label)}</span>'
     checked_attr = "checked" if contract.signed_date is None else ""
     return f"""
-    <details class="status-menu">
+    <details class="status-menu contract-chip-menu">
       <summary><span class="chip">{escape(label)}</span></summary>
       <div class="status-popover">
         <form class="form-grid" method="post" action="/contracts/{contract.id}/signed-date?owner={owner_chat_id}">
@@ -3026,9 +3026,20 @@ def layout(
       display: flex;
       justify-content: space-between;
       gap: 12px;
-      align-items: flex-start;
+      align-items: center;
       margin-bottom: 18px;
       flex-wrap: wrap;
+    }}
+    .contract-detail-head {{
+      align-items: flex-start;
+    }}
+    .contract-back-link {{
+      align-self: flex-start;
+      margin-top: 2px;
+    }}
+    .contract-chip-menu summary {{
+      display: inline-flex;
+      align-items: center;
     }}
     .panel-title {{
       font-size: 22px;
@@ -3867,8 +3878,6 @@ def layout(
     .status-menu summary {{
       list-style: none;
       cursor: pointer;
-      display: inline-flex;
-      align-items: center;
     }}
     .status-menu summary::-webkit-details-marker {{
       display: none;
@@ -5281,12 +5290,12 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     return f"""
     <section class="card panel" style="margin-top:22px;">
-      <div class="panel-head">
+      <div class="panel-head contract-detail-head">
         <div>
           {render_contract_title_block(owner_chat_id, contract, current_user)}
           {render_contract_identity_block(owner_chat_id, contract, current_user)}
         </div>
-        <a class="chip" href="/contracts?owner={owner_chat_id}">← Назад к реестру</a>
+        <a class="chip contract-back-link" href="/contracts?owner={owner_chat_id}">← Назад к реестру</a>
       </div>
       <div class="info-row">
         {render_contract_signed_date_chip(owner_chat_id, contract, current_user)}
