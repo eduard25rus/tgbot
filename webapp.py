@@ -1536,6 +1536,34 @@ def render_contract_identity_block(owner_chat_id: int, contract, current_user: d
     """
 
 
+def render_contract_title_block(owner_chat_id: int, contract, current_user: dict | None) -> str:
+    description_text = escape(contract.description) if contract.description else "Описание пока не заполнено."
+    display = f"""
+    <h2 class="panel-title">{escape(contract.title)}</h2>
+    <div class="panel-sub">{description_text}</div>
+    """
+    if not can_edit_contract_stage_controls(current_user):
+        return display
+    return f"""
+    <details class="status-menu lot-menu">
+      <summary>{display}</summary>
+      <div class="status-popover lot-form">
+        <form class="form-grid" method="post" action="/contracts/{contract.id}/main-info?owner={owner_chat_id}">
+          <div class="field">
+            <label>Название контракта</label>
+            <input type="text" name="title" value="{escape(contract.title)}" required>
+          </div>
+          <div class="field">
+            <label>Описание</label>
+            <textarea name="description" placeholder="Кратко о контракте">{escape(contract.description)}</textarea>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить карточку</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
 def render_auction_status_form(
     owner_chat_id: int,
     auction_id: int,
@@ -2998,7 +3026,7 @@ def layout(
       display: flex;
       justify-content: space-between;
       gap: 12px;
-      align-items: center;
+      align-items: flex-start;
       margin-bottom: 18px;
       flex-wrap: wrap;
     }}
@@ -3839,6 +3867,8 @@ def layout(
     .status-menu summary {{
       list-style: none;
       cursor: pointer;
+      display: inline-flex;
+      align-items: center;
     }}
     .status-menu summary::-webkit-details-marker {{
       display: none;
@@ -5253,13 +5283,10 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
-          <h2 class="panel-title">{escape(contract.title)}</h2>
-          <div class="panel-sub">
-            {escape(contract.description) if contract.description else 'Описание пока не заполнено.'}
-          </div>
+          {render_contract_title_block(owner_chat_id, contract, current_user)}
           {render_contract_identity_block(owner_chat_id, contract, current_user)}
         </div>
-        <a class="chip" href="/?owner={owner_chat_id}">← Назад к дашборду</a>
+        <a class="chip" href="/contracts?owner={owner_chat_id}">← Назад к реестру</a>
       </div>
       <div class="info-row">
         {render_contract_signed_date_chip(owner_chat_id, contract, current_user)}
@@ -8005,6 +8032,29 @@ def app(environ, start_response):
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить реквизиты контракта: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/") and path.endswith("/main-info") and method == "POST":
+        if not can_edit_contract_stage_controls(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            contract_id = int(path.split("/")[2])
+            form = read_post_data(environ)
+            title = form.get("title", "").strip()
+            description = form.get("description", "").strip()
+            if not title:
+                raise ValueError("Название контракта обязательно")
+            updated = storage.update_contract_main_info(current_owner, contract_id, title, description)
+            if not updated:
+                raise ValueError("Контракт не найден")
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить карточку контракта: {exc}")
             html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]

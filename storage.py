@@ -1799,6 +1799,18 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def update_contract_main_info(self, chat_id: int, contract_id: int, title: str, description: str) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE contracts
+                SET title = ?, description = ?
+                WHERE id = ? AND chat_id = ?
+                """,
+                (title.strip(), description.strip(), contract_id, chat_id),
+            )
+            return cursor.rowcount > 0
+
     def replace_contract_stages(self, chat_id: int, contract_id: int, stage_items: list[dict]) -> bool:
         with self.connection() as conn:
             contract = conn.execute(
