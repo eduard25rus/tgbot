@@ -5518,7 +5518,7 @@ def payable_query_suffix(owner_chat_id: int, active_tab: str = "active", counter
 
 
 def normalize_payables_sort(sort_key: str, sort_order: str) -> tuple[str, str]:
-    allowed = {"counterparty", "document_ref", "object_name", "comment", "amount", "paid_amount", "outstanding", "due_date"}
+    allowed = {"created_at", "counterparty", "object_name", "comment", "amount", "paid_amount", "outstanding", "due_date"}
     if sort_key not in allowed or sort_order not in {"asc", "desc"}:
         return "", ""
     return sort_key, sort_order
@@ -5662,6 +5662,25 @@ def render_payable_amount_editor(owner_chat_id: int, entry, current_user: dict |
         </form>
       </div>
     </details>
+    """
+
+
+def render_payable_added_meta(entry) -> str:
+    added_at = entry.created_at
+    if added_at.tzinfo is None:
+        added_at = added_at.replace(tzinfo=timezone.utc)
+    local_added = added_at.astimezone(VLADIVOSTOK_TZ)
+    css_class = "auction-added-date is-new" if (datetime.now(VLADIVOSTOK_TZ) - local_added) <= timedelta(days=1) else "auction-added-date"
+    creator_name = entry.created_by_name.strip() or "Автор неизвестен"
+    return f'<span class="status-chip-tooltip {css_class}" data-tooltip="Добавил: {escape(creator_name)}">{escape(format_date(local_added.date()))}</span>'
+
+
+def render_payable_amount_cell(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
+    return f"""
+    <div style="display:grid; gap:6px; justify-items:center;">
+      <div class="nowrap">{render_payable_amount_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</div>
+      <div class="contract-table-subtle" style="text-align:center; max-width:220px;">{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</div>
+    </div>
     """
 
 
@@ -5849,16 +5868,15 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     rows_html = "".join(
         f"""
         <tr>
+          <td class="nowrap" style="text-align:center;">{render_payable_added_meta(entry)}</td>
           <td>
             <span class="status-chip-tooltip" data-tooltip="Итого задолженность по поставщику: {escape(format_amount(counterparty_totals.get(entry.counterparty, 0.0)))}">
               {render_payable_counterparty_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order, available_counterparties)}
             </span>
-            <div class="contract-table-subtle">Добавил: {escape(entry.created_by_name.strip() or 'Автор неизвестен')}</div>
           </td>
-          <td>{render_payable_document_form(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td>{render_payable_text_cell_editor(owner_chat_id, entry, current_user, "object_name", "Объект", entry.object_name, "Например, Строитель", active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td>{render_payable_text_cell_editor(owner_chat_id, entry, current_user, "comment", "Комментарий", entry.comment, "Например, щебень", active_tab, counterparty_filter, sort_key, sort_order)}</td>
-          <td class="nowrap" style="text-align:center;">{render_payable_amount_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
+          <td class="nowrap" style="text-align:center;">{render_payable_amount_cell(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td>{render_payable_payment_editor(owner_chat_id, entry, current_user, active_tab, counterparty_filter, sort_key, sort_order)}</td>
           <td class="nowrap" style="text-align:center;">{format_amount(payable_metrics(entry)["outstanding"]) if payable_metrics(entry)["outstanding"] > 0.009 else '—'}</td>
           <td class="nowrap" style="text-align:center;">{render_payable_due_cell(entry)}</td>
@@ -5879,8 +5897,8 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
       <table class="table contract-table">
         <thead>
           <tr>
+            <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Добавлен", "created_at")}</th>
             <th>{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Контрагент", "counterparty")}</th>
-            <th>{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Основание", "document_ref")}</th>
             <th>{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Объект", "object_name")}</th>
             <th>{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Комментарий", "comment")}</th>
             <th class="nowrap">{render_payables_sort_link(owner_chat_id, active_tab, counterparty_filter, sort_key, sort_order, "Сумма", "amount")}</th>
