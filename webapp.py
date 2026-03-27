@@ -1511,17 +1511,8 @@ def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user:
 
 def render_contract_identity_block(owner_chat_id: int, contract, current_user: dict | None) -> str:
     contract_number = contract.contract_number.strip() or "Не указан"
-    eis_url = contract.eis_url.strip()
-    eis_button = (
-        f'<a class="secondary-btn" href="{escape(eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>'
-        if eis_url
-        else '<span class="contract-table-subtle">Ссылка на ЕИС не указана</span>'
-    )
     display = f"""
-    <div class="action-row" style="justify-content:flex-start; gap:10px; margin-top:6px; flex-wrap:wrap;">
-      <span class="contract-table-subtle">Контракт № {escape(contract_number)}</span>
-      {eis_button}
-    </div>
+    <div class="contract-table-subtle" style="margin-top:6px;">Контракт № {escape(contract_number)}</div>
     """
     if not can_edit_contract_stage_controls(current_user):
         return display
@@ -2382,6 +2373,8 @@ def layout(
     current_owner: int | None,
     active_section: str,
     current_user: dict | None = None,
+    hero_title_override: str | None = None,
+    hero_copy_override: str | None = None,
 ) -> str:
     current_preview_options = current_user.get("preview_role_options", ROLE_PREVIEW_OPTIONS) if current_user else ROLE_PREVIEW_OPTIONS
     current_theme_options = THEME_PREVIEW_OPTIONS
@@ -2422,6 +2415,13 @@ def layout(
         for section_id, label, href in visible_sections
     )
     hero_title, hero_copy = SECTION_HERO.get(active_section, SECTION_HERO["contracts"])
+    if hero_title_override:
+        hero_title = hero_title_override
+    if hero_copy_override:
+        hero_copy = hero_copy_override
+    if active_section == "contracts" and title == "Карточка контракта":
+        hero_title = "Карточка контракта"
+        hero_copy = "Детальная карточка контракта с этапами, оплатами и юридической перепиской."
     notification_panel = ""
     if current_user:
         notification = current_user.get("role_notifications", {})
@@ -3227,6 +3227,9 @@ def layout(
       flex-wrap: wrap;
       margin-top: 14px;
     }}
+    .info-row-end {{
+      margin-left: auto;
+    }}
     .chip {{
       border-radius: 999px;
       padding: 8px 12px;
@@ -3670,6 +3673,13 @@ def layout(
       font: inherit;
       font-weight: 600;
       cursor: pointer;
+    }}
+    .secondary-btn.mini {{
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-top: 6px;
+      width: max-content;
     }}
     .secondary-btn.danger {{
       color: #fff;
@@ -4900,6 +4910,7 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
                   <div class="timeline-title">{escape(contract.title)}</div>
                 </a>
                 <div class="contract-table-subtle">{escape(contract.description) if contract.description else 'Описание пока не заполнено'}</div>
+                {f'<a class="secondary-btn mini" href="{escape(contract.eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>' if contract.eis_url else ''}
                 <div class="contract-table-subtle" style="text-align:right;">{f'Заключен: {format_date(contract.signed_date)}' if contract.signed_date is not None else 'Еще не подписан'}</div>
               </td>
               <td class="nowrap" style="text-align:center;">
@@ -5242,6 +5253,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <span class="chip">Дедлайн: {format_date(contract.end_date)}</span>
         <span class="chip">Этапов: {len(payload["stages"])}</span>
         <span class="chip">Оплат: {len(payload["payments"])}</span>
+        {f'<a class="secondary-btn info-row-end" href="{escape(contract.eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>' if contract.eis_url else ''}
       </div>
     </section>
     <section class="stats">
@@ -8583,7 +8595,16 @@ def app(environ, start_response):
         except ValueError:
             contract_id = -1
         body = render_contract_detail(storage, current_owner, contract_id, current_user)
-        html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+        html = layout(
+            "Карточка контракта",
+            body,
+            owners,
+            current_owner,
+            "contracts",
+            current_user,
+            hero_title_override="Карточка контракта",
+            hero_copy_override="Детальная карточка контракта с этапами, оплатами и юридической перепиской.",
+        )
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
