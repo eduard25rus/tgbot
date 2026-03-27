@@ -150,6 +150,21 @@ class Auction:
 
 
 @dataclass
+class AuctionEvent:
+    id: int
+    owner_chat_id: int
+    auction_id: int
+    event_date: date
+    event_type: str
+    source_kind: str
+    source_ref: str
+    title: str
+    description: str
+    actor_name: str
+    created_at: datetime
+
+
+@dataclass
 class PayrollEmployee:
     id: int
     owner_chat_id: int
@@ -419,6 +434,21 @@ class Storage:
                     archived_at TEXT,
                     deleted_at TEXT,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS auction_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    auction_id INTEGER NOT NULL,
+                    event_date TEXT NOT NULL,
+                    event_type TEXT NOT NULL DEFAULT '',
+                    source_kind TEXT NOT NULL DEFAULT '',
+                    source_ref TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    actor_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(auction_id) REFERENCES auctions(id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS payroll_employees (
@@ -1246,6 +1276,52 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def add_auction_event(
+        self,
+        owner_chat_id: int,
+        auction_id: int,
+        event_date: date,
+        event_type: str,
+        title: str,
+        description: str = "",
+        actor_name: str = "",
+        source_kind: str = "",
+        source_ref: str = "",
+    ) -> int | None:
+        with self.connection() as conn:
+            auction = conn.execute(
+                """
+                SELECT id
+                FROM auctions
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (auction_id, owner_chat_id),
+            ).fetchone()
+            if auction is None:
+                return None
+            cursor = conn.execute(
+                """
+                INSERT INTO auction_events (
+                    owner_chat_id, auction_id, event_date, event_type,
+                    source_kind, source_ref, title, description, actor_name, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_chat_id,
+                    auction_id,
+                    event_date.strftime(DATE_FMT),
+                    event_type.strip(),
+                    source_kind.strip(),
+                    source_ref.strip(),
+                    title.strip(),
+                    description.strip(),
+                    actor_name.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
     def update_auction_max_discount(
         self,
         owner_chat_id: int,
@@ -1289,6 +1365,20 @@ class Storage:
                 (bid_deadline.strftime(DATE_FMT), auction_id, owner_chat_id),
             )
             return cursor.rowcount > 0
+
+    def list_auction_events(self, owner_chat_id: int, auction_id: int) -> list[AuctionEvent]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, auction_id, event_date, event_type,
+                       source_kind, source_ref, title, description, actor_name, created_at
+                FROM auction_events
+                WHERE owner_chat_id = ? AND auction_id = ?
+                ORDER BY event_date DESC, created_at DESC, id DESC
+                """,
+                (owner_chat_id, auction_id),
+            ).fetchall()
+        return [self._auction_event_from_row(row) for row in rows]
 
     def update_auction_amount(
         self,
@@ -2585,6 +2675,22 @@ class Storage:
             final_bid_amount=float(row["final_bid_amount"]) if row["final_bid_amount"] is not None else None,
             archived_at=datetime.fromisoformat(row["archived_at"]) if row["archived_at"] is not None else None,
             deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] is not None else None,
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
+    def _auction_event_from_row(row: sqlite3.Row) -> AuctionEvent:
+        return AuctionEvent(
+            id=row["id"],
+            owner_chat_id=row["owner_chat_id"],
+            auction_id=row["auction_id"],
+            event_date=date.fromisoformat(row["event_date"]),
+            event_type=row["event_type"] or "",
+            source_kind=row["source_kind"] or "",
+            source_ref=row["source_ref"] or "",
+            title=row["title"] or "",
+            description=row["description"] or "",
+            actor_name=row["actor_name"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 

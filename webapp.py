@@ -830,6 +830,10 @@ def can_view_contract_timeline(current_user: dict | None) -> bool:
     return has_active_admin_mode(current_user) or is_management_user(current_user)
 
 
+def can_view_auction_timeline(current_user: dict | None) -> bool:
+    return has_active_admin_mode(current_user)
+
+
 def guard_contract_stage_controls(current_user: dict | None):
     return can_edit_contract_stage_controls(current_user)
 
@@ -1776,6 +1780,202 @@ def render_contract_timeline_page(storage: Storage, owner_chat_id: int, contract
     """
 
 
+def auction_timeline_badge(item: dict) -> str:
+    badge_map = {
+        "created": ("Добавлено", "chip"),
+        "deadline": ("Дедлайн", "chip danger"),
+        "estimate": ("Считать", "chip"),
+        "submit": ("Заявка", "chip warn"),
+        "discount": ("Снижение", "chip"),
+        "result": ("Итог", "chip accent"),
+    }
+    label, css = badge_map.get(item.get("kind", ""), ("Событие", "chip"))
+    return f'<span class="{css}">{escape(label)}</span>'
+
+
+def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_id: int) -> list[dict]:
+    auction = next((item for item in storage.list_auctions(owner_chat_id) if item.id == auction_id), None)
+    if auction is None:
+        return []
+    logged_events = storage.list_auction_events(owner_chat_id, auction_id)
+    logged_refs = {
+        (item.source_kind, item.source_ref)
+        for item in logged_events
+        if item.source_kind and item.source_ref
+    }
+    items: list[dict] = []
+    for event in logged_events:
+        items.append(
+            {
+                "sort_date": event.event_date,
+                "title": event.title,
+                "description": event.description,
+                "actor_name": event.actor_name.strip() or "Автор неизвестен",
+                "kind": event.event_type or "event",
+            }
+        )
+
+    created_date = local_contract_event_date(auction.created_at)
+    if ("auction_create", str(auction.id)) not in logged_refs:
+        items.append(
+            {
+                "sort_date": created_date,
+                "title": "Карточка аукциона добавлена в реестр",
+                "description": "",
+                "actor_name": auction.created_by_name.strip() or "Автор неизвестен",
+                "kind": "created",
+            }
+        )
+
+    if auction.estimate_status != "pending" and auction.estimate_status_updated_at is not None:
+        estimate_date = local_contract_event_date(auction.estimate_status_updated_at)
+        estimate_ref = f"{auction.id}:{auction.estimate_status}:{estimate_date.isoformat()}"
+        if ("estimate_status", estimate_ref) not in logged_refs:
+            label = AUCTION_ESTIMATE_META.get(auction.estimate_status, ("Статус изменен", "chip"))[0]
+            items.append(
+                {
+                    "sort_date": estimate_date,
+                    "title": f"Колонка «Считать»: {label}",
+                    "description": auction.estimate_comment.strip(),
+                    "actor_name": auction.estimate_status_updated_by_name.strip() or "Автор неизвестен",
+                    "kind": "estimate",
+                }
+            )
+
+    if auction.submit_decision_status != "pending" and auction.submit_status_updated_at is not None:
+        submit_date = local_contract_event_date(auction.submit_status_updated_at)
+        submit_ref = f"{auction.id}:{auction.submit_decision_status}:{submit_date.isoformat()}"
+        if ("submit_status", submit_ref) not in logged_refs:
+            label = AUCTION_SUBMIT_DECISION_META.get(auction.submit_decision_status, ("Статус изменен", "chip"))[0]
+            items.append(
+                {
+                    "sort_date": submit_date,
+                    "title": f"Колонка «Заявка»: {label}",
+                    "description": "",
+                    "actor_name": auction.submit_status_updated_by_name.strip() or "Автор неизвестен",
+                    "kind": "submit",
+                }
+            )
+
+    if auction.max_discount_percent is not None and auction.max_discount_updated_at is not None:
+        discount_date = local_contract_event_date(auction.max_discount_updated_at)
+        discount_ref = f"{auction.id}:{auction.max_discount_percent}:{discount_date.isoformat()}"
+        if ("max_discount", discount_ref) not in logged_refs:
+            items.append(
+                {
+                    "sort_date": discount_date,
+                    "title": f"Установлено максимальное снижение: {format_percent(auction.max_discount_percent)}",
+                    "description": (
+                        f"Минимальная цена: {format_amount(auction.min_bid_amount)}"
+                        if auction.min_bid_amount is not None
+                        else ""
+                    ),
+                    "actor_name": auction.max_discount_updated_by_name.strip() or "Автор неизвестен",
+                    "kind": "discount",
+                }
+            )
+
+    if auction.result_status in {"pending", "won", "recognized_winner", "lost", "rejected"} and auction.result_status_updated_at is not None:
+        result_date = local_contract_event_date(auction.result_status_updated_at)
+        result_ref = f"{auction.id}:{auction.result_status}:{result_date.isoformat()}"
+        if ("result_status", result_ref) not in logged_refs:
+            label = AUCTION_RESULT_META.get(auction.result_status, ("Статус изменен", "chip"))[0]
+            result_description = ""
+            if auction.final_bid_amount is not None:
+                result_description = f"Цена: {format_amount(auction.final_bid_amount)}"
+            items.append(
+                {
+                    "sort_date": result_date,
+                    "title": f"Колонка «Итог»: {label}",
+                    "description": result_description,
+                    "actor_name": auction.result_status_updated_by_name.strip() or "Автор неизвестен",
+                    "kind": "result",
+                }
+            )
+
+    if (
+        auction.submit_decision_status not in {"submitted", "rejected"}
+        and auction.bid_deadline < date.today()
+    ):
+        overdue_ref = f"{auction.id}:{auction.bid_deadline.isoformat()}"
+        if ("deadline_overdue", overdue_ref) not in logged_refs:
+            items.append(
+                {
+                    "sort_date": auction.bid_deadline,
+                    "title": "Срок подачи аукциона просрочен",
+                    "description": f"Дедлайн подачи: {format_date(auction.bid_deadline)}",
+                    "actor_name": "Система",
+                    "kind": "deadline",
+                }
+            )
+
+    items.sort(
+        key=lambda item: (
+            item["sort_date"],
+            item["title"],
+            item["description"],
+            item["actor_name"],
+        ),
+        reverse=True,
+    )
+    return items
+
+
+def render_auction_timeline_page(storage: Storage, owner_chat_id: int, auction_id: int, current_user: dict | None, flash_message: str = "") -> str:
+    auction = next((item for item in storage.list_auctions(owner_chat_id) if item.id == auction_id), None)
+    if auction is None:
+        return '<div class="card panel"><div class="empty">Аукцион не найден.</div></div>'
+    items = build_auction_timeline_items(storage, owner_chat_id, auction_id)
+    back_href = (
+        f"/auctions?owner={owner_chat_id}&tab=deleted#auction-registry"
+        if is_auction_deleted(auction)
+        else f"/auctions?owner={owner_chat_id}&tab=archive#auction-registry"
+        if is_auction_archived(auction)
+        else f"/auctions?owner={owner_chat_id}&tab=active#auction-registry"
+    )
+    flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
+    rows_html = "".join(
+        f"""
+        <div class="timeline-item">
+          <div class="timeline-date">{format_date(item["sort_date"])}</div>
+          <div>
+            <div style="margin-bottom:8px;">{auction_timeline_badge(item)}</div>
+            <div class="timeline-title">{escape(item["title"])}</div>
+            {f'<div class="contract-table-subtle" style="margin-bottom:6px;">{escape(item["description"])}</div>' if item["description"] else ''}
+            <div class="contract-table-subtle">Ответственный: {escape(item["actor_name"])}</div>
+          </div>
+        </div>
+        """
+        for item in items
+    ) or '<div class="empty">По аукциону еще нет зафиксированных событий.</div>'
+    return f"""
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head contract-detail-head">
+        <div>
+          <h2 class="panel-title">Хронология аукциона</h2>
+          <div class="panel-sub">{escape(auction.title)}</div>
+        </div>
+        <a class="chip contract-back-link" href="{back_href}">← Назад к реестру</a>
+      </div>
+      <div class="info-row">
+        <span class="chip">№ {escape(auction.auction_number)}</span>
+        <span class="chip">Событий: {len(items)}</span>
+        <span class="chip">Подача до: {format_date(auction.bid_deadline)}</span>
+      </div>
+    </section>
+    {flash_html}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Хронология</h2>
+          <div class="panel-sub">Кто, когда и что менял по этому аукциону.</div>
+        </div>
+      </div>
+      <div class="timeline">{rows_html}</div>
+    </section>
+    """
+
+
 def render_auction_status_form(
     owner_chat_id: int,
     auction_id: int,
@@ -2492,6 +2692,26 @@ def render_auction_delete_actions(owner_chat_id: int, item, active_tab: str, cur
     """
 
 
+def render_auction_timeline_action(owner_chat_id: int, item, active_tab: str, current_user: dict | None) -> str:
+    if not can_view_auction_timeline(current_user):
+        return ""
+    timeline_icon = """
+    <svg class="icon-restore" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M7 5h10" />
+      <path d="M7 12h10" />
+      <path d="M7 19h10" />
+      <path d="M4 5h.01" />
+      <path d="M4 12h.01" />
+      <path d="M4 19h.01" />
+    </svg>
+    """
+    return f"""
+    <a class="icon-btn" href="/auctions/{item.id}/timeline?owner={owner_chat_id}&tab={escape(active_tab)}" title="Хронология аукциона">
+      {timeline_icon}
+    </a>
+    """
+
+
 def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: int, current_user: dict | None = None) -> str:
     current_values = normalized_auction_values({
         "estimate_status": item.estimate_status,
@@ -2537,6 +2757,7 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
         submit_cell = render_auction_status_form(owner_chat_id, item.id, "submit_decision_status", item, current_values, AUCTION_SUBMIT_OPTIONS, AUCTION_SUBMIT_DECISION_META, active_tab)
     discount_cell = render_discount_display(item, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status == "submitted" and item.max_discount_percent is None) if (procurement_user or supply_user) else render_discount_form(owner_chat_id, item, item.id, item.amount, item.max_discount_percent, item.min_bid_amount, item.submit_decision_status in {"pending", "rejected"}, item.submit_decision_status == "submitted" and item.max_discount_percent is None, active_tab)
     result_cell = render_result_form(owner_chat_id, item, current_values, active_tab) if procurement_user else result_chip_with_tooltip(item, current_values) + result_summary(item) if (supply_user or management_user) else render_result_form(owner_chat_id, item, current_values, active_tab)
+    timeline_action = render_auction_timeline_action(owner_chat_id, item, active_tab, current_user)
     row_actions = render_auction_delete_actions(owner_chat_id, item, active_tab, current_user)
     return f"""
     <tr id="auction-{item.id}" data-auction-row="{item.id}">
@@ -2546,6 +2767,7 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
           <span class="contract-meta">{escape(item.city)}</span>
           <span class="auction-row-actions">
             {added_date_meta(item)}
+            {timeline_action}
             {row_actions}
           </span>
         </div>
@@ -7412,6 +7634,17 @@ def app(environ, start_response):
                 current_user.get("id") if current_user else None,
                 current_user.get("full_name", "") if current_user else "",
             )
+            created_auction = max(storage.list_auctions(current_owner), key=lambda item: item.id)
+            storage.add_auction_event(
+                current_owner,
+                created_auction.id,
+                local_contract_event_date(created_auction.created_at),
+                "created",
+                "Карточка аукциона добавлена в реестр",
+                actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                source_kind="auction_create",
+                source_ref=str(created_auction.id),
+            )
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, "Аукцион добавлен в реестр.", True)
         except Exception as exc:
             body = render_auctions_section(storage, current_owner, current_user, current_auction_tab, f"Не удалось добавить аукцион: {exc}")
@@ -7551,6 +7784,47 @@ def app(environ, start_response):
             updated_auction = next((item for item in storage.list_auctions(current_owner) if item.id == auction_id), None)
             if updated_auction is None:
                 raise ValueError("Аукцион не найден")
+            if estimate_status != auction.estimate_status and estimate_status_updated_at is not None:
+                event_date = local_contract_event_date(estimate_status_updated_at)
+                storage.add_auction_event(
+                    current_owner,
+                    auction_id,
+                    event_date,
+                    "estimate",
+                    f"Колонка «Считать»: {AUCTION_ESTIMATE_META.get(estimate_status, ('Статус изменен', 'chip'))[0]}",
+                    description=estimate_comment if estimate_status == "calculated" else "",
+                    actor_name=estimate_status_updated_by_name,
+                    source_kind="estimate_status",
+                    source_ref=f"{auction_id}:{estimate_status}:{event_date.isoformat()}",
+                )
+            if submit_decision_status != auction.submit_decision_status and submit_status_updated_at is not None:
+                event_date = local_contract_event_date(submit_status_updated_at)
+                storage.add_auction_event(
+                    current_owner,
+                    auction_id,
+                    event_date,
+                    "submit",
+                    f"Колонка «Заявка»: {AUCTION_SUBMIT_DECISION_META.get(submit_decision_status, ('Статус изменен', 'chip'))[0]}",
+                    actor_name=submit_status_updated_by_name,
+                    source_kind="submit_status",
+                    source_ref=f"{auction_id}:{submit_decision_status}:{event_date.isoformat()}",
+                )
+            if result_status != auction.result_status and result_status_updated_at is not None:
+                event_date = local_contract_event_date(result_status_updated_at)
+                result_description = ""
+                if final_bid_amount is not None:
+                    result_description = f"Цена: {format_amount(final_bid_amount)}"
+                storage.add_auction_event(
+                    current_owner,
+                    auction_id,
+                    event_date,
+                    "result",
+                    f"Колонка «Итог»: {AUCTION_RESULT_META.get(result_status, ('Статус изменен', 'chip'))[0]}",
+                    description=result_description,
+                    actor_name=result_status_updated_by_name,
+                    source_kind="result_status",
+                    source_ref=f"{auction_id}:{result_status}:{event_date.isoformat()}",
+                )
             target_tab = "archive" if is_auction_archived(updated_auction) else "active"
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={target_tab}")
         except Exception as exc:
@@ -7609,6 +7883,19 @@ def app(environ, start_response):
             )
             if not updated:
                 raise ValueError("Аукцион не найден")
+            if updated_at is not None:
+                event_date = local_contract_event_date(updated_at)
+                storage.add_auction_event(
+                    current_owner,
+                    auction_id,
+                    event_date,
+                    "discount",
+                    f"Установлено максимальное снижение: {format_percent(max_discount_percent)}",
+                    description=f"Минимальная цена: {format_amount(min_bid_amount)}" if min_bid_amount is not None else "",
+                    actor_name=updated_by_name,
+                    source_kind="max_discount",
+                    source_ref=f"{auction_id}:{max_discount_percent}:{event_date.isoformat()}",
+                )
             target_tab = "archive" if is_auction_archived(auction) else current_auction_tab
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={target_tab}")
         except Exception as exc:
@@ -7710,6 +7997,9 @@ def app(environ, start_response):
         form = read_post_data(environ)
         try:
             auction_id = int(path.split("/")[2])
+            auction = next((item for item in storage.list_auctions(current_owner) if item.id == auction_id), None)
+            if auction is None:
+                raise ValueError("Аукцион не найден")
             bid_deadline = parse_date(form["bid_deadline"])
             updated = storage.update_auction_deadline(current_owner, auction_id, bid_deadline)
             if not updated:
@@ -7717,6 +8007,17 @@ def app(environ, start_response):
             updated_auction = next((item for item in storage.list_auctions(current_owner) if item.id == auction_id), None)
             if updated_auction is None:
                 raise ValueError("Аукцион не найден")
+            if bid_deadline != auction.bid_deadline:
+                storage.add_auction_event(
+                    current_owner,
+                    auction_id,
+                    bid_deadline,
+                    "deadline",
+                    f"Изменен дедлайн подачи: {format_date(bid_deadline)}",
+                    actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                    source_kind="deadline_update",
+                    source_ref=f"{auction_id}:{bid_deadline.isoformat()}",
+                )
             target_tab = "archive" if is_auction_archived(updated_auction) else current_auction_tab
             return redirect(start_response, f"/auctions?owner={current_owner}&tab={target_tab}")
         except Exception as exc:
@@ -7831,6 +8132,33 @@ def app(environ, start_response):
                 ("Pragma", "no-cache"),
             ],
         )
+        return [html.encode("utf-8")]
+
+    if path.startswith("/auctions/") and path.endswith("/timeline") and method == "GET":
+        denied = guard("auctions", "view")
+        if denied:
+            return denied
+        if not can_view_auction_timeline(current_user):
+            body = render_forbidden_body("Аукционы")
+            html = layout("Доступ запрещен", body, owners, current_owner, "auctions", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            auction_id = int(path.split("/")[2])
+        except ValueError:
+            auction_id = -1
+        body = render_auction_timeline_page(storage, current_owner, auction_id, current_user)
+        html = layout(
+            "Хронология аукциона",
+            body,
+            owners,
+            current_owner,
+            "auctions",
+            current_user,
+            hero_title_override="Хронология аукциона",
+            hero_copy_override="Внутренний журнал смены статусов и ключевых действий по аукциону.",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
     if path.startswith("/auctions/") and method == "GET":
