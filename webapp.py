@@ -3611,6 +3611,14 @@ def layout(
       line-height: 1.45;
       margin-top: 4px;
     }}
+    .payable-document-note {{
+      color: color-mix(in srgb, var(--muted) 82%, white 18%);
+      font-size: 12px;
+      line-height: 1.3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }}
     .payroll-amount {{
       font-weight: 600;
       color: var(--ink);
@@ -6190,10 +6198,8 @@ def render_payable_counterparty_editor(owner_chat_id: int, entry, current_user: 
 def render_payable_document_form(owner_chat_id: int, entry, current_user: dict | None, active_tab: str = "active", counterparty_filter: str = "", sort_key: str = "", sort_order: str = "") -> str:
     doc_label = entry.document_ref.strip() or "Документ не указан"
     date_note = format_date(entry.document_date) if entry.document_date is not None else "Дата не указана"
-    display = f"""
-    <div class="contract-table-subtle" style="margin-top:0;">{escape(doc_label)}</div>
-    <div class="contract-table-subtle">{escape(date_note)}</div>
-    """
+    inline_note = f"{doc_label} · {date_note}"
+    display = f'<div class="payable-document-note">{escape(inline_note)}</div>'
     if not has_permission(current_user, "payables", "edit"):
         return display
     return f"""
