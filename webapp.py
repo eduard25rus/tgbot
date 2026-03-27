@@ -1861,7 +1861,7 @@ def build_auction_timeline_items(storage: Storage, owner_chat_id: int, auction_i
         estimate_date = local_contract_event_date(auction.estimate_status_updated_at)
         estimate_ref = f"{auction.id}:{auction.estimate_status}:{estimate_date.isoformat()}"
         if ("estimate_status", estimate_ref) not in logged_refs:
-            label = AUCTION_ESTIMATE_META.get(auction.estimate_status, ("Статус изменен", "chip"))[0]
+            label, status_css = AUCTION_ESTIMATE_META.get(auction.estimate_status, ("Статус изменен", "chip"))
             items.append(
                 {
                     "sort_date": estimate_date,
