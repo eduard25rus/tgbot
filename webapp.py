@@ -3048,12 +3048,12 @@ def layout(
       align-items: center;
       margin: 0;
       padding: 0;
-      line-height: 1;
     }}
     .contract-chip-menu summary .chip {{
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      min-height: 48px;
     }}
     .panel-title {{
       font-size: 22px;
