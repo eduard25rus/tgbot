@@ -5480,8 +5480,11 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
               </td>
               <td class="nowrap" style="text-align:center;">
                 <div>{format_amount(item["paid_amount"])}</div>
-                <div class="contract-table-subtle">Долг: {format_amount(item["debt_amount"])}</div>
                 <div class="contract-table-subtle">{format_percent(progress_width)} оплачено</div>
+              </td>
+              <td class="nowrap" style="text-align:center;">
+                <div>{format_amount(item["debt_amount"])}</div>
+                <div class="contract-table-subtle">Задолженность</div>
               </td>
             </tr>
             """
@@ -5534,7 +5537,8 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
               <th class="nowrap">Дедлайн</th>
               <th class="nowrap">Сумма</th>
               <th class="nowrap">Аванс</th>
-              <th class="nowrap">Оплачено / долг</th>
+              <th class="nowrap">Оплачено</th>
+              <th class="nowrap">Долг</th>
             </tr>
           </thead>
           <tbody>{contracts_table}</tbody>
