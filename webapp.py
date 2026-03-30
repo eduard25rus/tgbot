@@ -5965,6 +5965,51 @@ def payroll_deadline_header(payroll_month: date, payment_kind: str, rows) -> str
     )
 
 
+def build_payroll_upcoming_events(payroll_month: date, rows) -> list[dict]:
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    event_specs = [
+        {
+            "title": "Выплата аванса",
+            "deadline": payroll_deadline_for_kind(payroll_month, "advance_card"),
+            "kinds": ("advance_card", "advance_cash"),
+        },
+        {
+            "title": "Выплата заработной платы",
+            "deadline": payroll_deadline_for_kind(payroll_month, "salary"),
+            "kinds": ("salary", "bonus"),
+        },
+    ]
+    events: list[dict] = []
+    for spec in event_specs:
+        deadline = spec["deadline"]
+        days_left = (deadline - today).days
+        if days_left < 0 or days_left > 7:
+            continue
+        outstanding = 0.0
+        for row in rows:
+            for kind in spec["kinds"]:
+                planned = getattr(row, f"{kind}_amount")
+                paid = getattr(row, f"{kind}_paid_amount")
+                outstanding += max(planned - paid, 0.0)
+        outstanding = round(outstanding, 2)
+        if outstanding <= 0.009:
+            continue
+        if days_left == 0:
+            due_label = "Сегодня"
+        elif days_left == 1:
+            due_label = "Через 1 день"
+        else:
+            due_label = f"Через {days_left} дн."
+        events.append(
+            {
+                "date": deadline,
+                "title": spec["title"],
+                "note": f"{due_label} · Осталось выплатить {format_amount(outstanding)}",
+            }
+        )
+    return events
+
+
 def payroll_expected_salary_amount(row) -> float:
     return round(max(row.accrued_amount - row.advance_card_amount - row.advance_cash_amount, 0.0), 2)
 
@@ -6635,6 +6680,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     total_paid = sum(payroll_row_metrics(row)["paid_total"] for row in rows)
     total_debt = sum(payroll_row_metrics(row)["debt_amount"] for row in rows)
     closed_count = sum(1 for row in rows if payroll_row_metrics(row)["status_label"] == "Закрыто")
+    payroll_upcoming_events = build_payroll_upcoming_events(selected_month, rows)
     month_tabs = "".join(
         f'<a class="tab-btn{" active" if month == selected_month else ""}" href="/payroll?owner={owner_chat_id}&month={month.strftime("%Y-%m")}">{escape(format_month_label(month))}</a>'
         for month in months
@@ -6714,6 +6760,18 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         )
     rows_html = "".join(body_rows) or '<tr><td colspan="10">Сотрудников пока нет.</td></tr>'
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    payroll_upcoming_html = "".join(
+        f"""
+        <div class="timeline-item">
+          <div class="timeline-date">{format_date(item["date"])}</div>
+          <div>
+            <div class="timeline-title">{escape(item["title"])}</div>
+            <div class="contract-meta">{escape(item["note"])}</div>
+          </div>
+        </div>
+        """
+        for item in payroll_upcoming_events
+    ) or '<div class="empty">На ближайшую неделю зарплатных событий нет.</div>'
     return f"""
     {stats}
     <section class="card panel" style="margin-top:22px;">
@@ -6743,6 +6801,15 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         </thead>
         <tbody>{rows_html}</tbody>
       </table>
+    </section>
+    <section class="card panel" style="margin-top: 22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Ближайшие события</h2>
+          <div class="panel-sub">Календарь зарплатных выплат, который потом можно будет собрать в единый календарь событий.</div>
+        </div>
+      </div>
+      <div class="timeline">{payroll_upcoming_html}</div>
     </section>
     """
 
