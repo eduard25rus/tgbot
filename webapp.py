@@ -5510,6 +5510,7 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
             """
         )
     upcoming_html = "".join(upcoming_items) or '<div class="empty">На ближайшие 30 дней дедлайнов нет.</div>'
+    add_contract_button = f'<a class="secondary-btn" href="/contracts/new?owner={owner_chat_id}">Добавить контракт</a>'
 
     return f"""
     {stats_html}
@@ -5519,7 +5520,10 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
           <h2 class="panel-title">Реестр контрактов</h2>
           <div class="panel-sub">Контракты, этапы, оплаты и аванс в одном рабочем реестре, по той же логике аккуратной панели, что и в аукционах.</div>
         </div>
-        <div class="chip">Рабочий контур</div>
+        <div class="action-row" style="gap:12px; align-items:center;">
+          {add_contract_button}
+          <div class="chip">Рабочий контур</div>
+        </div>
       </div>
       {
         f'''
@@ -5543,11 +5547,27 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
     <section class="card panel" style="margin-top: 22px;">
       <div class="panel-head">
         <div>
-          <h2 class="panel-title">Добавить контракт</h2>
-          <div class="panel-sub">Сразу фиксируем общую сумму, аванс и этапы: суммы и сроки по каждому этапу.</div>
+          <h2 class="panel-title">Ближайшие сроки</h2>
+          <div class="panel-sub">Контрактный календарь, который уже можно развивать дальше в полноценный контроль сроков.</div>
         </div>
-        <div class="chip">Новый контракт сразу собирается по этапам</div>
       </div>
+      <div class="timeline">{upcoming_html}</div>
+    </section>
+    """
+
+
+def render_contract_create_form(owner_chat_id: int, flash_message: str = "") -> str:
+    flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
+    return f"""
+    <section class="card panel" style="margin-top: 22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Добавить контракт</h2>
+          <div class="panel-sub">Сразу фиксируем общую сумму, аванс, этапы, ссылку на ЕИС и ключевые реквизиты контракта.</div>
+        </div>
+        <a class="chip contract-back-link" href="/contracts?owner={owner_chat_id}">← Назад к реестру</a>
+      </div>
+      {flash_html}
       <form class="form-grid contract-create-form" method="post" action="/contracts/new?owner={owner_chat_id}">
         <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
           <div class="field">
@@ -5617,15 +5637,6 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
           <button class="submit-btn" type="submit">Создать контракт</button>
         </div>
       </form>
-    </section>
-    <section class="card panel" style="margin-top: 22px;">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">Ближайшие сроки</h2>
-          <div class="panel-sub">Контрактный календарь, который уже можно развивать дальше в полноценный контроль сроков.</div>
-        </div>
-      </div>
-      <div class="timeline">{upcoming_html}</div>
     </section>
     """
 
@@ -7715,8 +7726,8 @@ def app(environ, start_response):
                 storage.add_stage(contract_id, index, notes, start_date, end_date, amount)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
-            body = render_dashboard(storage, current_owner) + f'<div class="flash">Не удалось создать контракт: {escape(str(exc))}</div>'
-            html = layout("Контракты", body, owners, current_owner, "contracts", current_user)
+            body = render_contract_create_form(current_owner, f"Не удалось создать контракт: {exc}")
+            html = layout("Добавить контракт", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
@@ -7726,6 +7737,15 @@ def app(environ, start_response):
             return denied
         body = render_dashboard(storage, current_owner)
         html = layout("Контракты", body, owners, current_owner, "contracts", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/contracts/new" and method == "GET":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        body = render_contract_create_form(current_owner)
+        html = layout("Добавить контракт", body, owners, current_owner, "contracts", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
