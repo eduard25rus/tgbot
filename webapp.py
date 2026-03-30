@@ -49,7 +49,7 @@ AUCTION_SUBMIT_DECISION_META = {
     "pending": ("Не решено", "chip"),
     "approved": ("Подавать заявку", "chip warn"),
     "submitted": ("Заявка подана", "chip ok"),
-    "rejected": ("Не подаемся", "chip"),
+    "rejected": ("Не подаемся", "chip danger"),
 }
 
 AUCTION_RESULT_META = {
