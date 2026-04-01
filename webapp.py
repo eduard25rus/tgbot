@@ -873,8 +873,10 @@ def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
                         "title": "Выставить счет на аванс",
                         "description": f"{contract_label} · {stage.name}",
                         "due_date": stage.start_date or stage.end_date,
+                        "assignee_kind": "role",
                         "assignee_user_id": None,
                         "assignee_name": "",
+                        "assignee_role_code": "procurement",
                         "assignee_role_name": "Отдел госзакупок",
                         "status": "open",
                         "completion_comment": "",
@@ -892,8 +894,10 @@ def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
                         "title": "Выставить счет на остаток",
                         "description": f"{contract_label} · {stage.name}",
                         "due_date": stage.end_date,
+                        "assignee_kind": "role",
                         "assignee_user_id": None,
                         "assignee_name": "",
+                        "assignee_role_code": "procurement",
                         "assignee_role_name": "Отдел госзакупок",
                         "status": "open",
                         "completion_comment": "",
@@ -914,8 +918,10 @@ def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
                     "title": "Принять решение по аукциону",
                     "description": auction_label,
                     "due_date": auction.bid_deadline,
+                    "assignee_kind": "role",
                     "assignee_user_id": None,
                     "assignee_name": "",
+                    "assignee_role_code": "management",
                     "assignee_role_name": "Руководство компании",
                     "status": "open",
                     "completion_comment": "",
@@ -933,8 +939,10 @@ def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
                     "title": "Просчитать аукцион",
                     "description": auction_label,
                     "due_date": auction.bid_deadline,
+                    "assignee_kind": "role",
                     "assignee_user_id": None,
                     "assignee_name": "",
+                    "assignee_role_code": "supply",
                     "assignee_role_name": "Отдел снабжения",
                     "status": "open",
                     "completion_comment": "",
@@ -952,8 +960,10 @@ def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
                     "title": "Подать заявку",
                     "description": auction_label,
                     "due_date": auction.bid_deadline,
+                    "assignee_kind": "role",
                     "assignee_user_id": None,
                     "assignee_name": "",
+                    "assignee_role_code": "procurement",
                     "assignee_role_name": "Отдел госзакупок",
                     "status": "open",
                     "completion_comment": "",
@@ -971,8 +981,10 @@ def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
                     "title": "Установить максимальное снижение",
                     "description": auction_label,
                     "due_date": auction.bid_deadline,
+                    "assignee_kind": "role",
                     "assignee_user_id": None,
                     "assignee_name": "",
+                    "assignee_role_code": "management",
                     "assignee_role_name": "Руководство компании",
                     "status": "open",
                     "completion_comment": "",
@@ -1005,8 +1017,10 @@ def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
                     "title": "Выплатить аванс",
                     "description": f"За {format_month_label(payroll_month)} · осталось {format_amount(advance_outstanding)}",
                     "due_date": advance_due,
+                    "assignee_kind": "role",
                     "assignee_user_id": None,
                     "assignee_name": "",
+                    "assignee_role_code": "management",
                     "assignee_role_name": "Руководство компании",
                     "status": "open",
                     "completion_comment": "",
@@ -1024,8 +1038,10 @@ def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
                     "title": "Выплатить зарплату",
                     "description": f"За {format_month_label(payroll_month)} · осталось {format_amount(salary_outstanding)}",
                     "due_date": salary_due,
+                    "assignee_kind": "role",
                     "assignee_user_id": None,
                     "assignee_name": "",
+                    "assignee_role_code": "management",
                     "assignee_role_name": "Руководство компании",
                     "status": "open",
                     "completion_comment": "",
@@ -7549,7 +7565,7 @@ def can_comment_task(current_user: dict | None, task: dict) -> bool:
 
 
 def task_assignee_label(task: dict) -> str:
-    if task.get("assignee_kind") == "role":
+    if task.get("assignee_kind") == "role" or (not task.get("assignee_name") and task.get("assignee_role_name")):
         return task.get("assignee_role_name") or "Роль не указана"
     return task.get("assignee_name") or "Без ответственного"
 
@@ -7982,7 +7998,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
       <div class="panel-head contract-detail-head">
         <div>
           <h2 class="panel-title">{escape(task.title)}</h2>
-          <div class="panel-sub">{escape(task.description) if task.description else 'Комментарий к задаче пока не заполнен.'}</div>
+          <div class="panel-sub">{escape(task_assignee_label(task_payload))} · дедлайн {format_date(task.due_date)}</div>
         </div>
         <a class="secondary-btn" href="/tasks{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">← Назад к реестру</a>
       </div>
@@ -7993,18 +8009,22 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
         <div class="chip">Поставил: {escape(task.created_by_name or 'Автор неизвестен')}</div>
         <div class="chip">Создана: {format_datetime(created_local)}</div>
       </div>
+      <div class="timeline-item" style="margin-top:18px;">
+        <div class="timeline-date">Суть задачи</div>
+        <div>
+          <div class="timeline-title">{escape(task.title)}</div>
+          <div class="contract-table-subtle">{escape(task.description) if task.description else 'Описание задачи пока не заполнено.'}</div>
+        </div>
+      </div>
       {f'<div class="contract-table-subtle" style="margin-top:10px;">Последний результат: {escape(task.completion_comment)}</div>' if task.completion_comment else ''}
       {f'<div class="contract-table-subtle">Статус зафиксировал: {escape(task.completed_by_name or "—")} · {format_datetime(completed_local)}</div>' if completed_local else ''}
       {flash_html}
     </section>
     {f'''
     <section class="card panel" style="margin-top:22px;">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">Управление задачей</h2>
-          <div class="panel-sub">Меняем ответственного, дедлайн, формулировку и статус задачи.</div>
-        </div>
-      </div>
+      <details class="status-menu">
+        <summary><span class="secondary-btn">Управление задачей</span></summary>
+        <div class="status-popover" style="min-width: min(760px, 88vw);">
       <form class="form-grid" method="post" action="/tasks/{task.id}/update{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">
         <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
           <div class="field">
@@ -8046,6 +8066,8 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
           <button class="secondary-btn danger" type="submit" formaction="/tasks/{task.id}/delete{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" onclick="return confirm('Убрать задачу в удаленные?');">Удалить задачу</button>
         </div>
       </form>
+        </div>
+      </details>
     </section>
     ''' if can_manage and task.deleted_at is None else ''}
     {f'''
@@ -8087,7 +8109,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
-          <h2 class="panel-title">Дополнения по задаче</h2>
+          <h2 class="panel-title">Комментарии по задаче</h2>
           <div class="panel-sub">Любой видящий задачу сотрудник может оставить уточнение, дополнение или приложить файл.</div>
         </div>
       </div>
@@ -8108,7 +8130,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Хронология задачи</h2>
-          <div class="panel-sub">Комментарии, дополнения и файлы по задаче одним списком.</div>
+          <div class="panel-sub">Все дополнения, промежуточные ответы и вложения по задаче одним списком.</div>
         </div>
       </div>
       {comment_items}
