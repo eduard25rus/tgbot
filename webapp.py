@@ -853,6 +853,7 @@ def task_status_meta(status: str) -> tuple[str, str]:
     return {
         "open": ("Открыта", "chip warn"),
         "done": ("Выполнена", "chip ok"),
+        "not_done": ("Не выполнена", "chip danger"),
     }.get(status, ("Открыта", "chip warn"))
 
 
@@ -7526,13 +7527,13 @@ def task_query_suffix(owner_chat_id: int, status_filter: str = "open", assignee_
 
 
 def render_task_status_control(owner_chat_id: int, task: dict, current_user: dict | None, status_filter: str, assignee_filter: str, group_by: str, source_filter: str) -> str:
-    due_is_overdue = task["status"] != "done" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date()
+    due_is_overdue = task["status"] == "open" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date()
     if task.get("task_kind") == "auto":
         label = "Просрочена" if due_is_overdue else "Авто"
         css = "chip danger" if due_is_overdue else "chip"
         return f'<span class="{css}">{label}</span>'
     label, css = task_status_meta(task["status"])
-    if due_is_overdue and task["status"] != "done":
+    if due_is_overdue:
         css = "chip danger"
     completion_note = ""
     if task.get("completion_comment"):
@@ -7540,25 +7541,38 @@ def render_task_status_control(owner_chat_id: int, task: dict, current_user: dic
     display = f'<div><span class="{css}">{escape(label)}</span>{completion_note}</div>'
     if not can_update_task_status(current_user, task):
         return display
-    checked_attr = "checked" if task["status"] == "done" else ""
     completed_date = ""
     if task.get("completed_at") is not None:
         completed_at = task["completed_at"]
         completed_date = completed_at.astimezone(VLADIVOSTOK_TZ).date().isoformat() if completed_at.tzinfo else completed_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date().isoformat()
+    selected_status = task.get("status", "open")
+    comment_label = "Комментарий"
+    comment_placeholder = "Что важно зафиксировать по задаче"
+    if selected_status == "done":
+        comment_label = "Результат выполнения"
+        comment_placeholder = "Что сделали и какой итог получили"
+    elif selected_status == "not_done":
+        comment_label = "Причина невыполнения"
+        comment_placeholder = "Почему задача не выполнена и что мешает"
     return f"""
     <details class="status-menu">
       <summary>{display}</summary>
       <div class="status-popover">
         <form class="form-grid" method="post" action="/tasks/{task['id']}/status{task_query_suffix(owner_chat_id, status_filter, assignee_filter, group_by, source_filter)}">
-          <label class="advance-toggle">
-            <input class="toggle-checkbox" type="checkbox" name="is_done" value="1" {checked_attr}> Задача выполнена
-          </label>
           <div class="field">
-            <label>Комментарий по задаче</label>
-            <textarea name="completion_comment" placeholder="Что сделали, что важно учесть дальше">{escape(task.get("completion_comment", ""))}</textarea>
+            <label>Статус задачи</label>
+            <select name="task_status">
+              <option value="open"{" selected" if selected_status == "open" else ""}>Открыта</option>
+              <option value="done"{" selected" if selected_status == "done" else ""}>Выполнена</option>
+              <option value="not_done"{" selected" if selected_status == "not_done" else ""}>Не выполнена</option>
+            </select>
           </div>
           <div class="field">
-            <label>Дата выполнения</label>
+            <label>{comment_label}</label>
+            <textarea name="completion_comment" placeholder="{comment_placeholder}">{escape(task.get("completion_comment", ""))}</textarea>
+          </div>
+          <div class="field">
+            <label>Дата статуса</label>
             <input type="date" name="completed_date" value="{completed_date or datetime.now(VLADIVOSTOK_TZ).date().isoformat()}">
           </div>
           <button class="submit-btn" type="submit">Сохранить</button>
@@ -7604,9 +7618,11 @@ def render_tasks_section(
     visible_tasks = [task for task in all_tasks if task_visible_to_user(task, current_user)]
 
     if status_filter == "open":
-        visible_tasks = [task for task in visible_tasks if task["status"] != "done"]
+        visible_tasks = [task for task in visible_tasks if task["status"] == "open"]
     elif status_filter == "done":
         visible_tasks = [task for task in visible_tasks if task["status"] == "done"]
+    elif status_filter == "not_done":
+        visible_tasks = [task for task in visible_tasks if task["status"] == "not_done"]
 
     if assignee_filter:
         visible_tasks = [
@@ -7631,9 +7647,10 @@ def render_tasks_section(
         ("auctions", "Аукционы"),
         ("payroll", "Зарплата"),
     ]
-    open_count = sum(1 for task in visible_tasks if task["status"] != "done")
+    open_count = sum(1 for task in visible_tasks if task["status"] == "open")
     done_count = sum(1 for task in visible_tasks if task["status"] == "done")
-    overdue_count = sum(1 for task in visible_tasks if task["status"] != "done" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date())
+    not_done_count = sum(1 for task in visible_tasks if task["status"] == "not_done")
+    overdue_count = sum(1 for task in visible_tasks if task["status"] == "open" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date())
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
 
     group_rows: list[str] = []
@@ -7645,7 +7662,7 @@ def render_tasks_section(
             group_rows.append(f'<tr class="task-group-row"><td colspan="5">{escape(current_group)}</td></tr>')
         created_at = task["created_at"]
         created_local = created_at.astimezone(VLADIVOSTOK_TZ) if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ)
-        due_class = "deadline-meta danger" if task["status"] != "done" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date() else "deadline-meta ok" if task["task_kind"] == "auto" else "contract-table-subtle"
+        due_class = "deadline-meta danger" if task["status"] == "open" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date() else "deadline-meta ok" if task["task_kind"] == "auto" else "contract-table-subtle"
         source_label = {
             "manual": "Ручная задача",
             "contracts": "Контракты",
@@ -7728,14 +7745,14 @@ def render_tasks_section(
         <div class="stat-note">По текущему фильтру</div>
       </article>
       <article class="card stat-card">
+        <div class="stat-label">Не выполнено</div>
+        <div class="stat-value">{not_done_count}</div>
+        <div class="stat-note">Закрыто с причиной или переносом</div>
+      </article>
+      <article class="card stat-card">
         <div class="stat-label">Просрочено</div>
         <div class="stat-value">{overdue_count}</div>
         <div class="stat-note">Открытых задач с сорванным дедлайном</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Всего видно</div>
-        <div class="stat-value">{len(visible_tasks)}</div>
-        <div class="stat-note">С учетом ваших прав и фильтров</div>
       </article>
     </section>
     <section class="card panel" style="margin-top:22px;">
@@ -7754,6 +7771,7 @@ def render_tasks_section(
             <select name="status">
               <option value="open"{" selected" if status_filter == "open" else ""}>Открытые</option>
               <option value="done"{" selected" if status_filter == "done" else ""}>Выполненные</option>
+              <option value="not_done"{" selected" if status_filter == "not_done" else ""}>Не выполненные</option>
               <option value="all"{" selected" if status_filter == "all" else ""}>Все</option>
             </select>
           </div>
@@ -8821,7 +8839,7 @@ def app(environ, start_response):
         assignee_filter = query.get("assignee", [""])[0].strip()
         group_by = query.get("group", [""])[0].strip()
         source_filter = query.get("source", [""])[0].strip()
-        if status_filter not in {"open", "done", "all"}:
+        if status_filter not in {"open", "done", "not_done", "all"}:
             status_filter = "open"
         if group_by not in {"", "assignee"}:
             group_by = ""
@@ -8902,16 +8920,20 @@ def app(environ, start_response):
             }
             if not can_update_task_status(current_user, task_payload):
                 raise ValueError("Недостаточно прав для изменения задачи")
-            is_done = form.get("is_done") == "1"
+            task_status = form.get("task_status", "open").strip()
+            if task_status not in {"open", "done", "not_done"}:
+                raise ValueError("Некорректный статус задачи")
             completion_comment = form.get("completion_comment", "").strip()
             completed_date_raw = form.get("completed_date", "").strip()
             completed_at = None
             completed_by_name = ""
-            if is_done:
+            if task_status in {"done", "not_done"}:
+                if not completion_comment:
+                    raise ValueError("Укажите комментарий по результату задачи")
                 completed_date = parse_date(completed_date_raw) if completed_date_raw else datetime.now(VLADIVOSTOK_TZ).date()
                 completed_at = local_date_to_utc_naive(completed_date)
                 completed_by_name = current_user.get("full_name", "").strip() if current_user else ""
-            if not storage.update_task_status(current_owner, task_id, "done" if is_done else "open", completion_comment, completed_at, completed_by_name):
+            if not storage.update_task_status(current_owner, task_id, task_status, completion_comment, completed_at, completed_by_name):
                 raise ValueError("Не удалось обновить задачу")
             return redirect(start_response, f"/tasks{task_query_suffix(current_owner, status_filter, assignee_filter, group_by, source_filter)}")
         except Exception as exc:
