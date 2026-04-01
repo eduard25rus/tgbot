@@ -225,8 +225,10 @@ class TaskEntry:
     title: str
     description: str
     due_date: date
+    assignee_kind: str
     assignee_user_id: Optional[int]
     assignee_name: str
+    assignee_role_code: str
     assignee_role_name: str
     status: str
     completion_comment: str
@@ -235,6 +237,28 @@ class TaskEntry:
     created_at: datetime
     completed_at: Optional[datetime]
     completed_by_name: str
+    deleted_at: Optional[datetime]
+
+
+@dataclass
+class TaskComment:
+    id: int
+    task_id: int
+    comment_type: str
+    body: str
+    author_user_id: Optional[int]
+    author_name: str
+    created_at: datetime
+
+
+@dataclass
+class TaskAttachment:
+    id: int
+    task_id: int
+    comment_id: Optional[int]
+    file_name: str
+    file_path: str
+    created_at: datetime
 
 
 class Storage:
@@ -423,8 +447,10 @@ class Storage:
                     title TEXT NOT NULL DEFAULT '',
                     description TEXT NOT NULL DEFAULT '',
                     due_date TEXT NOT NULL,
+                    assignee_kind TEXT NOT NULL DEFAULT 'user',
                     assignee_user_id INTEGER,
                     assignee_name TEXT NOT NULL DEFAULT '',
+                    assignee_role_code TEXT NOT NULL DEFAULT '',
                     assignee_role_name TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'open',
                     completion_comment TEXT NOT NULL DEFAULT '',
@@ -433,8 +459,32 @@ class Storage:
                     created_at TEXT NOT NULL,
                     completed_at TEXT,
                     completed_by_name TEXT NOT NULL DEFAULT '',
+                    deleted_at TEXT,
                     FOREIGN KEY(assignee_user_id) REFERENCES web_users(id) ON DELETE SET NULL,
                     FOREIGN KEY(created_by_user_id) REFERENCES web_users(id) ON DELETE SET NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS task_comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    comment_type TEXT NOT NULL DEFAULT 'comment',
+                    body TEXT NOT NULL DEFAULT '',
+                    author_user_id INTEGER,
+                    author_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                    FOREIGN KEY(author_user_id) REFERENCES web_users(id) ON DELETE SET NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS task_attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    comment_id INTEGER,
+                    file_name TEXT NOT NULL DEFAULT '',
+                    file_path TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                    FOREIGN KEY(comment_id) REFERENCES task_comments(id) ON DELETE SET NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS auctions (
@@ -557,6 +607,9 @@ class Storage:
             payable_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(payables)").fetchall()
             }
+            task_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
+            }
             if "amount" not in columns:
                 conn.execute("ALTER TABLE stages ADD COLUMN amount REAL NOT NULL DEFAULT 0")
             if "position" not in columns:
@@ -649,6 +702,12 @@ class Storage:
                     conn.execute(f"ALTER TABLE payroll_entries ADD COLUMN {column_name} {column_def}")
             if "deleted_at" not in payable_columns:
                 conn.execute("ALTER TABLE payables ADD COLUMN deleted_at TEXT")
+            if "assignee_kind" not in task_columns:
+                conn.execute("ALTER TABLE tasks ADD COLUMN assignee_kind TEXT NOT NULL DEFAULT 'user'")
+            if "assignee_role_code" not in task_columns:
+                conn.execute("ALTER TABLE tasks ADD COLUMN assignee_role_code TEXT NOT NULL DEFAULT ''")
+            if "deleted_at" not in task_columns:
+                conn.execute("ALTER TABLE tasks ADD COLUMN deleted_at TEXT")
             grant_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(access_grants)").fetchall()
             }
@@ -3287,21 +3346,36 @@ class Storage:
             )
             return cursor.rowcount
 
-    def list_tasks(self, owner_chat_id: int) -> list[TaskEntry]:
+    def list_tasks(self, owner_chat_id: int, include_deleted: bool = False) -> list[TaskEntry]:
         with self.connection() as conn:
             rows = conn.execute(
                 """
                 SELECT
-                    id, owner_chat_id, title, description, due_date, assignee_user_id,
-                    assignee_name, assignee_role_name, status, completion_comment,
-                    created_by_user_id, created_by_name, created_at, completed_at, completed_by_name
+                    id, owner_chat_id, title, description, due_date, assignee_kind, assignee_user_id,
+                    assignee_name, assignee_role_code, assignee_role_name, status, completion_comment,
+                    created_by_user_id, created_by_name, created_at, completed_at, completed_by_name, deleted_at
                 FROM tasks
-                WHERE owner_chat_id = ?
-                ORDER BY due_date ASC, created_at DESC, id DESC
+                WHERE owner_chat_id = ? AND (? = 1 OR deleted_at IS NULL)
+                ORDER BY deleted_at IS NOT NULL, due_date ASC, created_at DESC, id DESC
                 """,
-                (owner_chat_id,),
+                (owner_chat_id, 1 if include_deleted else 0),
             ).fetchall()
         return [self._task_from_row(row) for row in rows]
+
+    def get_task(self, owner_chat_id: int, task_id: int) -> TaskEntry | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    id, owner_chat_id, title, description, due_date, assignee_kind, assignee_user_id,
+                    assignee_name, assignee_role_code, assignee_role_name, status, completion_comment,
+                    created_by_user_id, created_by_name, created_at, completed_at, completed_by_name, deleted_at
+                FROM tasks
+                WHERE owner_chat_id = ? AND id = ?
+                """,
+                (owner_chat_id, task_id),
+            ).fetchone()
+        return self._task_from_row(row) if row else None
 
     def add_task(
         self,
@@ -3309,8 +3383,10 @@ class Storage:
         title: str,
         description: str,
         due_date: date,
+        assignee_kind: str,
         assignee_user_id: int | None,
         assignee_name: str,
+        assignee_role_code: str,
         assignee_role_name: str,
         created_by_user_id: int | None,
         created_by_name: str,
@@ -3320,19 +3396,21 @@ class Storage:
                 """
                 INSERT INTO tasks (
                     owner_chat_id, title, description, due_date,
-                    assignee_user_id, assignee_name, assignee_role_name,
+                    assignee_kind, assignee_user_id, assignee_name, assignee_role_code, assignee_role_name,
                     status, completion_comment,
-                    created_by_user_id, created_by_name, created_at, completed_at, completed_by_name
+                    created_by_user_id, created_by_name, created_at, completed_at, completed_by_name, deleted_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', '', ?, ?, ?, NULL, '')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', '', ?, ?, ?, NULL, '', NULL)
                 """,
                 (
                     owner_chat_id,
                     title.strip(),
                     description.strip(),
                     due_date.strftime(DATE_FMT),
+                    assignee_kind.strip(),
                     assignee_user_id,
                     assignee_name.strip(),
+                    assignee_role_code.strip(),
                     assignee_role_name.strip(),
                     created_by_user_id,
                     created_by_name.strip(),
@@ -3340,6 +3418,42 @@ class Storage:
                 ),
             )
             return int(cursor.lastrowid)
+
+    def update_task(
+        self,
+        owner_chat_id: int,
+        task_id: int,
+        title: str,
+        description: str,
+        due_date: date,
+        assignee_kind: str,
+        assignee_user_id: int | None,
+        assignee_name: str,
+        assignee_role_code: str,
+        assignee_role_name: str,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET title = ?, description = ?, due_date = ?, assignee_kind = ?,
+                    assignee_user_id = ?, assignee_name = ?, assignee_role_code = ?, assignee_role_name = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (
+                    title.strip(),
+                    description.strip(),
+                    due_date.strftime(DATE_FMT),
+                    assignee_kind.strip(),
+                    assignee_user_id,
+                    assignee_name.strip(),
+                    assignee_role_code.strip(),
+                    assignee_role_name.strip(),
+                    task_id,
+                    owner_chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
 
     def update_task_status(
         self,
@@ -3355,7 +3469,7 @@ class Storage:
                 """
                 UPDATE tasks
                 SET status = ?, completion_comment = ?, completed_at = ?, completed_by_name = ?
-                WHERE id = ? AND owner_chat_id = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
                 """,
                 (
                     status.strip(),
@@ -3367,6 +3481,148 @@ class Storage:
                 ),
             )
             return cursor.rowcount > 0
+
+    def soft_delete_task(self, owner_chat_id: int, task_id: int, deleted_at: datetime) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET deleted_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (deleted_at.isoformat(), task_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def restore_deleted_task(self, owner_chat_id: int, task_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET deleted_at = NULL
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NOT NULL
+                """,
+                (task_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def hard_delete_task(self, owner_chat_id: int, task_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM tasks
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NOT NULL
+                """,
+                (task_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def hard_delete_all_deleted_tasks(self, owner_chat_id: int) -> int:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM tasks
+                WHERE owner_chat_id = ? AND deleted_at IS NOT NULL
+                """,
+                (owner_chat_id,),
+            )
+            return cursor.rowcount
+
+    def list_task_comments(self, owner_chat_id: int, task_id: int) -> list[TaskComment]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT c.id, c.task_id, c.comment_type, c.body, c.author_user_id, c.author_name, c.created_at
+                FROM task_comments c
+                JOIN tasks t ON t.id = c.task_id
+                WHERE t.owner_chat_id = ? AND c.task_id = ?
+                ORDER BY c.created_at ASC, c.id ASC
+                """,
+                (owner_chat_id, task_id),
+            ).fetchall()
+        return [self._task_comment_from_row(row) for row in rows]
+
+    def add_task_comment(
+        self,
+        owner_chat_id: int,
+        task_id: int,
+        comment_type: str,
+        body: str,
+        author_user_id: int | None,
+        author_name: str,
+    ) -> int | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM tasks WHERE id = ? AND owner_chat_id = ?",
+                (task_id, owner_chat_id),
+            ).fetchone()
+            if row is None:
+                return None
+            cursor = conn.execute(
+                """
+                INSERT INTO task_comments (task_id, comment_type, body, author_user_id, author_name, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    comment_type.strip() or "comment",
+                    body.strip(),
+                    author_user_id,
+                    author_name.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def list_task_attachments(self, owner_chat_id: int, task_id: int) -> list[TaskAttachment]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT a.id, a.task_id, a.comment_id, a.file_name, a.file_path, a.created_at
+                FROM task_attachments a
+                JOIN tasks t ON t.id = a.task_id
+                WHERE t.owner_chat_id = ? AND a.task_id = ?
+                ORDER BY a.created_at ASC, a.id ASC
+                """,
+                (owner_chat_id, task_id),
+            ).fetchall()
+        return [self._task_attachment_from_row(row) for row in rows]
+
+    def add_task_attachment(self, owner_chat_id: int, task_id: int, comment_id: int | None, file_name: str, file_path: str) -> int | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM tasks WHERE id = ? AND owner_chat_id = ?",
+                (task_id, owner_chat_id),
+            ).fetchone()
+            if row is None:
+                return None
+            cursor = conn.execute(
+                """
+                INSERT INTO task_attachments (task_id, comment_id, file_name, file_path, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    comment_id,
+                    file_name.strip(),
+                    file_path.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def get_task_attachment(self, owner_chat_id: int, attachment_id: int) -> TaskAttachment | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT a.id, a.task_id, a.comment_id, a.file_name, a.file_path, a.created_at
+                FROM task_attachments a
+                JOIN tasks t ON t.id = a.task_id
+                WHERE t.owner_chat_id = ? AND a.id = ?
+                """,
+                (owner_chat_id, attachment_id),
+            ).fetchone()
+        return self._task_attachment_from_row(row) if row else None
 
     @staticmethod
     def _payable_from_row(row: sqlite3.Row) -> PayableEntry:
@@ -3397,8 +3653,10 @@ class Storage:
             title=row["title"] or "",
             description=row["description"] or "",
             due_date=date.fromisoformat(row["due_date"]),
+            assignee_kind=row["assignee_kind"] or "user",
             assignee_user_id=int(row["assignee_user_id"]) if row["assignee_user_id"] is not None else None,
             assignee_name=row["assignee_name"] or "",
+            assignee_role_code=row["assignee_role_code"] or "",
             assignee_role_name=row["assignee_role_name"] or "",
             status=row["status"] or "open",
             completion_comment=row["completion_comment"] or "",
@@ -3407,6 +3665,30 @@ class Storage:
             created_at=datetime.fromisoformat(row["created_at"]),
             completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
             completed_by_name=row["completed_by_name"] or "",
+            deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None,
+        )
+
+    @staticmethod
+    def _task_comment_from_row(row: sqlite3.Row) -> TaskComment:
+        return TaskComment(
+            id=int(row["id"]),
+            task_id=int(row["task_id"]),
+            comment_type=row["comment_type"] or "comment",
+            body=row["body"] or "",
+            author_user_id=int(row["author_user_id"]) if row["author_user_id"] is not None else None,
+            author_name=row["author_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
+    def _task_attachment_from_row(row: sqlite3.Row) -> TaskAttachment:
+        return TaskAttachment(
+            id=int(row["id"]),
+            task_id=int(row["task_id"]),
+            comment_id=int(row["comment_id"]) if row["comment_id"] is not None else None,
+            file_name=row["file_name"] or "",
+            file_path=row["file_path"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
     def _upsert_payroll_entry(

@@ -1045,11 +1045,15 @@ def task_visible_to_user(task: dict, current_user: dict | None) -> bool:
         return False
     if task.get("task_kind") == "auto":
         return preview_role_code(task.get("assignee_role_name", "")) == preview_role_code(effective_role_label(current_user))
+    if task.get("assignee_kind") == "role":
+        return (task.get("assignee_role_code") or preview_role_code(task.get("assignee_role_name", ""))) == preview_role_code(effective_role_label(current_user))
     return task.get("assignee_user_id") == current_user.get("id")
 
 
 def can_update_task_status(current_user: dict | None, task: dict) -> bool:
     if current_user is None or not has_permission(current_user, "tasks", "view"):
+        return False
+    if task.get("deleted_at") is not None:
         return False
     if can_view_all_tasks(current_user):
         return True
@@ -7513,10 +7517,10 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     """
 
 
-def task_query_suffix(owner_chat_id: int, status_filter: str = "open", assignee_filter: str = "", group_by: str = "", source_filter: str = "") -> str:
+def task_query_suffix(owner_chat_id: int, active_tab: str = "active", assignee_filter: str = "", group_by: str = "", source_filter: str = "") -> str:
     parts = [f"owner={owner_chat_id}"]
-    if status_filter:
-        parts.append(f"status={quote_plus(status_filter)}")
+    if active_tab:
+        parts.append(f"tab={quote_plus(active_tab)}")
     if assignee_filter:
         parts.append(f"assignee={quote_plus(assignee_filter)}")
     if group_by:
@@ -7526,7 +7530,113 @@ def task_query_suffix(owner_chat_id: int, status_filter: str = "open", assignee_
     return "?" + "&".join(parts)
 
 
-def render_task_status_control(owner_chat_id: int, task: dict, current_user: dict | None, status_filter: str, assignee_filter: str, group_by: str, source_filter: str) -> str:
+def can_manage_task(current_user: dict | None, task: dict) -> bool:
+    if current_user is None or not has_permission(current_user, "tasks", "edit"):
+        return False
+    if task.get("task_kind") != "manual":
+        return False
+    if can_view_all_tasks(current_user):
+        return True
+    return task.get("created_by_user_id") == current_user.get("id")
+
+
+def can_comment_task(current_user: dict | None, task: dict) -> bool:
+    if current_user is None or not has_permission(current_user, "tasks", "view"):
+        return False
+    if task.get("task_kind") != "manual":
+        return False
+    return task_visible_to_user(task, current_user) or can_view_all_tasks(current_user)
+
+
+def task_assignee_label(task: dict) -> str:
+    if task.get("assignee_kind") == "role":
+        return task.get("assignee_role_name") or "Роль не указана"
+    return task.get("assignee_name") or "Без ответственного"
+
+
+def task_source_label(source_section: str) -> str:
+    return {
+        "manual": "Ручная задача",
+        "contracts": "Контракты",
+        "auctions": "Аукционы",
+        "payroll": "Зарплата",
+    }.get(source_section, "Задача")
+
+
+def task_upload_root(storage: Storage) -> Path:
+    root = contract_upload_root(storage) / "task_files"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def save_task_uploads(storage: Storage, owner_chat_id: int, task_id: int, comment_id: int | None, uploads: list[UploadedFile]) -> None:
+    upload_root = task_upload_root(storage)
+    task_dir = upload_root / str(owner_chat_id) / str(task_id)
+    task_dir.mkdir(parents=True, exist_ok=True)
+    for upload in uploads:
+        original_name = upload.filename.strip()
+        lower_name = original_name.lower()
+        if not any(lower_name.endswith(ext) for ext in LEGAL_UPLOAD_MIME):
+            raise ValueError("Можно прикреплять только PDF, JPG, JPEG, PNG, DOC или DOCX")
+        file_bytes = upload.data
+        if not file_bytes:
+            raise ValueError("Один из файлов пустой")
+        if len(file_bytes) > 20 * 1024 * 1024:
+            raise ValueError("Каждый файл должен быть не больше 20 МБ")
+        safe_name = secure_upload_name(original_name)
+        final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
+        file_path = task_dir / final_name
+        file_path.write_bytes(file_bytes)
+        relative_path = file_path.relative_to(upload_root).as_posix()
+        if storage.add_task_attachment(owner_chat_id, task_id, comment_id, original_name, relative_path) is None:
+            raise ValueError("Не удалось сохранить вложение по задаче")
+
+
+def resolve_task_attachment_file(storage: Storage, attachment) -> tuple[Path, str, str]:
+    upload_root = task_upload_root(storage).resolve()
+    absolute_path = (upload_root / attachment.file_path).resolve()
+    if upload_root not in absolute_path.parents and absolute_path != upload_root:
+        raise ValueError("Forbidden")
+    safe_filename, content_type = detect_legal_file_type(absolute_path, attachment.file_name or absolute_path.name or "file")
+    return absolute_path, safe_filename, content_type
+
+
+def task_assignment_options(storage: Storage, owner_chat_id: int) -> tuple[list[dict], list[tuple[str, str]]]:
+    users = [user for user in storage.list_web_users(owner_chat_id) if user.get("is_active")]
+    role_map: dict[str, str] = {}
+    for user in users:
+        role_name = (user.get("role_name") or "").strip()
+        role_code = preview_role_code(role_name)
+        if role_code and role_code not in role_map:
+            role_map[role_code] = role_name
+    role_options = sorted(role_map.items(), key=lambda item: item[1].lower())
+    return users, role_options
+
+
+def resolve_task_assignment(assign_mode: str, assignee_user_id_raw: str, assignee_role_code: str, users: list[dict], role_options: list[tuple[str, str]]) -> tuple[str, int | None, str, str, str]:
+    if assign_mode == "role":
+        role_code = assignee_role_code.strip()
+        role_name = next((label for code, label in role_options if code == role_code), "")
+        if not role_code or not role_name:
+            raise ValueError("Выберите роль для задачи")
+        return "role", None, "", role_code, role_name
+    try:
+        assignee_user_id = int(assignee_user_id_raw)
+    except (TypeError, ValueError):
+        assignee_user_id = 0
+    assignee = next((user for user in users if user["id"] == assignee_user_id), None)
+    if assignee is None:
+        raise ValueError("Выберите ответственного сотрудника")
+    return (
+        "user",
+        assignee_user_id,
+        assignee.get("full_name", "").strip(),
+        preview_role_code(assignee.get("role_name", "").strip()),
+        assignee.get("role_name", "").strip(),
+    )
+
+
+def render_task_status_control(owner_chat_id: int, task: dict, current_user: dict | None, active_tab: str, assignee_filter: str, group_by: str, source_filter: str) -> str:
     due_is_overdue = task["status"] == "open" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date()
     if task.get("task_kind") == "auto":
         label = "Просрочена" if due_is_overdue else "Авто"
@@ -7538,55 +7648,14 @@ def render_task_status_control(owner_chat_id: int, task: dict, current_user: dic
     completion_note = ""
     if task.get("completion_comment"):
         completion_note = f'<div class="contract-table-subtle">{escape(task["completion_comment"])}</div>'
-    display = f'<div><span class="{css}">{escape(label)}</span>{completion_note}</div>'
-    if not can_update_task_status(current_user, task):
-        return display
-    completed_date = ""
-    if task.get("completed_at") is not None:
-        completed_at = task["completed_at"]
-        completed_date = completed_at.astimezone(VLADIVOSTOK_TZ).date().isoformat() if completed_at.tzinfo else completed_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date().isoformat()
-    selected_status = task.get("status", "open")
-    comment_label = "Комментарий"
-    comment_placeholder = "Что важно зафиксировать по задаче"
-    if selected_status == "done":
-        comment_label = "Результат выполнения"
-        comment_placeholder = "Что сделали и какой итог получили"
-    elif selected_status == "not_done":
-        comment_label = "Причина невыполнения"
-        comment_placeholder = "Почему задача не выполнена и что мешает"
-    return f"""
-    <details class="status-menu">
-      <summary>{display}</summary>
-      <div class="status-popover">
-        <form class="form-grid" method="post" action="/tasks/{task['id']}/status{task_query_suffix(owner_chat_id, status_filter, assignee_filter, group_by, source_filter)}">
-          <div class="field">
-            <label>Статус задачи</label>
-            <select name="task_status">
-              <option value="open"{" selected" if selected_status == "open" else ""}>Открыта</option>
-              <option value="done"{" selected" if selected_status == "done" else ""}>Выполнена</option>
-              <option value="not_done"{" selected" if selected_status == "not_done" else ""}>Не выполнена</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>{comment_label}</label>
-            <textarea name="completion_comment" placeholder="{comment_placeholder}">{escape(task.get("completion_comment", ""))}</textarea>
-          </div>
-          <div class="field">
-            <label>Дата статуса</label>
-            <input type="date" name="completed_date" value="{completed_date or datetime.now(VLADIVOSTOK_TZ).date().isoformat()}">
-          </div>
-          <button class="submit-btn" type="submit">Сохранить</button>
-        </form>
-      </div>
-    </details>
-    """
+    return f'<div><span class="{css}">{escape(label)}</span>{completion_note}</div>'
 
 
 def render_tasks_section(
     storage: Storage,
     owner_chat_id: int,
     current_user: dict | None,
-    status_filter: str = "open",
+    active_tab: str = "active",
     assignee_filter: str = "",
     group_by: str = "",
     source_filter: str = "",
@@ -7601,44 +7670,47 @@ def render_tasks_section(
             "title": task.title,
             "description": task.description,
             "due_date": task.due_date,
+            "assignee_kind": task.assignee_kind,
             "assignee_user_id": task.assignee_user_id,
             "assignee_name": task.assignee_name,
+            "assignee_role_code": task.assignee_role_code,
             "assignee_role_name": task.assignee_role_name,
             "status": task.status,
             "completion_comment": task.completion_comment,
+            "created_by_user_id": task.created_by_user_id,
             "created_by_name": task.created_by_name or "Автор неизвестен",
             "created_at": task.created_at,
             "completed_at": task.completed_at,
             "completed_by_name": task.completed_by_name,
+            "deleted_at": task.deleted_at,
         }
-        for task in storage.list_tasks(owner_chat_id)
+        for task in storage.list_tasks(owner_chat_id, include_deleted=True)
     ]
     auto_tasks = build_auto_tasks(storage, owner_chat_id)
-    all_tasks = manual_tasks + auto_tasks
-    visible_tasks = [task for task in all_tasks if task_visible_to_user(task, current_user)]
-
-    if status_filter == "open":
-        visible_tasks = [task for task in visible_tasks if task["status"] == "open"]
-    elif status_filter == "done":
-        visible_tasks = [task for task in visible_tasks if task["status"] == "done"]
-    elif status_filter == "not_done":
-        visible_tasks = [task for task in visible_tasks if task["status"] == "not_done"]
+    visible_manual_tasks = [task for task in manual_tasks if task_visible_to_user(task, current_user)]
+    visible_auto_tasks = [task for task in auto_tasks if task_visible_to_user(task, current_user)]
+    if active_tab == "archive":
+        visible_tasks = [task for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] in {"done", "not_done"}]
+    elif active_tab == "deleted":
+        visible_tasks = [task for task in visible_manual_tasks if task["deleted_at"] is not None]
+    else:
+        visible_tasks = [task for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] == "open"] + visible_auto_tasks
 
     if assignee_filter:
         visible_tasks = [
             task for task in visible_tasks
-            if (task.get("assignee_name") or task.get("assignee_role_name")) == assignee_filter
+            if task_assignee_label(task) == assignee_filter
         ]
 
     if source_filter:
         visible_tasks = [task for task in visible_tasks if task.get("source_section") == source_filter]
 
-    visible_tasks.sort(key=lambda item: (item["due_date"], item["status"] == "done", item["title"].lower()))
+    visible_tasks.sort(key=lambda item: (item["due_date"], item["task_kind"] != "manual", item["title"].lower()))
 
     assignee_options = sorted({
-        (task.get("assignee_name") or task.get("assignee_role_name"))
-        for task in all_tasks
-        if (task.get("assignee_name") or task.get("assignee_role_name"))
+        task_assignee_label(task)
+        for task in (manual_tasks + auto_tasks)
+        if task_assignee_label(task)
     })
     source_options = [
         ("", "Все источники"),
@@ -7647,16 +7719,18 @@ def render_tasks_section(
         ("auctions", "Аукционы"),
         ("payroll", "Зарплата"),
     ]
-    open_count = sum(1 for task in visible_tasks if task["status"] == "open")
-    done_count = sum(1 for task in visible_tasks if task["status"] == "done")
-    not_done_count = sum(1 for task in visible_tasks if task["status"] == "not_done")
-    overdue_count = sum(1 for task in visible_tasks if task["status"] == "open" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date())
+    active_count = sum(1 for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] == "open") + len(visible_auto_tasks)
+    archive_count = sum(1 for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] in {"done", "not_done"})
+    deleted_count = sum(1 for task in visible_manual_tasks if task["deleted_at"] is not None)
+    done_count = sum(1 for task in visible_tasks if task.get("status") == "done")
+    not_done_count = sum(1 for task in visible_tasks if task.get("status") == "not_done")
+    overdue_count = sum(1 for task in visible_tasks if task.get("status") == "open" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date())
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
 
     group_rows: list[str] = []
     current_group = None
     for task in visible_tasks:
-        assignee_label = task.get("assignee_name") or task.get("assignee_role_name") or "Без ответственного"
+        assignee_label = task_assignee_label(task)
         if group_by == "assignee" and assignee_label != current_group:
             current_group = assignee_label
             group_rows.append(f'<tr class="task-group-row"><td colspan="5">{escape(current_group)}</td></tr>')
@@ -7676,7 +7750,7 @@ def render_tasks_section(
                 <div class="{due_class}">{format_date(task["due_date"])}</div>
               </td>
               <td>
-                <div class="timeline-title">{escape(task["title"])}</div>
+                <div class="timeline-title">{f'<a class="contract-table-link" href="/tasks/{task["id"]}{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">' + escape(task["title"]) + '</a>' if task["task_kind"] == "manual" else escape(task["title"])}</div>
                 {f'<div class="contract-table-subtle">{escape(task["description"])}</div>' if task["description"] else ''}
                 <div class="contract-table-subtle">{escape(source_label)}</div>
               </td>
@@ -7687,7 +7761,7 @@ def render_tasks_section(
                 <div>{escape(task["created_by_name"])}</div>
                 <div class="contract-table-subtle">{format_datetime(created_local)}</div>
               </td>
-              <td>{render_task_status_control(owner_chat_id, task, current_user, status_filter, assignee_filter, group_by, source_filter)}</td>
+              <td>{render_task_status_control(owner_chat_id, task, current_user, active_tab, assignee_filter, group_by, source_filter)}</td>
             </tr>
             """
         )
@@ -7696,7 +7770,7 @@ def render_tasks_section(
 
     add_form_html = ""
     if has_permission(current_user, "tasks", "edit"):
-        users = [user for user in storage.list_web_users(owner_chat_id) if user.get("is_active")]
+        users, role_options = task_assignment_options(storage, owner_chat_id)
         add_form_html = f"""
         <section class="card panel" style="margin-top:22px;">
           <div class="panel-head">
@@ -7705,7 +7779,7 @@ def render_tasks_section(
               <div class="panel-sub">Ручные поручения с ответственным, дедлайном и комментарием.</div>
             </div>
           </div>
-          <form class="form-grid" method="post" action="/tasks/new{task_query_suffix(owner_chat_id, status_filter, assignee_filter, group_by, source_filter)}">
+          <form class="form-grid" method="post" action="/tasks/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">
             <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
               <div class="field">
                 <label>Заголовок задачи</label>
@@ -7716,10 +7790,24 @@ def render_tasks_section(
                 <input type="date" name="due_date" required>
               </div>
               <div class="field">
-                <label>Ответственный</label>
-                <select name="assignee_user_id" required>
+                <label>Кому ставим задачу</label>
+                <select name="assign_mode">
+                  <option value="user">Лично сотруднику</option>
+                  <option value="role">На роль / группу</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Сотрудник</label>
+                <select name="assignee_user_id">
                   <option value="">Выберите сотрудника</option>
                   {"".join(f'<option value="{user["id"]}">{escape(user["full_name"])} · {escape(user["role_name"])}</option>' for user in users)}
+                </select>
+              </div>
+              <div class="field">
+                <label>Роль / группа</label>
+                <select name="assignee_role_code">
+                  <option value="">Выберите роль</option>
+                  {"".join(f'<option value="{escape(code)}">{escape(label)}</option>' for code, label in role_options)}
                 </select>
               </div>
             </div>
@@ -7735,24 +7823,24 @@ def render_tasks_section(
     return f"""
     <section class="stats">
       <article class="card stat-card">
-        <div class="stat-label">Открытых задач</div>
-        <div class="stat-value">{open_count}</div>
-        <div class="stat-note">Сейчас требуют внимания</div>
+        <div class="stat-label">В работе</div>
+        <div class="stat-value">{active_count}</div>
+        <div class="stat-note">Открытые задачи и автопоручения</div>
       </article>
       <article class="card stat-card">
-        <div class="stat-label">Выполнено</div>
-        <div class="stat-value">{done_count}</div>
-        <div class="stat-note">По текущему фильтру</div>
+        <div class="stat-label">Архив</div>
+        <div class="stat-value">{archive_count}</div>
+        <div class="stat-note">Выполненные и закрытые с причиной</div>
       </article>
       <article class="card stat-card">
-        <div class="stat-label">Не выполнено</div>
-        <div class="stat-value">{not_done_count}</div>
-        <div class="stat-note">Закрыто с причиной или переносом</div>
+        <div class="stat-label">Удаленные</div>
+        <div class="stat-value">{deleted_count}</div>
+        <div class="stat-note">Убранные из рабочего списка задачи</div>
       </article>
       <article class="card stat-card">
         <div class="stat-label">Просрочено</div>
         <div class="stat-value">{overdue_count}</div>
-        <div class="stat-note">Открытых задач с сорванным дедлайном</div>
+        <div class="stat-note">Открытых задач с сорванным дедлайном в текущей выборке</div>
       </article>
     </section>
     <section class="card panel" style="margin-top:22px;">
@@ -7763,18 +7851,15 @@ def render_tasks_section(
         </div>
         <div class="chip">{'Руководящий обзор' if can_view_all_tasks(current_user) else 'Мои задачи'}</div>
       </div>
+      <div class="tab-row">
+        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/tasks{task_query_suffix(owner_chat_id, 'active', assignee_filter, group_by, source_filter)}">В работе <span class="tab-count">{active_count}</span></a>
+        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/tasks{task_query_suffix(owner_chat_id, 'archive', assignee_filter, group_by, source_filter)}">Архив <span class="tab-count">{archive_count}</span></a>
+        <a class="tab-btn{" active" if active_tab == "deleted" else ""}" href="/tasks{task_query_suffix(owner_chat_id, 'deleted', assignee_filter, group_by, source_filter)}">Удаленные <span class="tab-count">{deleted_count}</span></a>
+      </div>
       <form class="action-row" method="get" action="/tasks" style="justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; margin-bottom: 14px;">
         <input type="hidden" name="owner" value="{owner_chat_id}">
+        <input type="hidden" name="tab" value="{active_tab}">
         <div class="action-row" style="gap:12px; align-items:end; flex-wrap: wrap;">
-          <div class="field" style="min-width: 180px; margin:0;">
-            <label>Статус</label>
-            <select name="status">
-              <option value="open"{" selected" if status_filter == "open" else ""}>Открытые</option>
-              <option value="done"{" selected" if status_filter == "done" else ""}>Выполненные</option>
-              <option value="not_done"{" selected" if status_filter == "not_done" else ""}>Не выполненные</option>
-              <option value="all"{" selected" if status_filter == "all" else ""}>Все</option>
-            </select>
-          </div>
           <div class="field" style="min-width: 220px; margin:0;">
             <label>Ответственный</label>
             <select name="assignee">
@@ -7800,7 +7885,7 @@ def render_tasks_section(
         </div>
         <div class="action-row" style="gap:10px;">
           <button class="secondary-btn" type="submit">Показать</button>
-          {f'<a class="secondary-btn" href="/tasks?owner={owner_chat_id}">Сбросить</a>' if status_filter != "open" or assignee_filter or group_by or source_filter else ""}
+          {f'<a class="secondary-btn" href="/tasks?owner={owner_chat_id}&tab={active_tab}">Сбросить</a>' if assignee_filter or group_by or source_filter else ""}
         </div>
       </form>
       {flash_html}
@@ -7816,8 +7901,219 @@ def render_tasks_section(
         </thead>
         <tbody>{rows_html}</tbody>
       </table>
+      {f'''<div class="toolbar" style="margin-top:12px;">
+        <form class="auction-delete-form" method="post" action="/tasks/purge-deleted{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" onsubmit="return confirm('Вы точно хотите удалить все удаленные задачи навсегда?');">
+          <button class="secondary-btn danger" type="submit">Очистить корзину</button>
+        </form>
+      </div>''' if active_tab == "deleted" and has_active_admin_mode(current_user) and deleted_count else ''}
     </section>
     {add_form_html}
+    """
+
+
+def render_task_attachment_links(owner_chat_id: int, attachments: list) -> str:
+    if not attachments:
+        return ""
+    return "".join(
+        f'''
+        <div style="margin-top:6px;">
+          <a class="legal-letter-file" href="/tasks/files/{attachment.id}/file?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(attachment.file_name or 'Файл')}</a>
+          <a class="legal-letter-download" href="/tasks/files/{attachment.id}/download?owner={owner_chat_id}">Скачать</a>
+        </div>
+        '''
+        for attachment in attachments
+    )
+
+
+def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict | None, task, flash_message: str = "", success: bool = False, active_tab: str = "active", assignee_filter: str = "", group_by: str = "", source_filter: str = "") -> str:
+    task_payload = {
+        "id": task.id,
+        "task_kind": "manual",
+        "assignee_kind": task.assignee_kind,
+        "assignee_user_id": task.assignee_user_id,
+        "assignee_name": task.assignee_name,
+        "assignee_role_code": task.assignee_role_code,
+        "assignee_role_name": task.assignee_role_name,
+        "status": task.status,
+        "completion_comment": task.completion_comment,
+        "created_by_user_id": task.created_by_user_id,
+        "created_by_name": task.created_by_name,
+        "created_at": task.created_at,
+        "completed_at": task.completed_at,
+        "completed_by_name": task.completed_by_name,
+        "deleted_at": task.deleted_at,
+    }
+    can_manage = can_manage_task(current_user, task_payload)
+    can_comment = can_comment_task(current_user, task_payload)
+    comments = storage.list_task_comments(owner_chat_id, task.id)
+    attachments = storage.list_task_attachments(owner_chat_id, task.id)
+    attachment_map: dict[int | None, list] = {}
+    for attachment in attachments:
+        attachment_map.setdefault(attachment.comment_id, []).append(attachment)
+    users, role_options = task_assignment_options(storage, owner_chat_id)
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    status_label, status_css = task_status_meta(task.status)
+    assignee_label = task_assignee_label(task_payload)
+    created_local = task.created_at.astimezone(VLADIVOSTOK_TZ) if task.created_at.tzinfo else task.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ)
+    completed_local = None
+    if task.completed_at is not None:
+        completed_local = task.completed_at.astimezone(VLADIVOSTOK_TZ) if task.completed_at.tzinfo else task.completed_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ)
+    comment_items = "".join(
+        f"""
+        <div class="timeline-item">
+          <div class="timeline-date">{format_datetime(comment.created_at.astimezone(VLADIVOSTOK_TZ) if comment.created_at.tzinfo else comment.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ))}</div>
+          <div>
+            <div class="timeline-title">{escape(comment.author_name or 'Автор неизвестен')}</div>
+            <div class="contract-table-subtle">{escape(comment.body) if comment.body else 'Комментарий без текста'}</div>
+            {render_task_attachment_links(owner_chat_id, attachment_map.get(comment.id, []))}
+          </div>
+        </div>
+        """
+        for comment in comments
+    ) or '<div class="empty">Комментариев по задаче пока нет.</div>'
+    deleted_toolbar = ""
+    if task.deleted_at is not None:
+        purge_form = ""
+        if has_active_admin_mode(current_user):
+            purge_form = f'<form class="auction-delete-form" method="post" action="/tasks/{task.id}/purge{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" onsubmit="return confirm(\'Удалить задачу навсегда?\');"><button class="secondary-btn danger" type="submit">Удалить навсегда</button></form>'
+        deleted_toolbar = f'<div class="toolbar" style="margin-top:12px;"><form class="auction-delete-form" method="post" action="/tasks/{task.id}/restore{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}"><button class="secondary-btn" type="submit">Вернуть в работу</button></form>{purge_form}</div>'
+    return f"""
+    <section class="card panel">
+      <div class="panel-head contract-detail-head">
+        <div>
+          <h2 class="panel-title">{escape(task.title)}</h2>
+          <div class="panel-sub">{escape(task.description) if task.description else 'Комментарий к задаче пока не заполнен.'}</div>
+        </div>
+        <a class="secondary-btn" href="/tasks{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">← Назад к реестру</a>
+      </div>
+      <div class="detail-meta-row">
+        <div class="{status_css}">{escape(status_label)}</div>
+        <div class="chip">Дедлайн: {format_date(task.due_date)}</div>
+        <div class="chip">Ответственный: {escape(assignee_label)}</div>
+        <div class="chip">Поставил: {escape(task.created_by_name or 'Автор неизвестен')}</div>
+        <div class="chip">Создана: {format_datetime(created_local)}</div>
+      </div>
+      {f'<div class="contract-table-subtle" style="margin-top:10px;">Последний результат: {escape(task.completion_comment)}</div>' if task.completion_comment else ''}
+      {f'<div class="contract-table-subtle">Статус зафиксировал: {escape(task.completed_by_name or "—")} · {format_datetime(completed_local)}</div>' if completed_local else ''}
+      {flash_html}
+    </section>
+    {f'''
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Управление задачей</h2>
+          <div class="panel-sub">Меняем ответственного, дедлайн, формулировку и статус задачи.</div>
+        </div>
+      </div>
+      <form class="form-grid" method="post" action="/tasks/{task.id}/update{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">
+        <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <div class="field">
+            <label>Заголовок задачи</label>
+            <input type="text" name="title" value="{escape(task.title)}" required>
+          </div>
+          <div class="field">
+            <label>Дедлайн</label>
+            <input type="date" name="due_date" value="{task.due_date.isoformat()}" required>
+          </div>
+          <div class="field">
+            <label>Кому ставим задачу</label>
+            <select name="assign_mode">
+              <option value="user"{" selected" if task.assignee_kind != "role" else ""}>Лично сотруднику</option>
+              <option value="role"{" selected" if task.assignee_kind == "role" else ""}>На роль / группу</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Сотрудник</label>
+            <select name="assignee_user_id">
+              <option value="">Выберите сотрудника</option>
+              {"".join(f'<option value="{user["id"]}"{" selected" if task.assignee_kind != "role" and user["id"] == task.assignee_user_id else ""}>{escape(user["full_name"])} · {escape(user["role_name"])}</option>' for user in users)}
+            </select>
+          </div>
+          <div class="field">
+            <label>Роль / группа</label>
+            <select name="assignee_role_code">
+              <option value="">Выберите роль</option>
+              {"".join(f'<option value="{escape(code)}"{" selected" if task.assignee_kind == "role" and code == task.assignee_role_code else ""}>{escape(label)}</option>' for code, label in role_options)}
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Комментарий к задаче</label>
+          <textarea name="description">{escape(task.description)}</textarea>
+        </div>
+        <div class="action-row" style="gap:10px;">
+          <button class="submit-btn" type="submit">Сохранить изменения</button>
+          <button class="secondary-btn danger" type="submit" formaction="/tasks/{task.id}/delete{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" onclick="return confirm('Убрать задачу в удаленные?');">Удалить задачу</button>
+        </div>
+      </form>
+    </section>
+    ''' if can_manage and task.deleted_at is None else ''}
+    {f'''
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Результат по задаче</h2>
+          <div class="panel-sub">Закрываем задачу, фиксируем итог или причину невыполнения и прикладываем файл результата.</div>
+        </div>
+      </div>
+      <form class="form-grid" method="post" action="/tasks/{task.id}/status{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
+        <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <div class="field">
+            <label>Статус задачи</label>
+            <select name="task_status">
+              <option value="open"{" selected" if task.status == "open" else ""}>Открыта</option>
+              <option value="done"{" selected" if task.status == "done" else ""}>Выполнена</option>
+              <option value="not_done"{" selected" if task.status == "not_done" else ""}>Не выполнена</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Дата статуса</label>
+            <input type="date" name="completed_date" value="{(completed_local.date().isoformat() if completed_local else datetime.now(VLADIVOSTOK_TZ).date().isoformat())}">
+          </div>
+        </div>
+        <div class="field">
+          <label>Комментарий результата / причины</label>
+          <textarea name="completion_comment" placeholder="Что сделали, какой итог, либо почему задача не выполнена">{escape(task.completion_comment)}</textarea>
+        </div>
+        <div class="field">
+          <label>Файлы результата</label>
+          <input type="file" name="result_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple>
+        </div>
+        <button class="submit-btn" type="submit">Сохранить статус</button>
+      </form>
+    </section>
+    ''' if can_update_task_status(current_user, task_payload) and task.deleted_at is None else ''}
+    {f'''
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Дополнения по задаче</h2>
+          <div class="panel-sub">Любой видящий задачу сотрудник может оставить уточнение, дополнение или приложить файл.</div>
+        </div>
+      </div>
+      <form class="form-grid" method="post" action="/tasks/{task.id}/comments/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
+        <div class="field">
+          <label>Комментарий</label>
+          <textarea name="body" placeholder="Дополнение по задаче, уточнение, промежуточный результат"></textarea>
+        </div>
+        <div class="field">
+          <label>Файлы</label>
+          <input type="file" name="comment_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple>
+        </div>
+        <button class="submit-btn" type="submit">Добавить комментарий</button>
+      </form>
+    </section>
+    ''' if can_comment and task.deleted_at is None else ''}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Хронология задачи</h2>
+          <div class="panel-sub">Комментарии, дополнения и файлы по задаче одним списком.</div>
+        </div>
+      </div>
+      {comment_items}
+      {deleted_toolbar}
+    </section>
     """
 
 
@@ -8835,17 +9131,17 @@ def app(environ, start_response):
         if denied:
             return denied
         query = parse_qs(environ.get("QUERY_STRING", ""))
-        status_filter = query.get("status", ["open"])[0].strip() or "open"
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
         assignee_filter = query.get("assignee", [""])[0].strip()
         group_by = query.get("group", [""])[0].strip()
         source_filter = query.get("source", [""])[0].strip()
-        if status_filter not in {"open", "done", "not_done", "all"}:
-            status_filter = "open"
+        if active_tab not in {"active", "archive", "deleted"}:
+            active_tab = "active"
         if group_by not in {"", "assignee"}:
             group_by = ""
         if source_filter not in {"", "manual", "contracts", "auctions", "payroll"}:
             source_filter = ""
-        body = render_tasks_section(storage, current_owner, current_user, status_filter, assignee_filter, group_by, source_filter)
+        body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter)
         html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -8855,7 +9151,7 @@ def app(environ, start_response):
         if denied:
             return denied
         query = parse_qs(environ.get("QUERY_STRING", ""))
-        status_filter = query.get("status", ["open"])[0].strip() or "open"
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
         assignee_filter = query.get("assignee", [""])[0].strip()
         group_by = query.get("group", [""])[0].strip()
         source_filter = query.get("source", [""])[0].strip()
@@ -8864,31 +9160,124 @@ def app(environ, start_response):
             title = form.get("title", "").strip()
             description = form.get("description", "").strip()
             due_date_raw = form.get("due_date", "").strip()
-            assignee_user_id = int(form.get("assignee_user_id", "0"))
             if not title:
                 raise ValueError("Укажите задачу")
             if not due_date_raw:
                 raise ValueError("Укажите дедлайн")
             due_date = parse_date(due_date_raw)
-            assignee = next((user for user in storage.list_web_users(current_owner) if user["id"] == assignee_user_id), None)
-            if assignee is None:
-                raise ValueError("Выберите ответственного")
+            users, role_options = task_assignment_options(storage, current_owner)
+            assignee_kind, assignee_user_id, assignee_name, assignee_role_code, assignee_role_name = resolve_task_assignment(
+                form.get("assign_mode", "user").strip(),
+                form.get("assignee_user_id", "").strip(),
+                form.get("assignee_role_code", "").strip(),
+                users,
+                role_options,
+            )
             created_by_name = current_user.get("full_name", "").strip() if current_user else ""
             storage.add_task(
                 current_owner,
                 title,
                 description,
                 due_date,
+                assignee_kind,
                 assignee_user_id,
-                assignee.get("full_name", "").strip(),
-                assignee.get("role_name", "").strip(),
+                assignee_name,
+                assignee_role_code,
+                assignee_role_name,
                 current_user.get("id") if current_user else None,
                 created_by_name,
             )
-            return redirect(start_response, f"/tasks{task_query_suffix(current_owner, status_filter, assignee_filter, group_by, source_filter)}")
+            return redirect(start_response, f"/tasks{task_query_suffix(current_owner, active_tab, assignee_filter, group_by, source_filter)}")
         except Exception as exc:
-            body = render_tasks_section(storage, current_owner, current_user, status_filter, assignee_filter, group_by, source_filter, f"Не удалось добавить задачу: {exc}")
+            body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter, f"Не удалось добавить задачу: {exc}")
             html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if re.fullmatch(r"/tasks/\d+", path) and method == "GET":
+        denied = guard("tasks", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        assignee_filter = query.get("assignee", [""])[0].strip()
+        group_by = query.get("group", [""])[0].strip()
+        source_filter = query.get("source", [""])[0].strip()
+        try:
+            task_id = int(path.split("/")[2])
+            task = storage.get_task(current_owner, task_id)
+            if task is None:
+                raise ValueError("Задача не найдена")
+            task_payload = {
+                "id": task.id,
+                "task_kind": "manual",
+                "assignee_kind": task.assignee_kind,
+                "assignee_user_id": task.assignee_user_id,
+                "assignee_name": task.assignee_name,
+                "assignee_role_code": task.assignee_role_code,
+                "assignee_role_name": task.assignee_role_name,
+                "created_by_user_id": task.created_by_user_id,
+                "deleted_at": task.deleted_at,
+            }
+            if not task_visible_to_user(task_payload, current_user) and not can_manage_task(current_user, task_payload):
+                raise ValueError("Недостаточно прав для просмотра задачи")
+            body = render_task_detail(storage, current_owner, current_user, task, "", False, active_tab, assignee_filter, group_by, source_filter)
+            html = layout("Карточка задачи", body, owners, current_owner, "tasks", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        except Exception as exc:
+            body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter, f"Не удалось открыть задачу: {exc}")
+            html = layout("Карточка задачи", body, owners, current_owner, "tasks", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/tasks/") and path.endswith("/update") and method == "POST":
+        denied = guard("tasks", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        assignee_filter = query.get("assignee", [""])[0].strip()
+        group_by = query.get("group", [""])[0].strip()
+        source_filter = query.get("source", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            task_id = int(path.split("/")[2])
+            task = storage.get_task(current_owner, task_id)
+            if task is None:
+                raise ValueError("Задача не найдена")
+            task_payload = {
+                "id": task.id, "task_kind": "manual", "assignee_kind": task.assignee_kind,
+                "assignee_user_id": task.assignee_user_id, "assignee_name": task.assignee_name,
+                "assignee_role_code": task.assignee_role_code, "assignee_role_name": task.assignee_role_name,
+                "created_by_user_id": task.created_by_user_id, "deleted_at": task.deleted_at,
+            }
+            if not can_manage_task(current_user, task_payload):
+                raise ValueError("Недостаточно прав для редактирования задачи")
+            title = form.get("title", "").strip()
+            description = form.get("description", "").strip()
+            due_date = parse_date(form.get("due_date", "").strip())
+            if not title:
+                raise ValueError("Укажите заголовок задачи")
+            users, role_options = task_assignment_options(storage, current_owner)
+            assignee_kind, assignee_user_id, assignee_name, assignee_role_code, assignee_role_name = resolve_task_assignment(
+                form.get("assign_mode", "user").strip(),
+                form.get("assignee_user_id", "").strip(),
+                form.get("assignee_role_code", "").strip(),
+                users,
+                role_options,
+            )
+            if not storage.update_task(current_owner, task_id, title, description, due_date, assignee_kind, assignee_user_id, assignee_name, assignee_role_code, assignee_role_name):
+                raise ValueError("Не удалось сохранить задачу")
+            return redirect(start_response, f"/tasks/{task_id}{task_query_suffix(current_owner, active_tab, assignee_filter, group_by, source_filter)}")
+        except Exception as exc:
+            task = storage.get_task(current_owner, int(path.split("/")[2])) if path.split("/")[2].isdigit() else None
+            if task is not None:
+                body = render_task_detail(storage, current_owner, current_user, task, f"Не удалось обновить задачу: {exc}", False, active_tab, assignee_filter, group_by, source_filter)
+                html = layout("Карточка задачи", body, owners, current_owner, "tasks", current_user)
+            else:
+                body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter, f"Не удалось обновить задачу: {exc}")
+                html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
@@ -8897,29 +9286,27 @@ def app(environ, start_response):
         if denied:
             return denied
         query = parse_qs(environ.get("QUERY_STRING", ""))
-        status_filter = query.get("status", ["open"])[0].strip() or "open"
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
         assignee_filter = query.get("assignee", [""])[0].strip()
         group_by = query.get("group", [""])[0].strip()
         source_filter = query.get("source", [""])[0].strip()
         try:
             task_id = int(path.split("/")[2])
-        except ValueError:
-            task_id = -1
-        form = read_post_data(environ)
-        try:
-            all_manual_tasks = storage.list_tasks(current_owner)
-            task = next((item for item in all_manual_tasks if item.id == task_id), None)
+            task = storage.get_task(current_owner, task_id)
             if task is None:
                 raise ValueError("Задача не найдена")
             task_payload = {
-                "id": task.id,
-                "task_kind": "manual",
-                "assignee_user_id": task.assignee_user_id,
-                "assignee_name": task.assignee_name,
-                "assignee_role_name": task.assignee_role_name,
+                "id": task.id, "task_kind": "manual", "assignee_kind": task.assignee_kind,
+                "assignee_user_id": task.assignee_user_id, "assignee_name": task.assignee_name,
+                "assignee_role_code": task.assignee_role_code, "assignee_role_name": task.assignee_role_name,
+                "created_by_user_id": task.created_by_user_id, "deleted_at": task.deleted_at,
             }
             if not can_update_task_status(current_user, task_payload):
                 raise ValueError("Недостаточно прав для изменения задачи")
+            if "multipart/form-data" in (environ.get("CONTENT_TYPE", "") or ""):
+                form, files = read_multipart_form_data(environ)
+            else:
+                form, files = read_post_data(environ), {}
             task_status = form.get("task_status", "open").strip()
             if task_status not in {"open", "done", "not_done"}:
                 raise ValueError("Некорректный статус задачи")
@@ -8935,12 +9322,164 @@ def app(environ, start_response):
                 completed_by_name = current_user.get("full_name", "").strip() if current_user else ""
             if not storage.update_task_status(current_owner, task_id, task_status, completion_comment, completed_at, completed_by_name):
                 raise ValueError("Не удалось обновить задачу")
-            return redirect(start_response, f"/tasks{task_query_suffix(current_owner, status_filter, assignee_filter, group_by, source_filter)}")
+            uploads = [item for item in files.get("result_file", []) if item.filename.strip()]
+            if completion_comment or uploads:
+                comment_id = storage.add_task_comment(
+                    current_owner,
+                    task_id,
+                    f"status_{task_status}",
+                    completion_comment,
+                    current_user.get("id") if current_user else None,
+                    current_user.get("full_name", "").strip() if current_user else "",
+                )
+                if uploads:
+                    save_task_uploads(storage, current_owner, task_id, comment_id, uploads)
+            return redirect(start_response, f"/tasks/{task_id}{task_query_suffix(current_owner, active_tab, assignee_filter, group_by, source_filter)}")
         except Exception as exc:
-            body = render_tasks_section(storage, current_owner, current_user, status_filter, assignee_filter, group_by, source_filter, f"Не удалось обновить задачу: {exc}")
-            html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
+            task = storage.get_task(current_owner, int(path.split("/")[2])) if path.split("/")[2].isdigit() else None
+            if task is not None:
+                body = render_task_detail(storage, current_owner, current_user, task, f"Не удалось обновить задачу: {exc}", False, active_tab, assignee_filter, group_by, source_filter)
+                html = layout("Карточка задачи", body, owners, current_owner, "tasks", current_user)
+            else:
+                body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter, f"Не удалось обновить задачу: {exc}")
+                html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
+
+    if path.startswith("/tasks/") and path.endswith("/comments/new") and method == "POST":
+        denied = guard("tasks", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        assignee_filter = query.get("assignee", [""])[0].strip()
+        group_by = query.get("group", [""])[0].strip()
+        source_filter = query.get("source", [""])[0].strip()
+        try:
+            task_id = int(path.split("/")[2])
+            task = storage.get_task(current_owner, task_id)
+            if task is None:
+                raise ValueError("Задача не найдена")
+            task_payload = {
+                "id": task.id, "task_kind": "manual", "assignee_kind": task.assignee_kind,
+                "assignee_user_id": task.assignee_user_id, "assignee_name": task.assignee_name,
+                "assignee_role_code": task.assignee_role_code, "assignee_role_name": task.assignee_role_name,
+                "created_by_user_id": task.created_by_user_id, "deleted_at": task.deleted_at,
+            }
+            if not can_comment_task(current_user, task_payload):
+                raise ValueError("Недостаточно прав для комментария")
+            form, files = read_multipart_form_data(environ)
+            body_text = form.get("body", "").strip()
+            uploads = [item for item in files.get("comment_file", []) if item.filename.strip()]
+            if not body_text and not uploads:
+                raise ValueError("Добавьте текст комментария или файл")
+            comment_id = storage.add_task_comment(
+                current_owner,
+                task_id,
+                "comment",
+                body_text,
+                current_user.get("id") if current_user else None,
+                current_user.get("full_name", "").strip() if current_user else "",
+            )
+            if uploads:
+                save_task_uploads(storage, current_owner, task_id, comment_id, uploads)
+            return redirect(start_response, f"/tasks/{task_id}{task_query_suffix(current_owner, active_tab, assignee_filter, group_by, source_filter)}")
+        except Exception as exc:
+            task = storage.get_task(current_owner, int(path.split("/")[2])) if path.split("/")[2].isdigit() else None
+            if task is not None:
+                body = render_task_detail(storage, current_owner, current_user, task, f"Не удалось добавить комментарий: {exc}", False, active_tab, assignee_filter, group_by, source_filter)
+                html = layout("Карточка задачи", body, owners, current_owner, "tasks", current_user)
+            else:
+                body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter, f"Не удалось добавить комментарий: {exc}")
+                html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/tasks/") and path.endswith("/delete") and method == "POST":
+        denied = guard("tasks", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        assignee_filter = query.get("assignee", [""])[0].strip()
+        group_by = query.get("group", [""])[0].strip()
+        source_filter = query.get("source", [""])[0].strip()
+        task_id = int(path.split("/")[2])
+        task = storage.get_task(current_owner, task_id)
+        if task is None:
+            return redirect(start_response, f"/tasks{task_query_suffix(current_owner, active_tab, assignee_filter, group_by, source_filter)}")
+        payload = {
+            "id": task.id, "task_kind": "manual", "assignee_kind": task.assignee_kind,
+            "assignee_user_id": task.assignee_user_id, "assignee_name": task.assignee_name,
+            "assignee_role_code": task.assignee_role_code, "assignee_role_name": task.assignee_role_name,
+            "created_by_user_id": task.created_by_user_id, "deleted_at": task.deleted_at,
+        }
+        if not can_manage_task(current_user, payload):
+            body = render_task_detail(storage, current_owner, current_user, task, "Недостаточно прав для удаления задачи", False, active_tab, assignee_filter, group_by, source_filter)
+            html = layout("Карточка задачи", body, owners, current_owner, "tasks", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        storage.soft_delete_task(current_owner, task_id, datetime.utcnow())
+        return redirect(start_response, f"/tasks{task_query_suffix(current_owner, 'deleted', assignee_filter, group_by, source_filter)}")
+
+    if path.startswith("/tasks/") and path.endswith("/restore") and method == "POST":
+        denied = guard("tasks", "edit")
+        if denied:
+            return denied
+        task_id = int(path.split("/")[2])
+        storage.restore_deleted_task(current_owner, task_id)
+        return redirect(start_response, f"/tasks{task_query_suffix(current_owner, 'deleted')}")
+
+    if path.startswith("/tasks/") and path.endswith("/purge") and method == "POST":
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Задачи")
+            html = layout("Доступ запрещен", body, owners, current_owner, "tasks", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        task_id = int(path.split("/")[2])
+        storage.hard_delete_task(current_owner, task_id)
+        return redirect(start_response, f"/tasks{task_query_suffix(current_owner, 'deleted')}")
+
+    if path == "/tasks/purge-deleted" and method == "POST":
+        if not has_active_admin_mode(current_user):
+            body = render_forbidden_body("Задачи")
+            html = layout("Доступ запрещен", body, owners, current_owner, "tasks", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        storage.hard_delete_all_deleted_tasks(current_owner)
+        return redirect(start_response, f"/tasks{task_query_suffix(current_owner, 'deleted')}")
+
+    if path.startswith("/tasks/files/") and path.endswith("/file") and method == "GET":
+        denied = guard("tasks", "view")
+        if denied:
+            return denied
+        try:
+            attachment_id = int(path.split("/")[3])
+            attachment = storage.get_task_attachment(current_owner, attachment_id)
+            if attachment is None:
+                raise ValueError("Вложение не найдено")
+            absolute_path, safe_filename, content_type = resolve_task_attachment_file(storage, attachment)
+            start_response("200 OK", [("Content-Type", content_type), ("Content-Disposition", f'inline; filename="{safe_filename}"')])
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Task attachment not found"]
+
+    if path.startswith("/tasks/files/") and path.endswith("/download") and method == "GET":
+        denied = guard("tasks", "view")
+        if denied:
+            return denied
+        try:
+            attachment_id = int(path.split("/")[3])
+            attachment = storage.get_task_attachment(current_owner, attachment_id)
+            if attachment is None:
+                raise ValueError("Вложение не найдено")
+            absolute_path, safe_filename, content_type = resolve_task_attachment_file(storage, attachment)
+            start_response("200 OK", [("Content-Type", content_type), ("Content-Disposition", f'attachment; filename="{safe_filename}"')])
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Task attachment not found"]
 
     if path == "/contracts/new" and method == "POST":
         denied = guard("contracts", "edit")
