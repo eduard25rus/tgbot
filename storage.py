@@ -9,7 +9,7 @@ from typing import Optional
 
 
 DATE_FMT = "%Y-%m-%d"
-WEB_SECTION_IDS = ("contracts", "auctions", "events", "payables", "expenses", "payroll", "finance", "access")
+WEB_SECTION_IDS = ("contracts", "auctions", "events", "tasks", "payables", "expenses", "payroll", "finance", "access")
 
 
 @dataclass
@@ -218,6 +218,25 @@ class PayableEntry:
     updated_at: datetime
 
 
+@dataclass
+class TaskEntry:
+    id: int
+    owner_chat_id: int
+    title: str
+    description: str
+    due_date: date
+    assignee_user_id: Optional[int]
+    assignee_name: str
+    assignee_role_name: str
+    status: str
+    completion_comment: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+    completed_at: Optional[datetime]
+    completed_by_name: str
+
+
 class Storage:
     def __init__(self, db_path: str) -> None:
         self.db_path = Path(db_path)
@@ -396,6 +415,26 @@ class Storage:
                     user_id INTEGER NOT NULL UNIQUE,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    due_date TEXT NOT NULL,
+                    assignee_user_id INTEGER,
+                    assignee_name TEXT NOT NULL DEFAULT '',
+                    assignee_role_name TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'open',
+                    completion_comment TEXT NOT NULL DEFAULT '',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    completed_by_name TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(assignee_user_id) REFERENCES web_users(id) ON DELETE SET NULL,
+                    FOREIGN KEY(created_by_user_id) REFERENCES web_users(id) ON DELETE SET NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS auctions (
@@ -3248,6 +3287,87 @@ class Storage:
             )
             return cursor.rowcount
 
+    def list_tasks(self, owner_chat_id: int) -> list[TaskEntry]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    id, owner_chat_id, title, description, due_date, assignee_user_id,
+                    assignee_name, assignee_role_name, status, completion_comment,
+                    created_by_user_id, created_by_name, created_at, completed_at, completed_by_name
+                FROM tasks
+                WHERE owner_chat_id = ?
+                ORDER BY due_date ASC, created_at DESC, id DESC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [self._task_from_row(row) for row in rows]
+
+    def add_task(
+        self,
+        owner_chat_id: int,
+        title: str,
+        description: str,
+        due_date: date,
+        assignee_user_id: int | None,
+        assignee_name: str,
+        assignee_role_name: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO tasks (
+                    owner_chat_id, title, description, due_date,
+                    assignee_user_id, assignee_name, assignee_role_name,
+                    status, completion_comment,
+                    created_by_user_id, created_by_name, created_at, completed_at, completed_by_name
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'open', '', ?, ?, ?, NULL, '')
+                """,
+                (
+                    owner_chat_id,
+                    title.strip(),
+                    description.strip(),
+                    due_date.strftime(DATE_FMT),
+                    assignee_user_id,
+                    assignee_name.strip(),
+                    assignee_role_name.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def update_task_status(
+        self,
+        owner_chat_id: int,
+        task_id: int,
+        status: str,
+        completion_comment: str,
+        completed_at: datetime | None,
+        completed_by_name: str,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET status = ?, completion_comment = ?, completed_at = ?, completed_by_name = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (
+                    status.strip(),
+                    completion_comment.strip(),
+                    completed_at.isoformat() if completed_at is not None else None,
+                    completed_by_name.strip(),
+                    task_id,
+                    owner_chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
     @staticmethod
     def _payable_from_row(row: sqlite3.Row) -> PayableEntry:
         return PayableEntry(
@@ -3267,6 +3387,26 @@ class Storage:
             deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _task_from_row(row: sqlite3.Row) -> TaskEntry:
+        return TaskEntry(
+            id=int(row["id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            title=row["title"] or "",
+            description=row["description"] or "",
+            due_date=date.fromisoformat(row["due_date"]),
+            assignee_user_id=int(row["assignee_user_id"]) if row["assignee_user_id"] is not None else None,
+            assignee_name=row["assignee_name"] or "",
+            assignee_role_name=row["assignee_role_name"] or "",
+            status=row["status"] or "open",
+            completion_comment=row["completion_comment"] or "",
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
+            completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
+            completed_by_name=row["completed_by_name"] or "",
         )
 
     def _upsert_payroll_entry(

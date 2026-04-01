@@ -839,6 +839,222 @@ def guard_contract_stage_controls(current_user: dict | None):
     return can_edit_contract_stage_controls(current_user)
 
 
+def effective_role_label(current_user: dict | None) -> str:
+    if not current_user:
+        return ""
+    return (current_user.get("effective_role_name") or current_user.get("role_name") or "").strip()
+
+
+def can_view_all_tasks(current_user: dict | None) -> bool:
+    return has_active_admin_mode(current_user) or is_management_user(current_user)
+
+
+def task_status_meta(status: str) -> tuple[str, str]:
+    return {
+        "open": ("Открыта", "chip warn"),
+        "done": ("Выполнена", "chip ok"),
+    }.get(status, ("Открыта", "chip warn"))
+
+
+def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    tasks: list[dict] = []
+
+    for contract in storage.list_contracts(owner_chat_id):
+        contract_label = contract.object_name.strip() or contract.title
+        for stage in storage.list_stages_for_contract(owner_chat_id, contract.id):
+            if (contract.advance_percent or 0) > 0 and not stage.advance_invoice_issued:
+                tasks.append(
+                    {
+                        "id": f"auto-contract-advance-{stage.id}",
+                        "task_kind": "auto",
+                        "source_section": "contracts",
+                        "title": "Выставить счет на аванс",
+                        "description": f"{contract_label} · {stage.name}",
+                        "due_date": stage.start_date or stage.end_date,
+                        "assignee_user_id": None,
+                        "assignee_name": "",
+                        "assignee_role_name": "Отдел госзакупок",
+                        "status": "open",
+                        "completion_comment": "",
+                        "created_by_name": "Система",
+                        "created_at": contract.created_at,
+                        "completed_at": None,
+                    }
+                )
+            if stage.status in {"completed", "uploaded_eis", "accepted_eis"} and not stage.final_invoice_issued:
+                tasks.append(
+                    {
+                        "id": f"auto-contract-final-{stage.id}",
+                        "task_kind": "auto",
+                        "source_section": "contracts",
+                        "title": "Выставить счет на остаток",
+                        "description": f"{contract_label} · {stage.name}",
+                        "due_date": stage.end_date,
+                        "assignee_user_id": None,
+                        "assignee_name": "",
+                        "assignee_role_name": "Отдел госзакупок",
+                        "status": "open",
+                        "completion_comment": "",
+                        "created_by_name": "Система",
+                        "created_at": contract.created_at,
+                        "completed_at": None,
+                    }
+                )
+
+    for auction in storage.list_auctions(owner_chat_id):
+        auction_label = auction.title.strip() or f"Аукцион № {auction.auction_number}"
+        if auction.submit_decision_status == "pending":
+            tasks.append(
+                {
+                    "id": f"auto-auction-decision-{auction.id}",
+                    "task_kind": "auto",
+                    "source_section": "auctions",
+                    "title": "Принять решение по аукциону",
+                    "description": auction_label,
+                    "due_date": auction.bid_deadline,
+                    "assignee_user_id": None,
+                    "assignee_name": "",
+                    "assignee_role_name": "Руководство компании",
+                    "status": "open",
+                    "completion_comment": "",
+                    "created_by_name": "Система",
+                    "created_at": auction.created_at,
+                    "completed_at": None,
+                }
+            )
+        if auction.estimate_status == "approved":
+            tasks.append(
+                {
+                    "id": f"auto-auction-estimate-{auction.id}",
+                    "task_kind": "auto",
+                    "source_section": "auctions",
+                    "title": "Просчитать аукцион",
+                    "description": auction_label,
+                    "due_date": auction.bid_deadline,
+                    "assignee_user_id": None,
+                    "assignee_name": "",
+                    "assignee_role_name": "Отдел снабжения",
+                    "status": "open",
+                    "completion_comment": "",
+                    "created_by_name": "Система",
+                    "created_at": auction.created_at,
+                    "completed_at": None,
+                }
+            )
+        if auction.submit_decision_status == "approved":
+            tasks.append(
+                {
+                    "id": f"auto-auction-submit-{auction.id}",
+                    "task_kind": "auto",
+                    "source_section": "auctions",
+                    "title": "Подать заявку",
+                    "description": auction_label,
+                    "due_date": auction.bid_deadline,
+                    "assignee_user_id": None,
+                    "assignee_name": "",
+                    "assignee_role_name": "Отдел госзакупок",
+                    "status": "open",
+                    "completion_comment": "",
+                    "created_by_name": "Система",
+                    "created_at": auction.created_at,
+                    "completed_at": None,
+                }
+            )
+        if auction.submit_decision_status == "approved" and auction.max_discount_percent is None:
+            tasks.append(
+                {
+                    "id": f"auto-auction-discount-{auction.id}",
+                    "task_kind": "auto",
+                    "source_section": "auctions",
+                    "title": "Установить максимальное снижение",
+                    "description": auction_label,
+                    "due_date": auction.bid_deadline,
+                    "assignee_user_id": None,
+                    "assignee_name": "",
+                    "assignee_role_name": "Руководство компании",
+                    "status": "open",
+                    "completion_comment": "",
+                    "created_by_name": "Система",
+                    "created_at": auction.created_at,
+                    "completed_at": None,
+                }
+            )
+
+    for payroll_month in storage.list_payroll_months(owner_chat_id):
+        payroll_rows = storage.list_payroll_rows(owner_chat_id, payroll_month)
+        advance_outstanding = sum(
+            max(row.advance_card_amount - row.advance_card_paid_amount, 0.0)
+            + max(row.advance_cash_amount - row.advance_cash_paid_amount, 0.0)
+            for row in payroll_rows
+        )
+        salary_outstanding = sum(
+            max(row.salary_amount - row.salary_paid_amount, 0.0)
+            + max(row.bonus_amount - row.bonus_paid_amount, 0.0)
+            for row in payroll_rows
+        )
+        advance_due = payroll_deadline_for_kind(payroll_month, "advance_card")
+        salary_due = payroll_deadline_for_kind(payroll_month, "salary")
+        if advance_outstanding > 0.009 and advance_due >= month_add(today.replace(day=1), -1):
+            tasks.append(
+                {
+                    "id": f"auto-payroll-advance-{payroll_month.isoformat()}",
+                    "task_kind": "auto",
+                    "source_section": "payroll",
+                    "title": "Выплатить аванс",
+                    "description": f"За {format_month_label(payroll_month)} · осталось {format_amount(advance_outstanding)}",
+                    "due_date": advance_due,
+                    "assignee_user_id": None,
+                    "assignee_name": "",
+                    "assignee_role_name": "Руководство компании",
+                    "status": "open",
+                    "completion_comment": "",
+                    "created_by_name": "Система",
+                    "created_at": datetime.utcnow(),
+                    "completed_at": None,
+                }
+            )
+        if salary_outstanding > 0.009 and salary_due >= month_add(today.replace(day=1), -1):
+            tasks.append(
+                {
+                    "id": f"auto-payroll-salary-{payroll_month.isoformat()}",
+                    "task_kind": "auto",
+                    "source_section": "payroll",
+                    "title": "Выплатить зарплату",
+                    "description": f"За {format_month_label(payroll_month)} · осталось {format_amount(salary_outstanding)}",
+                    "due_date": salary_due,
+                    "assignee_user_id": None,
+                    "assignee_name": "",
+                    "assignee_role_name": "Руководство компании",
+                    "status": "open",
+                    "completion_comment": "",
+                    "created_by_name": "Система",
+                    "created_at": datetime.utcnow(),
+                    "completed_at": None,
+                }
+            )
+
+    return tasks
+
+
+def task_visible_to_user(task: dict, current_user: dict | None) -> bool:
+    if can_view_all_tasks(current_user):
+        return True
+    if current_user is None:
+        return False
+    if task.get("task_kind") == "auto":
+        return preview_role_code(task.get("assignee_role_name", "")) == preview_role_code(effective_role_label(current_user))
+    return task.get("assignee_user_id") == current_user.get("id")
+
+
+def can_update_task_status(current_user: dict | None, task: dict) -> bool:
+    if current_user is None or not has_permission(current_user, "tasks", "view"):
+        return False
+    if can_view_all_tasks(current_user):
+        return True
+    return task_visible_to_user(task, current_user) and task.get("task_kind") == "manual"
+
+
 def with_preview_role(current_user: dict | None, preview_role: str) -> dict | None:
     if current_user is None:
         return None
@@ -2834,6 +3050,7 @@ SECTIONS = [
     ("contracts", "Контракты", "/contracts"),
     ("auctions", "Аукционы", "/auctions"),
     ("events", "Календарь событий", "/events"),
+    ("tasks", "Задачи", "/tasks"),
     ("payables", "Кредиторка", "/payables"),
     ("expenses", "Расходы компании", "/expenses"),
     ("payroll", "Зарплата", "/payroll"),
@@ -2856,6 +3073,10 @@ SECTION_HERO = {
     "events": (
         "Календарь событий",
         "Единый месячный календарь ключевых событий: дедлайны этапов, подача заявок, оплаты подрядчикам и зарплатные даты.",
+    ),
+    "tasks": (
+        "Задачи",
+        "Внутренний задачник компании: автоматические задачи по ролям и ручные поручения с дедлайнами, ответственными и отметкой выполнения.",
     ),
     "payables": (
         "Кредиторка",
@@ -3616,6 +3837,16 @@ def layout(
       font-size: 13px;
       line-height: 1.45;
       margin-top: 4px;
+    }}
+    .task-group-row td {{
+      background: var(--soft);
+      color: var(--text);
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 12px;
+      padding-top: 14px;
+      padding-bottom: 14px;
     }}
     .payable-document-note {{
       color: color-mix(in srgb, var(--muted) 82%, white 18%);
@@ -7281,6 +7512,297 @@ def render_payables_section(storage: Storage, owner_chat_id: int, current_user: 
     """
 
 
+def task_query_suffix(owner_chat_id: int, status_filter: str = "open", assignee_filter: str = "", group_by: str = "", source_filter: str = "") -> str:
+    parts = [f"owner={owner_chat_id}"]
+    if status_filter:
+        parts.append(f"status={quote_plus(status_filter)}")
+    if assignee_filter:
+        parts.append(f"assignee={quote_plus(assignee_filter)}")
+    if group_by:
+        parts.append(f"group={quote_plus(group_by)}")
+    if source_filter:
+        parts.append(f"source={quote_plus(source_filter)}")
+    return "?" + "&".join(parts)
+
+
+def render_task_status_control(owner_chat_id: int, task: dict, current_user: dict | None, status_filter: str, assignee_filter: str, group_by: str, source_filter: str) -> str:
+    due_is_overdue = task["status"] != "done" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date()
+    if task.get("task_kind") == "auto":
+        label = "Просрочена" if due_is_overdue else "Авто"
+        css = "chip danger" if due_is_overdue else "chip"
+        return f'<span class="{css}">{label}</span>'
+    label, css = task_status_meta(task["status"])
+    if due_is_overdue and task["status"] != "done":
+        css = "chip danger"
+    completion_note = ""
+    if task.get("completion_comment"):
+        completion_note = f'<div class="contract-table-subtle">{escape(task["completion_comment"])}</div>'
+    display = f'<div><span class="{css}">{escape(label)}</span>{completion_note}</div>'
+    if not can_update_task_status(current_user, task):
+        return display
+    checked_attr = "checked" if task["status"] == "done" else ""
+    completed_date = ""
+    if task.get("completed_at") is not None:
+        completed_at = task["completed_at"]
+        completed_date = completed_at.astimezone(VLADIVOSTOK_TZ).date().isoformat() if completed_at.tzinfo else completed_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date().isoformat()
+    return f"""
+    <details class="status-menu">
+      <summary>{display}</summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="/tasks/{task['id']}/status{task_query_suffix(owner_chat_id, status_filter, assignee_filter, group_by, source_filter)}">
+          <label class="advance-toggle">
+            <input class="toggle-checkbox" type="checkbox" name="is_done" value="1" {checked_attr}> Задача выполнена
+          </label>
+          <div class="field">
+            <label>Комментарий по задаче</label>
+            <textarea name="completion_comment" placeholder="Что сделали, что важно учесть дальше">{escape(task.get("completion_comment", ""))}</textarea>
+          </div>
+          <div class="field">
+            <label>Дата выполнения</label>
+            <input type="date" name="completed_date" value="{completed_date or datetime.now(VLADIVOSTOK_TZ).date().isoformat()}">
+          </div>
+          <button class="submit-btn" type="submit">Сохранить</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_tasks_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    status_filter: str = "open",
+    assignee_filter: str = "",
+    group_by: str = "",
+    source_filter: str = "",
+    flash_message: str = "",
+    success: bool = False,
+) -> str:
+    manual_tasks = [
+        {
+            "id": task.id,
+            "task_kind": "manual",
+            "source_section": "manual",
+            "title": task.title,
+            "description": task.description,
+            "due_date": task.due_date,
+            "assignee_user_id": task.assignee_user_id,
+            "assignee_name": task.assignee_name,
+            "assignee_role_name": task.assignee_role_name,
+            "status": task.status,
+            "completion_comment": task.completion_comment,
+            "created_by_name": task.created_by_name or "Автор неизвестен",
+            "created_at": task.created_at,
+            "completed_at": task.completed_at,
+            "completed_by_name": task.completed_by_name,
+        }
+        for task in storage.list_tasks(owner_chat_id)
+    ]
+    auto_tasks = build_auto_tasks(storage, owner_chat_id)
+    all_tasks = manual_tasks + auto_tasks
+    visible_tasks = [task for task in all_tasks if task_visible_to_user(task, current_user)]
+
+    if status_filter == "open":
+        visible_tasks = [task for task in visible_tasks if task["status"] != "done"]
+    elif status_filter == "done":
+        visible_tasks = [task for task in visible_tasks if task["status"] == "done"]
+
+    if assignee_filter:
+        visible_tasks = [
+            task for task in visible_tasks
+            if (task.get("assignee_name") or task.get("assignee_role_name")) == assignee_filter
+        ]
+
+    if source_filter:
+        visible_tasks = [task for task in visible_tasks if task.get("source_section") == source_filter]
+
+    visible_tasks.sort(key=lambda item: (item["due_date"], item["status"] == "done", item["title"].lower()))
+
+    assignee_options = sorted({
+        (task.get("assignee_name") or task.get("assignee_role_name"))
+        for task in all_tasks
+        if (task.get("assignee_name") or task.get("assignee_role_name"))
+    })
+    source_options = [
+        ("", "Все источники"),
+        ("manual", "Ручные задачи"),
+        ("contracts", "Контракты"),
+        ("auctions", "Аукционы"),
+        ("payroll", "Зарплата"),
+    ]
+    open_count = sum(1 for task in visible_tasks if task["status"] != "done")
+    done_count = sum(1 for task in visible_tasks if task["status"] == "done")
+    overdue_count = sum(1 for task in visible_tasks if task["status"] != "done" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date())
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+
+    group_rows: list[str] = []
+    current_group = None
+    for task in visible_tasks:
+        assignee_label = task.get("assignee_name") or task.get("assignee_role_name") or "Без ответственного"
+        if group_by == "assignee" and assignee_label != current_group:
+            current_group = assignee_label
+            group_rows.append(f'<tr class="task-group-row"><td colspan="5">{escape(current_group)}</td></tr>')
+        created_at = task["created_at"]
+        created_local = created_at.astimezone(VLADIVOSTOK_TZ) if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ)
+        due_class = "deadline-meta danger" if task["status"] != "done" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date() else "deadline-meta ok" if task["task_kind"] == "auto" else "contract-table-subtle"
+        source_label = {
+            "manual": "Ручная задача",
+            "contracts": "Контракты",
+            "auctions": "Аукционы",
+            "payroll": "Зарплата",
+        }.get(task["source_section"], "Задача")
+        group_rows.append(
+            f"""
+            <tr>
+              <td class="nowrap" style="text-align:center;">
+                <div class="{due_class}">{format_date(task["due_date"])}</div>
+              </td>
+              <td>
+                <div class="timeline-title">{escape(task["title"])}</div>
+                {f'<div class="contract-table-subtle">{escape(task["description"])}</div>' if task["description"] else ''}
+                <div class="contract-table-subtle">{escape(source_label)}</div>
+              </td>
+              <td>
+                <div>{escape(assignee_label)}</div>
+              </td>
+              <td>
+                <div>{escape(task["created_by_name"])}</div>
+                <div class="contract-table-subtle">{format_datetime(created_local)}</div>
+              </td>
+              <td>{render_task_status_control(owner_chat_id, task, current_user, status_filter, assignee_filter, group_by, source_filter)}</td>
+            </tr>
+            """
+        )
+
+    rows_html = "".join(group_rows) or '<tr><td colspan="5">Задач по текущему фильтру пока нет.</td></tr>'
+
+    add_form_html = ""
+    if has_permission(current_user, "tasks", "edit"):
+        users = [user for user in storage.list_web_users(owner_chat_id) if user.get("is_active")]
+        add_form_html = f"""
+        <section class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Поставить задачу</h2>
+              <div class="panel-sub">Ручные поручения с ответственным, дедлайном и комментарием.</div>
+            </div>
+          </div>
+          <form class="form-grid" method="post" action="/tasks/new{task_query_suffix(owner_chat_id, status_filter, assignee_filter, group_by, source_filter)}">
+            <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+              <div class="field">
+                <label>Заголовок задачи</label>
+                <input type="text" name="title" placeholder="Например, провести встречу по библиотеке №13" required>
+              </div>
+              <div class="field">
+                <label>Дедлайн</label>
+                <input type="date" name="due_date" required>
+              </div>
+              <div class="field">
+                <label>Ответственный</label>
+                <select name="assignee_user_id" required>
+                  <option value="">Выберите сотрудника</option>
+                  {"".join(f'<option value="{user["id"]}">{escape(user["full_name"])} · {escape(user["role_name"])}</option>' for user in users)}
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label>Комментарий к задаче</label>
+              <textarea name="description" placeholder="Что именно нужно сделать, какие вводные и к чему должен прийти результат"></textarea>
+            </div>
+            <button class="submit-btn" type="submit">Добавить задачу</button>
+          </form>
+        </section>
+        """
+
+    return f"""
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Открытых задач</div>
+        <div class="stat-value">{open_count}</div>
+        <div class="stat-note">Сейчас требуют внимания</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Выполнено</div>
+        <div class="stat-value">{done_count}</div>
+        <div class="stat-note">По текущему фильтру</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Просрочено</div>
+        <div class="stat-value">{overdue_count}</div>
+        <div class="stat-note">Открытых задач с сорванным дедлайном</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Всего видно</div>
+        <div class="stat-value">{len(visible_tasks)}</div>
+        <div class="stat-note">С учетом ваших прав и фильтров</div>
+      </article>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Реестр задач</h2>
+          <div class="panel-sub">Автоматические задачи по ролям и ручные поручения компании в одном месте.</div>
+        </div>
+        <div class="chip">{'Руководящий обзор' if can_view_all_tasks(current_user) else 'Мои задачи'}</div>
+      </div>
+      <form class="action-row" method="get" action="/tasks" style="justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; margin-bottom: 14px;">
+        <input type="hidden" name="owner" value="{owner_chat_id}">
+        <div class="action-row" style="gap:12px; align-items:end; flex-wrap: wrap;">
+          <div class="field" style="min-width: 180px; margin:0;">
+            <label>Статус</label>
+            <select name="status">
+              <option value="open"{" selected" if status_filter == "open" else ""}>Открытые</option>
+              <option value="done"{" selected" if status_filter == "done" else ""}>Выполненные</option>
+              <option value="all"{" selected" if status_filter == "all" else ""}>Все</option>
+            </select>
+          </div>
+          <div class="field" style="min-width: 220px; margin:0;">
+            <label>Ответственный</label>
+            <select name="assignee">
+              <option value="">Все</option>
+              {"".join(f'<option value="{escape(name)}"{" selected" if assignee_filter == name else ""}>{escape(name)}</option>' for name in assignee_options)}
+            </select>
+          </div>
+          <div class="field" style="min-width: 180px; margin:0;">
+            <label>Источник</label>
+            <select name="source">
+              {"".join(f'<option value="{escape(value)}"{" selected" if source_filter == value else ""}>{escape(label)}</option>' for value, label in source_options)}
+            </select>
+          </div>
+          {f'''
+          <div class="field" style="min-width: 180px; margin:0;">
+            <label>Группировка</label>
+            <select name="group">
+              <option value=""{" selected" if group_by == "" else ""}>Без группировки</option>
+              <option value="assignee"{" selected" if group_by == "assignee" else ""}>По ответственному</option>
+            </select>
+          </div>
+          ''' if can_view_all_tasks(current_user) else f'<input type="hidden" name="group" value="{escape(group_by)}">'}
+        </div>
+        <div class="action-row" style="gap:10px;">
+          <button class="secondary-btn" type="submit">Показать</button>
+          {f'<a class="secondary-btn" href="/tasks?owner={owner_chat_id}">Сбросить</a>' if status_filter != "open" or assignee_filter or group_by or source_filter else ""}
+        </div>
+      </form>
+      {flash_html}
+      <table class="table contract-table">
+        <thead>
+          <tr>
+            <th class="nowrap">Дедлайн</th>
+            <th>Задача</th>
+            <th>Ответственный</th>
+            <th>Поставил</th>
+            <th class="nowrap">Статус</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </section>
+    {add_form_html}
+    """
+
+
 def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date | None = None, flash_message: str = "", success: bool = False) -> str:
     storage.ensure_payroll_seed(owner_chat_id)
     months = storage.list_payroll_months(owner_chat_id)
@@ -8289,6 +8811,114 @@ def app(environ, start_response):
         html = layout("Календарь событий", body, owners, current_owner, "events", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
+
+    if path == "/tasks" and method == "GET":
+        denied = guard("tasks", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        status_filter = query.get("status", ["open"])[0].strip() or "open"
+        assignee_filter = query.get("assignee", [""])[0].strip()
+        group_by = query.get("group", [""])[0].strip()
+        source_filter = query.get("source", [""])[0].strip()
+        if status_filter not in {"open", "done", "all"}:
+            status_filter = "open"
+        if group_by not in {"", "assignee"}:
+            group_by = ""
+        if source_filter not in {"", "manual", "contracts", "auctions", "payroll"}:
+            source_filter = ""
+        body = render_tasks_section(storage, current_owner, current_user, status_filter, assignee_filter, group_by, source_filter)
+        html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/tasks/new" and method == "POST":
+        denied = guard("tasks", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        status_filter = query.get("status", ["open"])[0].strip() or "open"
+        assignee_filter = query.get("assignee", [""])[0].strip()
+        group_by = query.get("group", [""])[0].strip()
+        source_filter = query.get("source", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            title = form.get("title", "").strip()
+            description = form.get("description", "").strip()
+            due_date_raw = form.get("due_date", "").strip()
+            assignee_user_id = int(form.get("assignee_user_id", "0"))
+            if not title:
+                raise ValueError("Укажите задачу")
+            if not due_date_raw:
+                raise ValueError("Укажите дедлайн")
+            due_date = parse_date(due_date_raw)
+            assignee = next((user for user in storage.list_web_users(current_owner) if user["id"] == assignee_user_id), None)
+            if assignee is None:
+                raise ValueError("Выберите ответственного")
+            created_by_name = current_user.get("full_name", "").strip() if current_user else ""
+            storage.add_task(
+                current_owner,
+                title,
+                description,
+                due_date,
+                assignee_user_id,
+                assignee.get("full_name", "").strip(),
+                assignee.get("role_name", "").strip(),
+                current_user.get("id") if current_user else None,
+                created_by_name,
+            )
+            return redirect(start_response, f"/tasks{task_query_suffix(current_owner, status_filter, assignee_filter, group_by, source_filter)}")
+        except Exception as exc:
+            body = render_tasks_section(storage, current_owner, current_user, status_filter, assignee_filter, group_by, source_filter, f"Не удалось добавить задачу: {exc}")
+            html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/tasks/") and path.endswith("/status") and method == "POST":
+        denied = guard("tasks", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        status_filter = query.get("status", ["open"])[0].strip() or "open"
+        assignee_filter = query.get("assignee", [""])[0].strip()
+        group_by = query.get("group", [""])[0].strip()
+        source_filter = query.get("source", [""])[0].strip()
+        try:
+            task_id = int(path.split("/")[2])
+        except ValueError:
+            task_id = -1
+        form = read_post_data(environ)
+        try:
+            all_manual_tasks = storage.list_tasks(current_owner)
+            task = next((item for item in all_manual_tasks if item.id == task_id), None)
+            if task is None:
+                raise ValueError("Задача не найдена")
+            task_payload = {
+                "id": task.id,
+                "task_kind": "manual",
+                "assignee_user_id": task.assignee_user_id,
+                "assignee_name": task.assignee_name,
+                "assignee_role_name": task.assignee_role_name,
+            }
+            if not can_update_task_status(current_user, task_payload):
+                raise ValueError("Недостаточно прав для изменения задачи")
+            is_done = form.get("is_done") == "1"
+            completion_comment = form.get("completion_comment", "").strip()
+            completed_date_raw = form.get("completed_date", "").strip()
+            completed_at = None
+            completed_by_name = ""
+            if is_done:
+                completed_date = parse_date(completed_date_raw) if completed_date_raw else datetime.now(VLADIVOSTOK_TZ).date()
+                completed_at = local_date_to_utc_naive(completed_date)
+                completed_by_name = current_user.get("full_name", "").strip() if current_user else ""
+            if not storage.update_task_status(current_owner, task_id, "done" if is_done else "open", completion_comment, completed_at, completed_by_name):
+                raise ValueError("Не удалось обновить задачу")
+            return redirect(start_response, f"/tasks{task_query_suffix(current_owner, status_filter, assignee_filter, group_by, source_filter)}")
+        except Exception as exc:
+            body = render_tasks_section(storage, current_owner, current_user, status_filter, assignee_filter, group_by, source_filter, f"Не удалось обновить задачу: {exc}")
+            html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
 
     if path == "/contracts/new" and method == "POST":
         denied = guard("contracts", "edit")
