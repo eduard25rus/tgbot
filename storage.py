@@ -9,7 +9,7 @@ from typing import Optional
 
 
 DATE_FMT = "%Y-%m-%d"
-WEB_SECTION_IDS = ("contracts", "auctions", "payables", "expenses", "payroll", "finance", "access")
+WEB_SECTION_IDS = ("contracts", "auctions", "events", "payables", "expenses", "payroll", "finance", "access")
 
 
 @dataclass

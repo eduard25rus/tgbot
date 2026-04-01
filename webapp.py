@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import os
 import csv
 import hashlib
@@ -2832,6 +2833,7 @@ def render_auction_rows(auctions, owner_chat_id: int, active_tab: str, current_u
 SECTIONS = [
     ("contracts", "Контракты", "/contracts"),
     ("auctions", "Аукционы", "/auctions"),
+    ("events", "Календарь событий", "/events"),
     ("payables", "Кредиторка", "/payables"),
     ("expenses", "Расходы компании", "/expenses"),
     ("payroll", "Зарплата", "/payroll"),
@@ -2850,6 +2852,10 @@ SECTION_HERO = {
     "auctions": (
         "Аукционы",
         "Здесь постепенно соберем воронку тендеров: анализ закупок, статусы участия, шансы на победу и плановые суммы.",
+    ),
+    "events": (
+        "Календарь событий",
+        "Единый месячный календарь ключевых событий: дедлайны этапов, подача заявок, оплаты подрядчикам и зарплатные даты.",
     ),
     "payables": (
         "Кредиторка",
@@ -3812,6 +3818,102 @@ def layout(
       font-size: 16px;
       font-weight: 700;
       margin-bottom: 4px;
+    }}
+    .calendar-shell {{
+      display: grid;
+      gap: 10px;
+    }}
+    .calendar-weekdays {{
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .calendar-weekdays > div {{
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .calendar-grid {{
+      display: grid;
+      gap: 10px;
+    }}
+    .calendar-week {{
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .calendar-day {{
+      min-height: 164px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.68);
+      padding: 12px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 10px;
+    }}
+    .calendar-day.is-outside {{
+      opacity: 0.42;
+    }}
+    .calendar-day.is-today {{
+      box-shadow: inset 0 0 0 2px rgba(181, 114, 72, 0.28);
+    }}
+    .calendar-day-number {{
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .calendar-day-events {{
+      display: grid;
+      gap: 6px;
+      align-content: start;
+    }}
+    .calendar-event {{
+      border-radius: 14px;
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.25;
+      background: #edf1f5;
+      color: var(--ink);
+    }}
+    .calendar-event.stage {{
+      background: #f7e4d1;
+      color: #a35f17;
+    }}
+    .calendar-event.auction {{
+      background: #fff0c9;
+      color: #95620d;
+    }}
+    .calendar-event.payable {{
+      background: #f9dede;
+      color: #922b2b;
+    }}
+    .calendar-event.payroll-salary {{
+      background: #dfeee8;
+      color: #1f6d46;
+    }}
+    .calendar-event.payroll-advance {{
+      background: #e7edf4;
+      color: #415567;
+    }}
+    .calendar-event.contract {{
+      background: #e7edf4;
+      color: #415567;
+    }}
+    .calendar-event-title {{
+      font-weight: 700;
+      margin-bottom: 3px;
+    }}
+    .calendar-event-note {{
+      opacity: 0.86;
+    }}
+    .calendar-more {{
+      color: var(--muted);
+      font-size: 12px;
+      padding-top: 2px;
     }}
     .table {{
       width: 100%;
@@ -5952,6 +6054,187 @@ def payroll_deadline_for_kind(payroll_month: date, payment_kind: str) -> date:
     return date(payroll_month.year, payroll_month.month + 1, 5)
 
 
+def month_add(value: date, months_delta: int) -> date:
+    month_index = (value.year * 12 + value.month - 1) + months_delta
+    year = month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, 1)
+
+
+def calendar_event_item(event_date: date, title: str, note: str, css_class: str) -> dict:
+    return {
+        "date": event_date,
+        "title": title,
+        "note": note,
+        "css_class": css_class,
+    }
+
+
+def build_events_calendar_items(storage: Storage, owner_chat_id: int, current_user: dict | None, month: date) -> list[dict]:
+    items: list[dict] = []
+
+    if has_permission(current_user, "contracts", "view"):
+        for contract in storage.list_contracts(owner_chat_id):
+            contract_object = contract.object_name.strip() or contract.title
+            if contract.signed_date is not None and contract.signed_date.year == month.year and contract.signed_date.month == month.month:
+                items.append(
+                    calendar_event_item(
+                        contract.signed_date,
+                        "Заключение контракта",
+                        contract_object,
+                        "contract",
+                    )
+                )
+            for stage in storage.list_stages_for_contract(owner_chat_id, contract.id):
+                if stage.end_date.year == month.year and stage.end_date.month == month.month:
+                    items.append(
+                        calendar_event_item(
+                            stage.end_date,
+                            "Закрытие этапа",
+                            f"{contract_object} · {stage.name}",
+                            "stage",
+                        )
+                    )
+
+    if has_permission(current_user, "auctions", "view"):
+        for auction in storage.list_auctions(owner_chat_id):
+            if auction.bid_deadline.year == month.year and auction.bid_deadline.month == month.month:
+                items.append(
+                    calendar_event_item(
+                        auction.bid_deadline,
+                        "Подача заявки",
+                        auction.title.strip() or f"Аукцион № {auction.auction_number}",
+                        "auction",
+                    )
+                )
+
+    if has_permission(current_user, "payables", "view"):
+        for entry in storage.list_payables(owner_chat_id):
+            if is_payable_deleted(entry) or payable_metrics(entry)["outstanding"] <= 0.009:
+                continue
+            if entry.due_date.year == month.year and entry.due_date.month == month.month:
+                object_name = entry.object_name.strip()
+                note = entry.counterparty.strip()
+                if object_name:
+                    note = f"{note} · {object_name}"
+                items.append(
+                    calendar_event_item(
+                        entry.due_date,
+                        "Оплата подрядчику",
+                        note,
+                        "payable",
+                    )
+                )
+
+    if has_permission(current_user, "payroll", "view"):
+        salary_date = date(month.year, month.month, 5)
+        previous_payroll_month = month_add(month, -1)
+        items.append(
+            calendar_event_item(
+                salary_date,
+                "Выплата зарплаты",
+                f"За {format_month_label(previous_payroll_month)}",
+                "payroll-salary",
+            )
+        )
+        advance_date = date(month.year, month.month, 20)
+        items.append(
+            calendar_event_item(
+                advance_date,
+                "Выплата аванса",
+                f"За {format_month_label(month)}",
+                "payroll-advance",
+            )
+        )
+
+    items.sort(key=lambda item: (item["date"], item["title"], item["note"]))
+    return items
+
+
+def render_events_calendar_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date | None = None) -> str:
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    selected_month = selected_month or today.replace(day=1)
+    month_start = selected_month.replace(day=1)
+    month_items = build_events_calendar_items(storage, owner_chat_id, current_user, month_start)
+    events_by_day: dict[date, list[dict]] = {}
+    for item in month_items:
+        events_by_day.setdefault(item["date"], []).append(item)
+
+    calendar_grid = calendar.Calendar(firstweekday=0).monthdatescalendar(month_start.year, month_start.month)
+    weekday_labels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    weeks_html: list[str] = []
+    for week in calendar_grid:
+        day_cells: list[str] = []
+        for day_value in week:
+            day_items = events_by_day.get(day_value, [])
+            hidden_count = max(0, len(day_items) - 4)
+            event_html = "".join(
+                f'<div class="calendar-event {escape(item["css_class"])}"><div class="calendar-event-title">{escape(item["title"])}</div><div class="calendar-event-note">{escape(item["note"])}</div></div>'
+                for item in day_items[:4]
+            )
+            if hidden_count:
+                event_html += f'<div class="calendar-more">+ еще {hidden_count}</div>'
+            outside_class = " is-outside" if day_value.month != month_start.month else ""
+            today_class = " is-today" if day_value == today else ""
+            day_cells.append(
+                f"""
+                <div class="calendar-day{outside_class}{today_class}">
+                  <div class="calendar-day-number">{day_value.day}</div>
+                  <div class="calendar-day-events">{event_html}</div>
+                </div>
+                """
+            )
+        weeks_html.append(f'<div class="calendar-week">{"".join(day_cells)}</div>')
+
+    prev_month = month_add(month_start, -1)
+    next_month = month_add(month_start, 1)
+    month_events_feed = "".join(
+        f"""
+        <div class="timeline-item">
+          <div class="timeline-date">{format_date(item["date"])}</div>
+          <div>
+            <div class="timeline-title">{escape(item["title"])}</div>
+            <div class="contract-meta">{escape(item["note"])}</div>
+          </div>
+        </div>
+        """
+        for item in month_items
+    ) or '<div class="empty">На этот месяц событий пока нет.</div>'
+
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Календарь событий</h2>
+          <div class="panel-sub">Месячный обзор всех ключевых действий и дедлайнов по контрактам, аукционам, кредиторке и зарплате.</div>
+        </div>
+        <div class="action-row" style="gap:10px; align-items:center;">
+          <a class="secondary-btn mini" href="/events?owner={owner_chat_id}&month={prev_month.strftime('%Y-%m')}">← {escape(format_month_label(prev_month))}</a>
+          <div class="chip">{escape(format_month_label(month_start))}</div>
+          <a class="secondary-btn mini" href="/events?owner={owner_chat_id}&month={next_month.strftime('%Y-%m')}">{escape(format_month_label(next_month))} →</a>
+        </div>
+      </div>
+      <div class="calendar-shell">
+        <div class="calendar-weekdays">
+          {"".join(f'<div>{label}</div>' for label in weekday_labels)}
+        </div>
+        <div class="calendar-grid">
+          {"".join(weeks_html)}
+        </div>
+      </div>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Лента событий месяца</h2>
+          <div class="panel-sub">Тот же календарь, но единым хронологическим списком.</div>
+        </div>
+      </div>
+      <div class="timeline">{month_events_feed}</div>
+    </section>
+    """
+
+
 def payroll_deadline_header(payroll_month: date, payment_kind: str, rows) -> str:
     labels = {
         "advance_card": "до 20 числа",
@@ -7673,6 +7956,16 @@ def app(environ, start_response):
         body = render_forbidden_body(SECTION_LABELS.get(section_id, section_id))
         html = layout("Доступ запрещен", body, owners, current_owner, section_id, current_user)
         start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/events":
+        denied = guard("events", "view")
+        if denied:
+            return denied
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
+        body = render_events_calendar_section(storage, current_owner, current_user, selected_month)
+        html = layout("Календарь событий", body, owners, current_owner, "events", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
     if path == "/contracts/new" and method == "POST":
