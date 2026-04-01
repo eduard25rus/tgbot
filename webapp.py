@@ -8106,15 +8106,21 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
           <h2 class="panel-title">Комментарии</h2>
           <div class="panel-sub">Все дополнения по задаче одним списком, как рабочая лента обсуждения.</div>
         </div>
-        <details class="status-menu">
+        <details style="min-width:46px;">
           <summary><span class="chip status-done" style="cursor:pointer; min-width:46px; justify-content:center; font-size:2rem; line-height:1;">+</span></summary>
-          <div class="status-popover" style="min-width:min(720px, 88vw);">
-            <form class="form-grid" method="post" action="/tasks/{task.id}/comments/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
-              <div class="field">
-                <label>Комментарий</label>
-                <textarea name="body" placeholder="Дополнение по задаче, уточнение, промежуточный результат"></textarea>
+          <div style="margin-top:18px; padding:18px 20px; border:1px solid var(--line); border-radius:24px; background:var(--panel-alt);">
+            <div class="timeline-item" style="padding:0 0 14px; margin-bottom:14px;">
+              <div class="timeline-date">{format_datetime(datetime.now(VLADIVOSTOK_TZ))}</div>
+              <div>
+                <div class="timeline-title">{escape((current_user or {{}}).get("full_name") or (current_user or {{}}).get("login") or "Текущий сотрудник")}</div>
+                <div class="contract-table-subtle">Новый комментарий к задаче</div>
               </div>
-              <div class="action-row" style="justify-content:flex-start; gap:10px;">
+            </div>
+            <form class="form-grid" method="post" action="/tasks/{task.id}/comments/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
+              <div class="field" style="margin:0;">
+                <textarea name="body" placeholder="Дополнение по задаче, уточнение, промежуточный результат" style="min-height:120px;"></textarea>
+              </div>
+              <div class="action-row" style="justify-content:flex-start; gap:10px; margin-top:10px;">
                 <label class="secondary-btn" style="cursor:pointer; margin:0;">
                   Прикрепить файл
                   <input type="file" name="comment_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple style="display:none;">
