@@ -3568,6 +3568,10 @@ def layout(
     .task-comment-preview:last-child {{
       margin-bottom: 0;
     }}
+    .task-comment-cancel {{
+      cursor: pointer;
+      margin: 0;
+    }}
     .notification-btn {{
       width: 40px;
       height: 40px;
@@ -7841,7 +7845,7 @@ def render_tasks_section(
               <div class="panel-sub">Ручные поручения с ответственным, дедлайном и комментарием.</div>
             </div>
           </div>
-          <form class="form-grid" method="post" action="/tasks/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">
+          <form class="form-grid" method="post" action="/tasks/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
             <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
               <div class="field">
                 <label>Заголовок задачи</label>
@@ -7876,6 +7880,10 @@ def render_tasks_section(
             <div class="field">
               <label>Комментарий к задаче</label>
               <textarea name="description" placeholder="Что именно нужно сделать, какие вводные и к чему должен прийти результат"></textarea>
+            </div>
+            <div class="field">
+              <label>Файлы к задаче</label>
+              <input type="file" name="task_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple>
             </div>
             <button class="submit-btn" type="submit">Добавить задачу</button>
           </form>
@@ -8012,6 +8020,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
     attachment_map: dict[int | None, list] = {}
     for attachment in attachments:
         attachment_map.setdefault(attachment.comment_id, []).append(attachment)
+    task_level_attachments = attachment_map.get(None, [])
     users, role_options = task_assignment_options(storage, owner_chat_id)
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     status_label, status_css = task_status_meta(task.status)
@@ -8033,6 +8042,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
         """
         for comment in comments
     ) or '<div class="empty">Комментариев по задаче пока нет.</div>'
+    task_files_html = render_task_attachment_links(owner_chat_id, task_level_attachments) if task_level_attachments else '<div class="contract-table-subtle">Вложения отсутствуют.</div>'
     deleted_toolbar = ""
     if task.deleted_at is not None:
         purge_form = ""
@@ -8045,7 +8055,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
         <details class="status-menu">
           <summary><span class="secondary-btn">Управление задачей</span></summary>
           <div class="status-popover" style="min-width: min(760px, 88vw);">
-            <form class="form-grid" method="post" action="/tasks/{task.id}/update{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">
+            <form class="form-grid" method="post" action="/tasks/{task.id}/update{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
               <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
                 <div class="field">
                   <label>Заголовок задачи</label>
@@ -8080,6 +8090,10 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
               <div class="field">
                 <label>Комментарий к задаче</label>
                 <textarea name="description">{escape(task.description)}</textarea>
+              </div>
+              <div class="field">
+                <label>Файлы к задаче</label>
+                <input type="file" name="task_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple>
               </div>
               <div class="action-row" style="gap:10px;">
                 <button class="submit-btn" type="submit">Сохранить изменения</button>
@@ -8123,8 +8137,9 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
       <div class="timeline-item" style="margin-top:18px;">
         <div class="timeline-date">Суть задачи</div>
         <div>
-          <div class="timeline-title">{escape(task.title)}</div>
           <div class="contract-table-subtle">{escape(task.description) if task.description else 'Описание задачи пока не заполнено.'}</div>
+          <div class="contract-table-subtle" style="margin-top:10px;">Прикрепленные файлы</div>
+          {task_files_html}
         </div>
       </div>
       {flash_html}
@@ -8158,6 +8173,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
               <input type="file" name="comment_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple style="display:none;">
             </label>
             <button class="submit-btn" type="submit">Сохранить комментарий</button>
+            <label for="task-comment-toggle-{task.id}" class="secondary-btn task-comment-cancel">Отменить</label>
           </div>
         </form>
       </div>
@@ -9251,7 +9267,10 @@ def app(environ, start_response):
         assignee_filter = query.get("assignee", [""])[0].strip()
         group_by = query.get("group", [""])[0].strip()
         source_filter = query.get("source", [""])[0].strip()
-        form = read_post_data(environ)
+        if "multipart/form-data" in (environ.get("CONTENT_TYPE", "") or ""):
+            form, files = read_multipart_form_data(environ)
+        else:
+            form, files = read_post_data(environ), {}
         try:
             title = form.get("title", "").strip()
             description = form.get("description", "").strip()
@@ -9270,7 +9289,7 @@ def app(environ, start_response):
                 role_options,
             )
             created_by_name = current_user.get("full_name", "").strip() if current_user else ""
-            storage.add_task(
+            task_id = storage.add_task(
                 current_owner,
                 title,
                 description,
@@ -9283,6 +9302,9 @@ def app(environ, start_response):
                 current_user.get("id") if current_user else None,
                 created_by_name,
             )
+            uploads = [item for item in files.get("task_file", []) if item.filename.strip()]
+            if uploads:
+                save_task_uploads(storage, current_owner, task_id, None, uploads)
             return redirect(start_response, f"/tasks{task_query_suffix(current_owner, active_tab, assignee_filter, group_by, source_filter)}")
         except Exception as exc:
             body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter, f"Не удалось добавить задачу: {exc}")
@@ -9336,7 +9358,10 @@ def app(environ, start_response):
         assignee_filter = query.get("assignee", [""])[0].strip()
         group_by = query.get("group", [""])[0].strip()
         source_filter = query.get("source", [""])[0].strip()
-        form = read_post_data(environ)
+        if "multipart/form-data" in (environ.get("CONTENT_TYPE", "") or ""):
+            form, files = read_multipart_form_data(environ)
+        else:
+            form, files = read_post_data(environ), {}
         try:
             task_id = int(path.split("/")[2])
             task = storage.get_task(current_owner, task_id)
@@ -9365,6 +9390,9 @@ def app(environ, start_response):
             )
             if not storage.update_task(current_owner, task_id, title, description, due_date, assignee_kind, assignee_user_id, assignee_name, assignee_role_code, assignee_role_name):
                 raise ValueError("Не удалось сохранить задачу")
+            uploads = [item for item in files.get("task_file", []) if item.filename.strip()]
+            if uploads:
+                save_task_uploads(storage, current_owner, task_id, None, uploads)
             return redirect(start_response, f"/tasks/{task_id}{task_query_suffix(current_owner, active_tab, assignee_filter, group_by, source_filter)}")
         except Exception as exc:
             task = storage.get_task(current_owner, int(path.split("/")[2])) if path.split("/")[2].isdigit() else None
