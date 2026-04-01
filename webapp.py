@@ -7713,9 +7713,25 @@ def render_tasks_section(
         visible_tasks = [task for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] == "open"] + visible_auto_tasks
 
     if assignee_filter:
+        all_users = [user for user in storage.list_web_users(owner_chat_id) if user.get("is_active")]
+        matching_users = [user for user in all_users if (user.get("full_name") or "").strip() == assignee_filter]
+        matching_role_codes = {
+            preview_role_code((user.get("role_name") or "").strip())
+            for user in matching_users
+            if preview_role_code((user.get("role_name") or "").strip())
+        }
         visible_tasks = [
             task for task in visible_tasks
-            if task_assignee_label(task) == assignee_filter
+            if (
+                task_assignee_label(task) == assignee_filter
+                or (
+                    bool(matching_role_codes)
+                    and (
+                        (task.get("assignee_role_code") or preview_role_code(task.get("assignee_role_name", "")))
+                        in matching_role_codes
+                    )
+                )
+            )
         ]
 
     if source_filter:
