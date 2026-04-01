@@ -3879,6 +3879,18 @@ def layout(
       background: #edf1f5;
       color: var(--ink);
     }}
+    .calendar-event.deadline {{
+      background: #edf1f5;
+      color: #415567;
+    }}
+    .calendar-event.fact {{
+      background: #dfeee8;
+      color: #1f6d46;
+    }}
+    .calendar-event.alert {{
+      background: #f9dede;
+      color: #922b2b;
+    }}
     .calendar-event.stage {{
       background: #f7e4d1;
       color: #a35f17;
@@ -6061,17 +6073,35 @@ def month_add(value: date, months_delta: int) -> date:
     return date(year, month, 1)
 
 
-def calendar_event_item(event_date: date, title: str, note: str, css_class: str) -> dict:
+def calendar_event_item(
+    event_date: date,
+    title: str,
+    note: str,
+    css_class: str,
+    *,
+    section_id: str,
+    event_group: str,
+) -> dict:
     return {
         "date": event_date,
         "title": title,
         "note": note,
         "css_class": css_class,
+        "section_id": section_id,
+        "event_group": event_group,
     }
 
 
-def build_events_calendar_items(storage: Storage, owner_chat_id: int, current_user: dict | None, month: date) -> list[dict]:
+def build_events_calendar_items(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    month: date,
+    section_filter: str = "",
+    event_group_filter: str = "",
+) -> list[dict]:
     items: list[dict] = []
+    today = datetime.now(VLADIVOSTOK_TZ).date()
 
     if has_permission(current_user, "contracts", "view"):
         for contract in storage.list_contracts(owner_chat_id):
@@ -6082,7 +6112,9 @@ def build_events_calendar_items(storage: Storage, owner_chat_id: int, current_us
                         contract.signed_date,
                         "Заключение контракта",
                         contract_object,
-                        "contract",
+                        "fact contract",
+                        section_id="contracts",
+                        event_group="fact",
                     )
                 )
             for stage in storage.list_stages_for_contract(owner_chat_id, contract.id):
@@ -6092,37 +6124,221 @@ def build_events_calendar_items(storage: Storage, owner_chat_id: int, current_us
                             stage.end_date,
                             "Закрытие этапа",
                             f"{contract_object} · {stage.name}",
-                            "stage",
+                            "deadline stage",
+                            section_id="contracts",
+                            event_group="deadline",
+                        )
+                    )
+                if stage.end_date < today and stage.status != "accepted_eis" and stage.end_date.year == month.year and stage.end_date.month == month.month:
+                    items.append(
+                        calendar_event_item(
+                            stage.end_date,
+                            "Просрочен этап",
+                            f"{contract_object} · {stage.name}",
+                            "alert",
+                            section_id="contracts",
+                            event_group="alert",
+                        )
+                    )
+                if stage.advance_invoice_issued and stage.advance_invoice_issued_at is not None:
+                    invoice_date = local_contract_event_date(stage.advance_invoice_issued_at)
+                    if invoice_date.year == month.year and invoice_date.month == month.month:
+                        items.append(
+                            calendar_event_item(
+                                invoice_date,
+                                "Счет на аванс выставлен",
+                                f"{contract_object} · {stage.name}",
+                                "fact contracts",
+                                section_id="contracts",
+                                event_group="fact",
+                            )
+                        )
+                if stage.final_invoice_issued and stage.final_invoice_issued_at is not None:
+                    invoice_date = local_contract_event_date(stage.final_invoice_issued_at)
+                    if invoice_date.year == month.year and invoice_date.month == month.month:
+                        items.append(
+                            calendar_event_item(
+                                invoice_date,
+                                "Счет на остаток выставлен",
+                                f"{contract_object} · {stage.name}",
+                                "fact contracts",
+                                section_id="contracts",
+                                event_group="fact",
+                            )
+                        )
+                if stage.status in {"uploaded_eis", "accepted_eis"} and stage.status_updated_at is not None:
+                    status_date = local_contract_event_date(stage.status_updated_at)
+                    if status_date.year == month.year and status_date.month == month.month:
+                        items.append(
+                            calendar_event_item(
+                                status_date,
+                                "Загружен на ЕИС" if stage.status == "uploaded_eis" else "Принят на ЕИС",
+                                f"{contract_object} · {stage.name}",
+                                "fact contracts",
+                                section_id="contracts",
+                                event_group="fact",
+                            )
+                        )
+            for letter in storage.list_legal_letters_for_contract(owner_chat_id, contract.id):
+                if letter.letter_date.year == month.year and letter.letter_date.month == month.month:
+                    items.append(
+                        calendar_event_item(
+                            letter.letter_date,
+                            "Исходящее письмо" if letter.direction == "outgoing" else "Входящее письмо",
+                            f"{contract_object} · {letter.subject.strip() or 'Без темы'}",
+                            "fact contracts",
+                            section_id="contracts",
+                            event_group="fact",
                         )
                     )
 
     if has_permission(current_user, "auctions", "view"):
         for auction in storage.list_auctions(owner_chat_id):
+            auction_title = auction.title.strip() or f"Аукцион № {auction.auction_number}"
             if auction.bid_deadline.year == month.year and auction.bid_deadline.month == month.month:
+                deadline_title = "Подача заявки"
+                if auction.submit_decision_status == "pending":
+                    deadline_title = "Принять решение по заявке"
+                elif auction.submit_decision_status == "approved":
+                    deadline_title = "Подать заявку"
                 items.append(
                     calendar_event_item(
                         auction.bid_deadline,
-                        "Подача заявки",
-                        auction.title.strip() or f"Аукцион № {auction.auction_number}",
-                        "auction",
+                        deadline_title,
+                        auction_title,
+                        "deadline auction",
+                        section_id="auctions",
+                        event_group="deadline",
                     )
                 )
+            if auction.bid_deadline < today and auction.result_status in {"pending", "won"} and auction.bid_deadline.year == month.year and auction.bid_deadline.month == month.month:
+                items.append(
+                    calendar_event_item(
+                        auction.bid_deadline,
+                        "Просрочен аукцион",
+                        auction_title,
+                        "alert",
+                        section_id="auctions",
+                        event_group="alert",
+                    )
+                )
+            if auction.estimate_status in {"approved", "calculated", "not_calculated", "rejected"} and auction.estimate_status_updated_at is not None:
+                estimate_date = local_contract_event_date(auction.estimate_status_updated_at)
+                if estimate_date.year == month.year and estimate_date.month == month.month:
+                    items.append(
+                        calendar_event_item(
+                            estimate_date,
+                            AUCTION_ESTIMATE_META.get(auction.estimate_status, ("Статус просчета", "chip"))[0],
+                            auction_title,
+                            "fact auctions",
+                            section_id="auctions",
+                            event_group="fact",
+                        )
+                    )
+            if auction.submit_decision_status in {"approved", "submitted", "rejected"} and auction.submit_status_updated_at is not None:
+                submit_date = local_contract_event_date(auction.submit_status_updated_at)
+                if submit_date.year == month.year and submit_date.month == month.month:
+                    items.append(
+                        calendar_event_item(
+                            submit_date,
+                            AUCTION_SUBMIT_DECISION_META.get(auction.submit_decision_status, ("Статус заявки", "chip"))[0],
+                            auction_title,
+                            "fact auctions",
+                            section_id="auctions",
+                            event_group="fact",
+                        )
+                    )
+            if auction.result_status in {"pending", "won", "recognized_winner", "lost", "rejected"} and auction.result_status_updated_at is not None:
+                result_date = local_contract_event_date(auction.result_status_updated_at)
+                if result_date.year == month.year and result_date.month == month.month:
+                    items.append(
+                        calendar_event_item(
+                            result_date,
+                            AUCTION_RESULT_META.get(auction.result_status, ("Итог аукциона", "chip"))[0],
+                            auction_title,
+                            "fact auctions",
+                            section_id="auctions",
+                            event_group="fact",
+                        )
+                    )
+            if auction.max_discount_percent is not None and auction.max_discount_updated_at is not None:
+                discount_date = local_contract_event_date(auction.max_discount_updated_at)
+                if discount_date.year == month.year and discount_date.month == month.month:
+                    items.append(
+                        calendar_event_item(
+                            discount_date,
+                            "Установлено снижение",
+                            f"{auction_title} · {format_percent(auction.max_discount_percent)}",
+                            "fact auctions",
+                            section_id="auctions",
+                            event_group="fact",
+                        )
+                    )
 
     if has_permission(current_user, "payables", "view"):
         for entry in storage.list_payables(owner_chat_id):
-            if is_payable_deleted(entry) or payable_metrics(entry)["outstanding"] <= 0.009:
+            metrics = payable_metrics(entry)
+            if is_payable_deleted(entry):
                 continue
+            object_name = entry.object_name.strip()
+            note = entry.counterparty.strip()
+            if object_name:
+                note = f"{note} · {object_name}"
             if entry.due_date.year == month.year and entry.due_date.month == month.month:
-                object_name = entry.object_name.strip()
-                note = entry.counterparty.strip()
-                if object_name:
-                    note = f"{note} · {object_name}"
+                if metrics["outstanding"] > 0.009:
+                    items.append(
+                        calendar_event_item(
+                            entry.due_date,
+                            "Оплата подрядчику",
+                            note,
+                            "deadline payable",
+                            section_id="payables",
+                            event_group="deadline",
+                        )
+                    )
+                elif entry.paid_amount > 0.009:
+                    items.append(
+                        calendar_event_item(
+                            entry.due_date,
+                            "Закрыта задолженность",
+                            note,
+                            "fact payables",
+                            section_id="payables",
+                            event_group="fact",
+                        )
+                    )
+            if metrics["outstanding"] > 0.009 and entry.due_date < today and entry.due_date.year == month.year and entry.due_date.month == month.month:
                 items.append(
                     calendar_event_item(
                         entry.due_date,
-                        "Оплата подрядчику",
+                        "Просрочена оплата подрядчику",
                         note,
-                        "payable",
+                        "alert",
+                        section_id="payables",
+                        event_group="alert",
+                    )
+                )
+            created_date = entry.created_at.astimezone(VLADIVOSTOK_TZ).date() if entry.created_at.tzinfo else entry.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date()
+            if created_date.year == month.year and created_date.month == month.month:
+                items.append(
+                    calendar_event_item(
+                        created_date,
+                        "Добавлена задолженность",
+                        note,
+                        "fact payables",
+                        section_id="payables",
+                        event_group="fact",
+                    )
+                )
+            if entry.paid_amount > 0.009 and entry.paid_date is not None and entry.paid_date.year == month.year and entry.paid_date.month == month.month:
+                items.append(
+                    calendar_event_item(
+                        entry.paid_date,
+                        "Зафиксирована оплата подрядчику",
+                        f"{note} · {format_amount(entry.paid_amount)}",
+                        "fact payables",
+                        section_id="payables",
+                        event_group="fact",
                     )
                 )
 
@@ -6134,7 +6350,9 @@ def build_events_calendar_items(storage: Storage, owner_chat_id: int, current_us
                 salary_date,
                 "Выплата зарплаты",
                 f"За {format_month_label(previous_payroll_month)}",
-                "payroll-salary",
+                "deadline payroll-salary",
+                section_id="payroll",
+                event_group="deadline",
             )
         )
         advance_date = date(month.year, month.month, 20)
@@ -6143,19 +6361,76 @@ def build_events_calendar_items(storage: Storage, owner_chat_id: int, current_us
                 advance_date,
                 "Выплата аванса",
                 f"За {format_month_label(month)}",
-                "payroll-advance",
+                "deadline payroll-advance",
+                section_id="payroll",
+                event_group="deadline",
             )
         )
+        if salary_date < today and salary_date.year == month.year and salary_date.month == month.month:
+            items.append(
+                calendar_event_item(
+                    salary_date,
+                    "Просрочена выплата зарплаты",
+                    f"За {format_month_label(previous_payroll_month)}",
+                    "alert",
+                    section_id="payroll",
+                    event_group="alert",
+                )
+            )
+        if advance_date < today and advance_date.year == month.year and advance_date.month == month.month:
+            items.append(
+                calendar_event_item(
+                    advance_date,
+                    "Просрочен аванс",
+                    f"За {format_month_label(month)}",
+                    "alert",
+                    section_id="payroll",
+                    event_group="alert",
+                )
+            )
+        payroll_month_candidates = {month, month_add(month, -1)}
+        for payroll_month_value in payroll_month_candidates:
+            for row in storage.list_payroll_rows(owner_chat_id, payroll_month_value):
+                person_label = row.full_name.strip()
+                factual_specs = [
+                    (row.advance_card_paid_amount, row.advance_card_paid_date, "Выплачен аванс на карту"),
+                    (row.advance_cash_paid_amount, row.advance_cash_paid_date, "Выплачен аванс наличными"),
+                    (row.salary_paid_amount, row.salary_paid_date, "Выплачена зарплата"),
+                    (row.bonus_paid_amount, row.bonus_paid_date, "Выплачена премия"),
+                ]
+                for paid_amount, paid_date, title in factual_specs:
+                    if paid_amount > 0.009 and paid_date is not None and paid_date.year == month.year and paid_date.month == month.month:
+                        items.append(
+                            calendar_event_item(
+                                paid_date,
+                                title,
+                                f"{person_label} · {format_amount(paid_amount)}",
+                                "fact payroll",
+                                section_id="payroll",
+                                event_group="fact",
+                            )
+                        )
 
+    if section_filter:
+        items = [item for item in items if item["section_id"] == section_filter]
+    if event_group_filter:
+        items = [item for item in items if item["event_group"] == event_group_filter]
     items.sort(key=lambda item: (item["date"], item["title"], item["note"]))
     return items
 
 
-def render_events_calendar_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date | None = None) -> str:
+def render_events_calendar_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    selected_month: date | None = None,
+    section_filter: str = "",
+    event_group_filter: str = "",
+) -> str:
     today = datetime.now(VLADIVOSTOK_TZ).date()
     selected_month = selected_month or today.replace(day=1)
     month_start = selected_month.replace(day=1)
-    month_items = build_events_calendar_items(storage, owner_chat_id, current_user, month_start)
+    month_items = build_events_calendar_items(storage, owner_chat_id, current_user, month_start, section_filter, event_group_filter)
     events_by_day: dict[date, list[dict]] = {}
     for item in month_items:
         events_by_day.setdefault(item["date"], []).append(item)
@@ -6188,6 +6463,24 @@ def render_events_calendar_section(storage: Storage, owner_chat_id: int, current
 
     prev_month = month_add(month_start, -1)
     next_month = month_add(month_start, 1)
+    month_query_base = f"owner={owner_chat_id}&month={month_start.strftime('%Y-%m')}"
+    if section_filter:
+        month_query_base += f"&section={quote_plus(section_filter)}"
+    if event_group_filter:
+        month_query_base += f"&kind={quote_plus(event_group_filter)}"
+    section_options = [
+        ("", "Все разделы"),
+        ("contracts", "Контракты"),
+        ("auctions", "Аукционы"),
+        ("payables", "Кредиторка"),
+        ("payroll", "Зарплата"),
+    ]
+    group_options = [
+        ("", "Все типы"),
+        ("deadline", "Дедлайны"),
+        ("fact", "Фактические события"),
+        ("alert", "Просрочки"),
+    ]
     month_events_feed = "".join(
         f"""
         <div class="timeline-item">
@@ -6206,14 +6499,36 @@ def render_events_calendar_section(storage: Storage, owner_chat_id: int, current
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Календарь событий</h2>
-          <div class="panel-sub">Месячный обзор всех ключевых действий и дедлайнов по контрактам, аукционам, кредиторке и зарплате.</div>
+          <div class="panel-sub">Месячный обзор дедлайнов, фактических действий и просрочек по всем ключевым разделам.</div>
         </div>
         <div class="action-row" style="gap:10px; align-items:center;">
-          <a class="secondary-btn mini" href="/events?owner={owner_chat_id}&month={prev_month.strftime('%Y-%m')}">← {escape(format_month_label(prev_month))}</a>
+          <a class="secondary-btn mini" href="/events?owner={owner_chat_id}&month={prev_month.strftime('%Y-%m')}{f'&section={quote_plus(section_filter)}' if section_filter else ''}{f'&kind={quote_plus(event_group_filter)}' if event_group_filter else ''}">← {escape(format_month_label(prev_month))}</a>
           <div class="chip">{escape(format_month_label(month_start))}</div>
-          <a class="secondary-btn mini" href="/events?owner={owner_chat_id}&month={next_month.strftime('%Y-%m')}">{escape(format_month_label(next_month))} →</a>
+          <a class="secondary-btn mini" href="/events?owner={owner_chat_id}&month={next_month.strftime('%Y-%m')}{f'&section={quote_plus(section_filter)}' if section_filter else ''}{f'&kind={quote_plus(event_group_filter)}' if event_group_filter else ''}">{escape(format_month_label(next_month))} →</a>
         </div>
       </div>
+      <form class="action-row" method="get" action="/events" style="justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 14px; flex-wrap: wrap;">
+        <input type="hidden" name="owner" value="{owner_chat_id}">
+        <input type="hidden" name="month" value="{month_start.strftime('%Y-%m')}">
+        <div class="action-row" style="gap:12px; align-items:end; flex-wrap: wrap;">
+          <div class="field" style="min-width:220px; margin:0;">
+            <label>Раздел</label>
+            <select name="section">
+              {"".join(f'<option value="{escape(value)}"{" selected" if section_filter == value else ""}>{escape(label)}</option>' for value, label in section_options)}
+            </select>
+          </div>
+          <div class="field" style="min-width:220px; margin:0;">
+            <label>Тип события</label>
+            <select name="kind">
+              {"".join(f'<option value="{escape(value)}"{" selected" if event_group_filter == value else ""}>{escape(label)}</option>' for value, label in group_options)}
+            </select>
+          </div>
+        </div>
+        <div class="action-row" style="gap:10px;">
+          <button class="secondary-btn" type="submit">Показать</button>
+          {(f'<a class="secondary-btn" href="/events?owner={owner_chat_id}&month={month_start.strftime("%Y-%m")}">Сбросить</a>') if section_filter or event_group_filter else ''}
+        </div>
+      </form>
       <div class="calendar-shell">
         <div class="calendar-weekdays">
           {"".join(f'<div>{label}</div>' for label in weekday_labels)}
@@ -7962,8 +8277,15 @@ def app(environ, start_response):
         denied = guard("events", "view")
         if denied:
             return denied
-        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
-        body = render_events_calendar_section(storage, current_owner, current_user, selected_month)
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        selected_month = parse_month_key(query.get("month", [""])[0]) or date.today().replace(day=1)
+        section_filter = query.get("section", [""])[0].strip()
+        event_group_filter = query.get("kind", [""])[0].strip()
+        if section_filter not in {"", "contracts", "auctions", "payables", "payroll"}:
+            section_filter = ""
+        if event_group_filter not in {"", "deadline", "fact", "alert"}:
+            event_group_filter = ""
+        body = render_events_calendar_section(storage, current_owner, current_user, selected_month, section_filter, event_group_filter)
         html = layout("Календарь событий", body, owners, current_owner, "events", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
