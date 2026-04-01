@@ -8009,6 +8009,67 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
         if has_active_admin_mode(current_user):
             purge_form = f'<form class="auction-delete-form" method="post" action="/tasks/{task.id}/purge{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" onsubmit="return confirm(\'Удалить задачу навсегда?\');"><button class="secondary-btn danger" type="submit">Удалить навсегда</button></form>'
         deleted_toolbar = f'<div class="toolbar" style="margin-top:12px;"><form class="auction-delete-form" method="post" action="/tasks/{task.id}/restore{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}"><button class="secondary-btn" type="submit">Вернуть в работу</button></form>{purge_form}</div>'
+    management_controls = ""
+    if can_manage and task.deleted_at is None:
+        management_controls = f'''
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Управление задачей</span></summary>
+          <div class="status-popover" style="min-width: min(760px, 88vw);">
+            <form class="form-grid" method="post" action="/tasks/{task.id}/update{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">
+              <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+                <div class="field">
+                  <label>Заголовок задачи</label>
+                  <input type="text" name="title" value="{escape(task.title)}" required>
+                </div>
+                <div class="field">
+                  <label>Дедлайн</label>
+                  <input type="date" name="due_date" value="{task.due_date.isoformat()}" required>
+                </div>
+                <div class="field">
+                  <label>Кому ставим задачу</label>
+                  <select name="assign_mode">
+                    <option value="user"{" selected" if task.assignee_kind != "role" else ""}>Лично сотруднику</option>
+                    <option value="role"{" selected" if task.assignee_kind == "role" else ""}>На роль / группу</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Сотрудник</label>
+                  <select name="assignee_user_id">
+                    <option value="">Выберите сотрудника</option>
+                    {"".join(f'<option value="{user["id"]}"{" selected" if task.assignee_kind != "role" and user["id"] == task.assignee_user_id else ""}>{escape(user["full_name"])} · {escape(user["role_name"])}</option>' for user in users)}
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Роль / группа</label>
+                  <select name="assignee_role_code">
+                    <option value="">Выберите роль</option>
+                    {"".join(f'<option value="{escape(code)}"{" selected" if task.assignee_kind == "role" and code == task.assignee_role_code else ""}>{escape(label)}</option>' for code, label in role_options)}
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label>Комментарий к задаче</label>
+                <textarea name="description">{escape(task.description)}</textarea>
+              </div>
+              <div class="action-row" style="gap:10px;">
+                <button class="submit-btn" type="submit">Сохранить изменения</button>
+                <button class="secondary-btn danger" type="submit" formaction="/tasks/{task.id}/delete{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" onclick="return confirm('Убрать задачу в удаленные?');">Удалить задачу</button>
+              </div>
+            </form>
+          </div>
+        </details>
+        '''
+    history_controls = f'''
+    <details class="status-menu">
+      <summary><span class="secondary-btn">Хронология</span></summary>
+      <div class="status-popover" style="min-width: min(760px, 88vw);">
+        <div class="contract-table-subtle" style="margin-bottom:12px;">Создана: {format_datetime(created_local)} · Поставил: {escape(task.created_by_name or 'Автор неизвестен')}</div>
+        {f'<div class="contract-table-subtle" style="margin-bottom:12px;">Последний результат: {escape(task.completion_comment)} · {escape(task.completed_by_name or "—")} · {format_datetime(completed_local)}</div>' if completed_local and task.completion_comment else ''}
+        {comment_items}
+        {deleted_toolbar}
+      </div>
+    </details>
+    '''
     return f"""
     <section class="card panel">
       <div class="panel-head contract-detail-head">
@@ -8017,6 +8078,10 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
           <div class="panel-sub">{escape(task_assignee_label(task_payload))} · дедлайн {format_date(task.due_date)}</div>
         </div>
         <a class="secondary-btn" href="/tasks{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">← Назад к реестру</a>
+      </div>
+      <div class="action-row" style="justify-content:flex-start; gap:10px; margin-bottom:16px;">
+        {management_controls}
+        {history_controls}
       </div>
       <div class="detail-meta-row">
         <div class="{status_css}">{escape(status_label)}</div>
@@ -8032,68 +8097,47 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
           <div class="contract-table-subtle">{escape(task.description) if task.description else 'Описание задачи пока не заполнено.'}</div>
         </div>
       </div>
-      {f'<div class="contract-table-subtle" style="margin-top:10px;">Последний результат: {escape(task.completion_comment)}</div>' if task.completion_comment else ''}
-      {f'<div class="contract-table-subtle">Статус зафиксировал: {escape(task.completed_by_name or "—")} · {format_datetime(completed_local)}</div>' if completed_local else ''}
       {flash_html}
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Комментарии</h2>
+          <div class="panel-sub">Все дополнения по задаче одним списком, как рабочий чат по делу.</div>
+        </div>
+      </div>
+      {comment_items}
     </section>
     {f'''
     <section class="card panel" style="margin-top:22px;">
-      <details class="status-menu">
-        <summary><span class="secondary-btn">Управление задачей</span></summary>
-        <div class="status-popover" style="min-width: min(760px, 88vw);">
-      <form class="form-grid" method="post" action="/tasks/{task.id}/update{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">
-        <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
-          <div class="field">
-            <label>Заголовок задачи</label>
-            <input type="text" name="title" value="{escape(task.title)}" required>
-          </div>
-          <div class="field">
-            <label>Дедлайн</label>
-            <input type="date" name="due_date" value="{task.due_date.isoformat()}" required>
-          </div>
-          <div class="field">
-            <label>Кому ставим задачу</label>
-            <select name="assign_mode">
-              <option value="user"{" selected" if task.assignee_kind != "role" else ""}>Лично сотруднику</option>
-              <option value="role"{" selected" if task.assignee_kind == "role" else ""}>На роль / группу</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Сотрудник</label>
-            <select name="assignee_user_id">
-              <option value="">Выберите сотрудника</option>
-              {"".join(f'<option value="{user["id"]}"{" selected" if task.assignee_kind != "role" and user["id"] == task.assignee_user_id else ""}>{escape(user["full_name"])} · {escape(user["role_name"])}</option>' for user in users)}
-            </select>
-          </div>
-          <div class="field">
-            <label>Роль / группа</label>
-            <select name="assignee_role_code">
-              <option value="">Выберите роль</option>
-              {"".join(f'<option value="{escape(code)}"{" selected" if task.assignee_kind == "role" and code == task.assignee_role_code else ""}>{escape(label)}</option>' for code, label in role_options)}
-            </select>
-          </div>
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Добавить комментарий</h2>
+          <div class="panel-sub">Любой видящий задачу сотрудник может оставить уточнение, дополнение или приложить файл.</div>
+        </div>
+      </div>
+      <form class="form-grid" method="post" action="/tasks/{task.id}/comments/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
+        <div class="field">
+          <label>Комментарий</label>
+          <textarea name="body" placeholder="Дополнение по задаче, уточнение, промежуточный результат"></textarea>
         </div>
         <div class="field">
-          <label>Комментарий к задаче</label>
-          <textarea name="description">{escape(task.description)}</textarea>
+          <label>Файлы</label>
+          <input type="file" name="comment_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple>
         </div>
-        <div class="action-row" style="gap:10px;">
-          <button class="submit-btn" type="submit">Сохранить изменения</button>
-          <button class="secondary-btn danger" type="submit" formaction="/tasks/{task.id}/delete{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" onclick="return confirm('Убрать задачу в удаленные?');">Удалить задачу</button>
-        </div>
+        <button class="submit-btn" type="submit">Добавить комментарий</button>
       </form>
-        </div>
-      </details>
     </section>
-    ''' if can_manage and task.deleted_at is None else ''}
+    ''' if can_comment and task.deleted_at is None else ''}
     {f'''
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Результат по задаче</h2>
-          <div class="panel-sub">Закрываем задачу, фиксируем итог или причину невыполнения и прикладываем файл результата.</div>
+          <div class="panel-sub">Здесь фиксируем итог, причину невыполнения и при необходимости прикладываем файл результата.</div>
         </div>
       </div>
+      {f'<div class="contract-table-subtle" style="margin-bottom:12px;">Текущий результат: {escape(task.completion_comment)}{" · " + escape(task.completed_by_name or "—") if task.completed_by_name else ""}{(" · " + format_datetime(completed_local)) if completed_local else ""}</div>' if task.completion_comment or completed_local else ''}
       <form class="form-grid" method="post" action="/tasks/{task.id}/status{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
         <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
           <div class="field">
@@ -8121,37 +8165,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
       </form>
     </section>
     ''' if can_update_task_status(current_user, task_payload) and task.deleted_at is None else ''}
-    {f'''
-    <section class="card panel" style="margin-top:22px;">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">Комментарии по задаче</h2>
-          <div class="panel-sub">Любой видящий задачу сотрудник может оставить уточнение, дополнение или приложить файл.</div>
-        </div>
-      </div>
-      <form class="form-grid" method="post" action="/tasks/{task.id}/comments/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
-        <div class="field">
-          <label>Комментарий</label>
-          <textarea name="body" placeholder="Дополнение по задаче, уточнение, промежуточный результат"></textarea>
-        </div>
-        <div class="field">
-          <label>Файлы</label>
-          <input type="file" name="comment_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple>
-        </div>
-        <button class="submit-btn" type="submit">Добавить комментарий</button>
-      </form>
-    </section>
-    ''' if can_comment and task.deleted_at is None else ''}
-    <section class="card panel" style="margin-top:22px;">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">Хронология задачи</h2>
-          <div class="panel-sub">Все дополнения, промежуточные ответы и вложения по задаче одним списком.</div>
-        </div>
-      </div>
-      {comment_items}
-      {deleted_toolbar}
-    </section>
+    {f'<section class="card panel" style="margin-top:22px;">{deleted_toolbar}</section>' if task.deleted_at is not None and deleted_toolbar else ''}
     """
 
 
