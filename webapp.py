@@ -3539,9 +3539,7 @@ def layout(
       display: none;
     }}
     .task-comment-toggle {{
-      position: absolute;
-      opacity: 0;
-      pointer-events: none;
+      display: none;
     }}
     .task-comment-toggle-panel {{
       display: none;
@@ -3550,6 +3548,9 @@ def layout(
       border: 1px solid var(--line);
       border-radius: 24px;
       background: var(--panel-alt);
+      max-width: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
     }}
     .task-comment-toggle:checked ~ .task-comment-toggle-panel {{
       display: block;
@@ -3571,6 +3572,12 @@ def layout(
     .task-comment-cancel {{
       cursor: pointer;
       margin: 0;
+    }}
+    .task-comment-body {{
+      font-size: 16px;
+      font-weight: 400;
+      margin-bottom: 4px;
+      color: var(--ink);
     }}
     .notification-btn {{
       width: 40px;
@@ -8034,7 +8041,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
         <div class="timeline-item">
           <div class="timeline-date">{format_datetime(comment.created_at.astimezone(VLADIVOSTOK_TZ) if comment.created_at.tzinfo else comment.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ))}</div>
           <div>
-            <div class="timeline-title">{escape(comment.body) if comment.body else 'Комментарий без текста'}</div>
+            <div class="task-comment-body">{escape(comment.body) if comment.body else 'Комментарий без текста'}</div>
             <div class="contract-table-subtle">{escape(comment.author_name or 'Автор неизвестен')}</div>
             {render_task_attachment_links(owner_chat_id, attachment_map.get(comment.id, []))}
           </div>
@@ -8138,7 +8145,11 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
         <div class="timeline-date">Суть задачи</div>
         <div>
           <div class="contract-table-subtle">{escape(task.description) if task.description else 'Описание задачи пока не заполнено.'}</div>
-          <div class="contract-table-subtle" style="margin-top:10px;">Прикрепленные файлы</div>
+        </div>
+      </div>
+      <div class="timeline-item" style="margin-top:14px;">
+        <div class="timeline-date">Прикрепленные файлы</div>
+        <div>
           {task_files_html}
         </div>
       </div>
@@ -8167,7 +8178,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
           <div class="field" style="margin:0;">
             <textarea name="body" placeholder="Дополнение по задаче, уточнение, промежуточный результат" style="min-height:120px;"></textarea>
           </div>
-          <div class="action-row" style="justify-content:flex-start; gap:10px; margin-top:10px;">
+          <div class="action-row" style="justify-content:flex-start; gap:10px; margin-top:10px; flex-wrap:wrap;">
             <label class="secondary-btn" style="cursor:pointer; margin:0;">
               Прикрепить файл
               <input type="file" name="comment_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple style="display:none;">
