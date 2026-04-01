@@ -8099,36 +8099,45 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
       </div>
       {flash_html}
     </section>
+    {f'''
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head" style="align-items:center;">
+        <div>
+          <h2 class="panel-title">Комментарии</h2>
+          <div class="panel-sub">Все дополнения по задаче одним списком, как рабочая лента обсуждения.</div>
+        </div>
+        <details class="status-menu">
+          <summary><span class="chip status-done" style="cursor:pointer; min-width:46px; justify-content:center; font-size:2rem; line-height:1;">+</span></summary>
+          <div class="status-popover" style="min-width:min(720px, 88vw);">
+            <form class="form-grid" method="post" action="/tasks/{task.id}/comments/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
+              <div class="field">
+                <label>Комментарий</label>
+                <textarea name="body" placeholder="Дополнение по задаче, уточнение, промежуточный результат"></textarea>
+              </div>
+              <div class="action-row" style="justify-content:flex-start; gap:10px;">
+                <label class="secondary-btn" style="cursor:pointer; margin:0;">
+                  Прикрепить файл
+                  <input type="file" name="comment_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple style="display:none;">
+                </label>
+                <button class="submit-btn" type="submit">Сохранить комментарий</button>
+              </div>
+            </form>
+          </div>
+        </details>
+      </div>
+      {comment_items}
+    </section>
+    ''' if can_comment and task.deleted_at is None else f'''
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Комментарии</h2>
-          <div class="panel-sub">Все дополнения по задаче одним списком, как рабочий чат по делу.</div>
+          <div class="panel-sub">Все дополнения по задаче одним списком, как рабочая лента обсуждения.</div>
         </div>
       </div>
       {comment_items}
     </section>
-    {f'''
-    <section class="card panel" style="margin-top:22px;">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">Добавить комментарий</h2>
-          <div class="panel-sub">Любой видящий задачу сотрудник может оставить уточнение, дополнение или приложить файл.</div>
-        </div>
-      </div>
-      <form class="form-grid" method="post" action="/tasks/{task.id}/comments/new{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" enctype="multipart/form-data">
-        <div class="field">
-          <label>Комментарий</label>
-          <textarea name="body" placeholder="Дополнение по задаче, уточнение, промежуточный результат"></textarea>
-        </div>
-        <div class="field">
-          <label>Файлы</label>
-          <input type="file" name="comment_file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple>
-        </div>
-        <button class="submit-btn" type="submit">Добавить комментарий</button>
-      </form>
-    </section>
-    ''' if can_comment and task.deleted_at is None else ''}
+    '''}
     {f'''
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
