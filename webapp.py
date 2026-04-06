@@ -3994,12 +3994,17 @@ def layout(
     .payroll-accrual-cell {{
       display: grid;
       gap: 4px;
+      width: 100%;
     }}
     .payroll-accrual-cell-head {{
       display: flex;
       justify-content: flex-end;
       align-items: flex-start;
       min-height: 22px;
+      width: 100%;
+    }}
+    .payroll-accrual-cell-head .status-menu {{
+      margin-left: auto;
     }}
     .payroll-note-display {{
       margin-top: 6px;
@@ -4064,7 +4069,6 @@ def layout(
     }}
     .payroll-selection-mode .payroll-selectable {{
       cursor: pointer;
-      padding: 6px 8px;
       box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 80%, white 20%);
     }}
     .payroll-selection-mode .payroll-selectable:hover {{
