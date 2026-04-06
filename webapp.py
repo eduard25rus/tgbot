@@ -3996,11 +3996,12 @@ def layout(
       width: 100%;
       min-height: 62px;
       padding-top: 10px;
+      padding-right: 34px;
     }}
     .payroll-accrual-cell-head {{
       position: absolute;
-      top: 0;
-      right: 0;
+      top: -6px;
+      right: -2px;
       display: flex;
       justify-content: flex-end;
       align-items: flex-start;
