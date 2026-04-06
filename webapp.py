@@ -4026,8 +4026,9 @@ def layout(
       background: color-mix(in srgb, var(--soft) 70%, white 30%);
     }}
     .payroll-selectable.is-selected {{
-      background: color-mix(in srgb, var(--warn-soft) 68%, white 32%);
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 42%, white 58%);
+      background: color-mix(in srgb, var(--warn-soft) 86%, white 14%);
+      color: color-mix(in srgb, var(--text) 82%, var(--warn) 18%);
+      box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--warn) 72%, white 28%), 0 8px 18px rgba(184, 112, 18, 0.14);
     }}
     .contract-advance-stack {{
       display: grid;
