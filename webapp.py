@@ -3996,6 +3996,39 @@ def layout(
       margin-right: auto;
       text-align: center;
     }}
+    .payroll-selection-toolbar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }}
+    .payroll-selection-summary {{
+      display: none;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }}
+    .payroll-selection-summary.is-visible {{
+      display: flex;
+    }}
+    .payroll-selectable {{
+      border-radius: 18px;
+      transition: background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+    }}
+    .payroll-selection-mode .payroll-selectable {{
+      cursor: pointer;
+      padding: 6px 8px;
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 80%, white 20%);
+    }}
+    .payroll-selection-mode .payroll-selectable:hover {{
+      background: color-mix(in srgb, var(--soft) 70%, white 30%);
+    }}
+    .payroll-selectable.is-selected {{
+      background: color-mix(in srgb, var(--warn-soft) 68%, white 32%);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 42%, white 58%);
+    }}
     .contract-advance-stack {{
       display: grid;
       gap: 4px;
@@ -5211,6 +5244,44 @@ function buildContractStageFields(form, count) {{
 }}
 
 document.addEventListener("click", (event) => {{
+  const payrollSelectionToggle = event.target.closest('#payroll-selection-toggle');
+  if (payrollSelectionToggle) {{
+    event.preventDefault();
+    const table = document.querySelector('.payroll-table');
+    if (!table) {{
+      return;
+    }}
+    const enabled = table.classList.toggle('payroll-selection-mode');
+    payrollSelectionToggle.textContent = enabled ? 'Выйти из выбора' : 'Выделить суммы';
+    const clearButton = document.getElementById('payroll-selection-clear');
+    if (clearButton) {{
+      clearButton.hidden = !enabled;
+    }}
+    if (!enabled) {{
+      document.querySelectorAll('.payroll-selectable.is-selected').forEach((item) => item.classList.remove('is-selected'));
+      updatePayrollSelectionSummary();
+    }}
+    return;
+  }}
+  const payrollSelectionClear = event.target.closest('#payroll-selection-clear');
+  if (payrollSelectionClear) {{
+    event.preventDefault();
+    document.querySelectorAll('.payroll-selectable.is-selected').forEach((item) => item.classList.remove('is-selected'));
+    updatePayrollSelectionSummary();
+    return;
+  }}
+  const payrollSelectable = event.target.closest('.js-payroll-selectable');
+  const payrollTable = payrollSelectable ? payrollSelectable.closest('.payroll-table') : null;
+  if (payrollSelectable && payrollTable && payrollTable.classList.contains('payroll-selection-mode')) {{
+    event.preventDefault();
+    const numericValue = Number(payrollSelectable.dataset.payrollValue || "0");
+    if (!Number.isFinite(numericValue) || Math.abs(numericValue) <= 0.009) {{
+      return;
+    }}
+    payrollSelectable.classList.toggle('is-selected');
+    updatePayrollSelectionSummary();
+    return;
+  }}
   const stageStatusButton = event.target.closest('.stage-status-form .stage-status-picker');
   if (stageStatusButton) {{
     event.preventDefault();
@@ -5779,6 +5850,39 @@ function updatePaymentFormState(form) {{
       paidDateInput.value = "";
     }}
   }}
+}}
+
+function updatePayrollSelectionSummary() {{
+  const summary = document.getElementById('payroll-selection-summary');
+  const totalNode = document.getElementById('payroll-selection-total');
+  const cellsNode = document.getElementById('payroll-selection-cells');
+  const peopleNode = document.getElementById('payroll-selection-people');
+  if (!summary || !totalNode || !cellsNode || !peopleNode) {{
+    return;
+  }}
+  const selected = Array.from(document.querySelectorAll('.payroll-selectable.is-selected'));
+  let total = 0;
+  const people = new Set();
+  selected.forEach((item) => {{
+    const value = Number(item.dataset.payrollValue || "0");
+    if (Number.isFinite(value)) {{
+      total += value;
+    }}
+    const person = item.dataset.payrollPerson || "";
+    if (person) {{
+      people.add(person);
+    }}
+  }});
+  cellsNode.textContent = `Выбрано позиций: ${{selected.length}}`;
+  peopleNode.textContent = `Сотрудников: ${{people.size}}`;
+  totalNode.textContent = formatMoneyValue(total);
+  summary.classList.toggle('is-visible', selected.length > 0);
+}}
+
+function formatMoneyValue(value) {{
+  const fixed = (Math.round(value * 100) / 100).toFixed(2);
+  const [whole, frac] = fixed.split(".");
+  return `${{whole.replace(/\\B(?=(\\d{3})+(?!\\d))/g, " ") }},${{frac}} ₽`;
 }}
 
 document.addEventListener("change", (event) => {{
@@ -6923,11 +7027,12 @@ def payroll_expected_salary_amount(row) -> float:
 def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, field_name: str, label: str, value: float, current_user: dict | None) -> str:
     amount_html = format_amount(value) if abs(value) > 0.009 else "—"
     amount_class = "payroll-amount"
+    selection_attrs = f'data-payroll-value="{value:.2f}" data-payroll-person="{escape(row.full_name)}" data-payroll-label="{escape(label)}"'
     if not has_permission(current_user, "payroll", "edit"):
-        return f'<span class="{amount_class}">{amount_html}</span>'
+        return f'<span class="{amount_class} payroll-selectable js-payroll-selectable" {selection_attrs}>{amount_html}</span>'
     return f"""
     <details class="status-menu">
-      <summary><span class="{amount_class}">{amount_html}</span></summary>
+      <summary><span class="{amount_class} payroll-selectable js-payroll-selectable" {selection_attrs}>{amount_html}</span></summary>
       <div class="status-popover">
         <form class="form-grid payroll-amount-form" method="post" action="/payroll/entries/{row.employee_id}/amount?owner={owner_chat_id}&month={payroll_month.strftime('%Y-%m')}">
           <input type="hidden" name="field_name" value="{escape(field_name)}">
@@ -6975,10 +7080,13 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
         )
     else:
         paid_note = "" if planned_amount <= 0.009 else "Не выплачено"
+    selection_attrs = f'data-payroll-value="{planned_amount:.2f}" data-payroll-person="{escape(row.full_name)}" data-payroll-label="{escape(label)}"'
     display = f"""
-    <div class="{amount_class}">{planned_display}</div>
+    <div class="payroll-selectable js-payroll-selectable" {selection_attrs}>
+      <div class="{amount_class}">{planned_display}</div>
     {f'<div class="{note_class} danger">{mismatch_note}</div>' if mismatch_note else ""}
     {f'<div class="{note_class}">{paid_note}</div>' if paid_note else ""}
+    </div>
     """
     if not has_permission(current_user, "payroll", "edit"):
         return display
@@ -8344,6 +8452,21 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         """
         for item in payroll_upcoming_events
     ) or '<div class="empty">На ближайшую неделю зарплатных событий нет.</div>'
+    selection_toolbar = ""
+    if has_permission(current_user, "payroll", "view"):
+        selection_toolbar = """
+        <div class="payroll-selection-toolbar">
+          <div class="action-row" style="gap:10px;">
+            <button class="secondary-btn" type="button" id="payroll-selection-toggle">Выделить суммы</button>
+            <button class="secondary-btn" type="button" id="payroll-selection-clear" hidden>Очистить выбор</button>
+          </div>
+          <div class="payroll-selection-summary" id="payroll-selection-summary">
+            <div class="chip" id="payroll-selection-cells">Выбрано позиций: 0</div>
+            <div class="chip" id="payroll-selection-people">Сотрудников: 0</div>
+            <div class="chip">Итого к выплате: <strong id="payroll-selection-total">0,00 ₽</strong></div>
+          </div>
+        </div>
+        """
     return f"""
     {stats}
     <section class="card panel" style="margin-top:22px;">
@@ -8355,6 +8478,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         {add_employee_button}
       </div>
       <div class="tab-row">{month_tabs}</div>
+      {selection_toolbar}
       {flash_html}
       <table class="table contract-table payroll-table" style="margin-top: 18px;">
         <thead>
