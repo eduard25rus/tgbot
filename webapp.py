@@ -3972,6 +3972,25 @@ def layout(
     .payroll-col-deadline.danger {{
       color: var(--danger);
     }}
+    .payroll-note-trigger {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--muted);
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1;
+    }}
+    .payroll-note-trigger.has-note {{
+      background: color-mix(in srgb, var(--warn-soft) 72%, white 28%);
+      color: color-mix(in srgb, var(--warn) 82%, var(--text) 18%);
+      border-color: color-mix(in srgb, var(--warn) 36%, white 64%);
+    }}
     .payroll-balance {{
       font-weight: 600;
       white-space: nowrap;
@@ -6046,10 +6065,7 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
           <h2 class="panel-title">Реестр контрактов</h2>
           <div class="panel-sub">Контракты, этапы, оплаты и аванс в одном рабочем реестре, по той же логике аккуратной панели, что и в аукционах.</div>
         </div>
-        <div class="action-row" style="gap:12px; align-items:center;">
-          {add_contract_button}
-          <div class="chip">Рабочий контур</div>
-        </div>
+        <div class="action-row" style="gap:12px; align-items:center;">{add_contract_button}</div>
       </div>
       {
         f'''
@@ -7142,9 +7158,12 @@ def render_payroll_note_editor(owner_chat_id: int, payroll_month: date, row, cur
         return ""
     if not has_permission(current_user, "payroll", "edit"):
         return f'<div class="{note_class}">{escape(note_text)}</div>'
+    button_class = "payroll-note-trigger has-note" if row.note.strip() else "payroll-note-trigger"
+    button_symbol = "•" if row.note.strip() else "+"
+    button_title = "Открыть заметку" if row.note.strip() else "Добавить заметку"
     return f"""
     <details class="status-menu">
-      <summary><div class="{note_class}">{escape(note_text)}</div></summary>
+      <summary><span class="{button_class}" title="{escape(button_title)}">{button_symbol}</span></summary>
       <div class="status-popover">
         <form class="form-grid" method="post" action="/payroll/entries/{row.employee_id}/note?owner={owner_chat_id}&month={payroll_month.strftime('%Y-%m')}">
           <div class="field">
