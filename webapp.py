@@ -7132,11 +7132,12 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
     else:
         amount_class = "payroll-amount"
     if paid_amount > 0.009:
-        paid_note = (
-            f'Выплачено:<br>{format_amount(paid_amount)}<br>{format_date(paid_date)}'
+        paid_label = (
+            f'<span class="auction-added-tooltip" data-tooltip="Дата выплаты: {escape(format_date(paid_date))}">Выплачено:</span>'
             if paid_date is not None
-            else f'Выплачено:<br>{format_amount(paid_amount)}'
+            else "Выплачено:"
         )
+        paid_note = f"{paid_label}<br>{format_amount(paid_amount)}"
     else:
         paid_note = "" if planned_amount <= 0.009 else "Не выплачено"
     selection_attrs = f'data-payroll-value="{planned_amount:.2f}" data-payroll-person="{escape(row.full_name)}" data-payroll-label="{escape(label)}"'
