@@ -1759,8 +1759,14 @@ def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user:
 
 def render_contract_identity_block(owner_chat_id: int, contract, current_user: dict | None) -> str:
     contract_number = contract.contract_number.strip() or "Не указан"
+    nmck_label = format_amount(contract.nmck_amount) if contract.nmck_amount > 0 else "Не указана"
+    reduction_label = f"-{format_percent(contract.reduction_percent)}" if contract.reduction_percent > 0 else "Не указан"
     display = f"""
     <div class="contract-table-subtle" style="margin-top:6px;">Контракт № {escape(contract_number)}</div>
+    <div class="contract-table-subtle" style="margin-top:6px; display:flex; gap:18px; flex-wrap:wrap;">
+      <span>НМЦК: {escape(nmck_label)}</span>
+      <span>Процент снижения: {escape(reduction_label)}</span>
+    </div>
     """
     if not can_edit_contract_stage_controls(current_user):
         return display
@@ -1776,6 +1782,14 @@ def render_contract_identity_block(owner_chat_id: int, contract, current_user: d
           <div class="field">
             <label>Ссылка на ЕИС</label>
             <input type="url" name="eis_url" value="{escape(contract.eis_url)}" placeholder="https://..." required>
+          </div>
+          <div class="field">
+            <label>НМЦК</label>
+            <input type="text" name="nmck_amount" value="{escape(format_amount_input(contract.nmck_amount))}" data-money-input="1" required>
+          </div>
+          <div class="field">
+            <label>Процент снижения</label>
+            <input type="text" name="reduction_percent" value="{escape(str(contract.reduction_percent).replace('.', ','))}" inputmode="decimal" required>
           </div>
           <button class="submit-btn" type="submit">Сохранить реквизиты</button>
         </form>
@@ -6103,6 +6117,14 @@ def render_contract_create_form(owner_chat_id: int, flash_message: str = "") -> 
             <input type="url" name="eis_url" placeholder="https://..." required>
           </div>
           <div class="field">
+            <label>НМЦК</label>
+            <input type="text" name="nmck_amount" placeholder="18000000" data-money-input="1" required>
+          </div>
+          <div class="field">
+            <label>Процент снижения</label>
+            <input type="text" name="reduction_percent" placeholder="25" inputmode="decimal" required>
+          </div>
+          <div class="field">
             <label>Общая сумма</label>
             <input type="text" name="total_amount" placeholder="15000000" data-money-input="1" required>
           </div>
@@ -9751,6 +9773,8 @@ def app(environ, start_response):
             object_address = form.get("object_address", "").strip()
             contract_number = form.get("contract_number", "").strip()
             eis_url = form.get("eis_url", "").strip()
+            nmck_amount = parse_amount(form.get("nmck_amount", ""))
+            reduction_percent = parse_optional_number(form.get("reduction_percent", ""))
             description = form.get("description", "").strip()
             total_amount = parse_amount(form["total_amount"])
             signed_date = parse_date(form["signed_date"])
@@ -9765,6 +9789,10 @@ def app(environ, start_response):
                 raise ValueError("В номере контракта должны быть только цифры")
             if not eis_url:
                 raise ValueError("Ссылка на ЕИС обязательна")
+            if nmck_amount <= 0:
+                raise ValueError("НМЦК должна быть больше 0")
+            if reduction_percent is None or reduction_percent < 0 or reduction_percent > 100:
+                raise ValueError("Процент снижения должен быть от 0 до 100")
             if total_amount <= 0:
                 raise ValueError("Общая сумма контракта должна быть больше 0")
             if stage_count < 1:
@@ -9791,7 +9819,19 @@ def app(environ, start_response):
             if abs(stage_total - total_amount) > 0.01:
                 raise ValueError("Сумма этапов должна совпадать с общей суммой контракта")
             contract_end_date = max(item[3] for item in stage_specs)
-            contract_id = storage.add_contract(current_owner, object_name, object_address, contract_number, eis_url, description, signed_date, contract_end_date, advance_percent)
+            contract_id = storage.add_contract(
+                current_owner,
+                object_name,
+                object_address,
+                contract_number,
+                eis_url,
+                nmck_amount,
+                reduction_percent,
+                description,
+                signed_date,
+                contract_end_date,
+                advance_percent,
+            )
             for index, amount, start_date, end_date, notes in stage_specs:
                 storage.add_stage(contract_id, index, notes, start_date, end_date, amount)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
@@ -10820,11 +10860,17 @@ def app(environ, start_response):
             form = read_post_data(environ)
             contract_number = form.get("contract_number", "").strip()
             eis_url = form.get("eis_url", "").strip()
+            nmck_amount = parse_amount(form.get("nmck_amount", ""))
+            reduction_percent = parse_optional_number(form.get("reduction_percent", ""))
             if not contract_number or not contract_number.isdigit():
                 raise ValueError("В номере контракта должны быть только цифры")
             if not eis_url:
                 raise ValueError("Ссылка на ЕИС обязательна")
-            updated = storage.update_contract_identity(current_owner, contract_id, contract_number, eis_url)
+            if nmck_amount <= 0:
+                raise ValueError("НМЦК должна быть больше 0")
+            if reduction_percent is None or reduction_percent < 0 or reduction_percent > 100:
+                raise ValueError("Процент снижения должен быть от 0 до 100")
+            updated = storage.update_contract_identity(current_owner, contract_id, contract_number, eis_url, nmck_amount, reduction_percent)
             if not updated:
                 raise ValueError("Контракт не найден")
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")

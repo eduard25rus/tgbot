@@ -21,6 +21,8 @@ class Contract:
     object_address: str
     contract_number: str
     eis_url: str
+    nmck_amount: float
+    reduction_percent: float
     description: str
     signed_date: Optional[date]
     end_date: date
@@ -295,6 +297,8 @@ class Storage:
                     object_address TEXT NOT NULL DEFAULT '',
                     contract_number TEXT NOT NULL DEFAULT '',
                     eis_url TEXT NOT NULL DEFAULT '',
+                    nmck_amount REAL NOT NULL DEFAULT 0,
+                    reduction_percent REAL NOT NULL DEFAULT 0,
                     description TEXT NOT NULL DEFAULT '',
                     signed_date TEXT,
                     end_date TEXT NOT NULL,
@@ -682,6 +686,10 @@ class Storage:
                 conn.execute("ALTER TABLE contracts ADD COLUMN contract_number TEXT NOT NULL DEFAULT ''")
             if "eis_url" not in contract_columns:
                 conn.execute("ALTER TABLE contracts ADD COLUMN eis_url TEXT NOT NULL DEFAULT ''")
+            if "nmck_amount" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN nmck_amount REAL NOT NULL DEFAULT 0")
+            if "reduction_percent" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN reduction_percent REAL NOT NULL DEFAULT 0")
             if "object_name" not in contract_columns:
                 conn.execute("ALTER TABLE contracts ADD COLUMN object_name TEXT NOT NULL DEFAULT ''")
                 conn.execute("UPDATE contracts SET object_name = title WHERE object_name = ''")
@@ -1731,7 +1739,20 @@ class Storage:
                 (viewer_username, viewer_name, owner_chat_id, viewer_user_id),
             )
 
-    def add_contract(self, chat_id: int, object_name: str, object_address: str, contract_number: str, eis_url: str, description: str, signed_date: date | None, end_date: date, advance_percent: float | None = None) -> int:
+    def add_contract(
+        self,
+        chat_id: int,
+        object_name: str,
+        object_address: str,
+        contract_number: str,
+        eis_url: str,
+        nmck_amount: float,
+        reduction_percent: float,
+        description: str,
+        signed_date: date | None,
+        end_date: date,
+        advance_percent: float | None = None,
+    ) -> int:
         with self.connection() as conn:
             conn.execute(
                 """
@@ -1742,8 +1763,8 @@ class Storage:
             )
             cursor = conn.execute(
                 """
-                INSERT INTO contracts (chat_id, title, object_name, object_address, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO contracts (chat_id, title, object_name, object_address, contract_number, eis_url, nmck_amount, reduction_percent, description, signed_date, end_date, advance_percent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -1752,6 +1773,8 @@ class Storage:
                     object_address.strip(),
                     contract_number.strip(),
                     eis_url.strip(),
+                    nmck_amount,
+                    reduction_percent,
                     description.strip(),
                     signed_date.strftime(DATE_FMT) if signed_date is not None else None,
                     end_date.strftime(DATE_FMT),
@@ -1761,15 +1784,15 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
-    def update_contract_identity(self, chat_id: int, contract_id: int, contract_number: str, eis_url: str) -> bool:
+    def update_contract_identity(self, chat_id: int, contract_id: int, contract_number: str, eis_url: str, nmck_amount: float, reduction_percent: float) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE contracts
-                SET contract_number = ?, eis_url = ?
+                SET contract_number = ?, eis_url = ?, nmck_amount = ?, reduction_percent = ?
                 WHERE id = ? AND chat_id = ?
                 """,
-                (contract_number.strip(), eis_url.strip(), contract_id, chat_id),
+                (contract_number.strip(), eis_url.strip(), nmck_amount, reduction_percent, contract_id, chat_id),
             )
             return cursor.rowcount > 0
 
@@ -2470,7 +2493,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, chat_id, title, object_name, object_address, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at
+                SELECT id, chat_id, title, object_name, object_address, contract_number, eis_url, nmck_amount, reduction_percent, description, signed_date, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ?
                 ORDER BY end_date ASC, id ASC
@@ -2483,7 +2506,7 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT id, chat_id, title, object_name, object_address, contract_number, eis_url, description, signed_date, end_date, advance_percent, created_at
+                SELECT id, chat_id, title, object_name, object_address, contract_number, eis_url, nmck_amount, reduction_percent, description, signed_date, end_date, advance_percent, created_at
                 FROM contracts
                 WHERE chat_id = ? AND id = ?
                 """,
@@ -2642,6 +2665,8 @@ class Storage:
             object_address=row["object_address"] or "",
             contract_number=row["contract_number"] or "",
             eis_url=row["eis_url"] or "",
+            nmck_amount=float(row["nmck_amount"]) if row["nmck_amount"] is not None else 0.0,
+            reduction_percent=float(row["reduction_percent"]) if row["reduction_percent"] is not None else 0.0,
             description=row["description"],
             signed_date=date.fromisoformat(row["signed_date"]) if row["signed_date"] is not None and row["signed_date"] != "" else None,
             end_date=date.fromisoformat(row["end_date"]),
