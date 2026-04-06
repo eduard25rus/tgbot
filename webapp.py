@@ -3991,6 +3991,20 @@ def layout(
       color: color-mix(in srgb, var(--warn) 82%, var(--text) 18%);
       border-color: color-mix(in srgb, var(--warn) 36%, white 64%);
     }}
+    .payroll-accrual-cell {{
+      display: grid;
+      gap: 8px;
+    }}
+    .payroll-accrual-cell-head {{
+      display: flex;
+      justify-content: flex-end;
+      min-height: 28px;
+    }}
+    .payroll-note-display {{
+      margin-top: 6px;
+      white-space: normal;
+      text-wrap: pretty;
+    }}
     .payroll-balance {{
       font-weight: 600;
       white-space: nowrap;
@@ -7152,12 +7166,8 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
 
 
 def render_payroll_note_editor(owner_chat_id: int, payroll_month: date, row, current_user: dict | None) -> str:
-    note_text = row.note.strip() or ("Добавить заметку" if has_permission(current_user, "payroll", "edit") else "")
-    note_class = "contract-table-subtle"
-    if not note_text:
-        return ""
     if not has_permission(current_user, "payroll", "edit"):
-        return f'<div class="{note_class}">{escape(note_text)}</div>'
+        return ""
     button_class = "payroll-note-trigger has-note" if row.note.strip() else "payroll-note-trigger"
     button_symbol = "•" if row.note.strip() else "+"
     button_title = "Открыть заметку" if row.note.strip() else "Добавить заметку"
@@ -7175,6 +7185,13 @@ def render_payroll_note_editor(owner_chat_id: int, payroll_month: date, row, cur
       </div>
     </details>
     """
+
+
+def render_payroll_note_display(row) -> str:
+    note_text = row.note.strip()
+    if not note_text:
+        return ""
+    return f'<div class="contract-table-subtle payroll-note-display">{escape(note_text)}</div>'
 
 
 def payable_metrics(entry) -> dict[str, float | str]:
@@ -8460,14 +8477,18 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
               <td>
                 <div class="timeline-title">{escape(row.full_name)}</div>
                 {role_html}
-                {render_payroll_note_editor(owner_chat_id, selected_month, row, current_user)}
               </td>
-              <td>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "accrued_amount", "Начислено", row.accrued_amount, current_user)}</td>
+              <td>
+                <div class="payroll-accrual-cell">
+                  <div class="payroll-accrual-cell-head">{render_payroll_note_editor(owner_chat_id, selected_month, row, current_user)}</div>
+                  <div>{render_payroll_amount_editor(owner_chat_id, selected_month, row, "accrued_amount", "Начислено", row.accrued_amount, current_user)}</div>
+                </div>
+              </td>
               <td>{render_payroll_payment_editor(owner_chat_id, selected_month, row, "advance_card", "Аванс карта", row.advance_card_amount, row.advance_card_paid_amount, row.advance_card_paid_date, current_user)}</td>
               <td>{render_payroll_payment_editor(owner_chat_id, selected_month, row, "advance_cash", "Аванс кэш", row.advance_cash_amount, row.advance_cash_paid_amount, row.advance_cash_paid_date, current_user)}</td>
               <td>{render_payroll_payment_editor(owner_chat_id, selected_month, row, "salary", "Зарплата", row.salary_amount, row.salary_paid_amount, row.salary_paid_date, current_user)}</td>
               <td>{render_payroll_payment_editor(owner_chat_id, selected_month, row, "bonus", "Премия", row.bonus_amount, row.bonus_paid_amount, row.bonus_paid_date, current_user)}</td>
-              <td class="nowrap">{format_amount(meta["paid_total"])}</td>
+              <td>{format_amount(meta["paid_total"])}{render_payroll_note_display(row)}</td>
               <td class="nowrap">{balance_display}</td>
               <td><span class="{meta["status_class"]}">{meta["status_label"]}</span></td>
             </tr>
