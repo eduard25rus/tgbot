@@ -3976,13 +3976,13 @@ def layout(
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 28px;
-      height: 28px;
+      width: 22px;
+      height: 22px;
       border-radius: 999px;
       border: 1px solid var(--line);
       background: var(--soft);
       color: var(--muted);
-      font-size: 16px;
+      font-size: 13px;
       font-weight: 700;
       line-height: 1;
     }}
@@ -3993,12 +3993,13 @@ def layout(
     }}
     .payroll-accrual-cell {{
       display: grid;
-      gap: 8px;
+      gap: 4px;
     }}
     .payroll-accrual-cell-head {{
       display: flex;
       justify-content: flex-end;
-      min-height: 28px;
+      align-items: flex-start;
+      min-height: 22px;
     }}
     .payroll-note-display {{
       margin-top: 6px;
