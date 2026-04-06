@@ -6499,7 +6499,7 @@ def payroll_row_metrics(row) -> dict[str, float | str]:
         status_label = "Закрыто"
         status_class = "chip ok"
     elif paid_total > 0:
-        status_label = "Частично выплачено"
+        status_label = "Частично"
         status_class = "chip warn"
     else:
         status_label = "Не выплачено"
