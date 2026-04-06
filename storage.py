@@ -221,6 +221,24 @@ class PayableEntry:
 
 
 @dataclass
+class FinanceEntry:
+    id: int
+    owner_chat_id: int
+    entry_kind: str
+    title: str
+    counterparty: str
+    amount: float
+    due_date: Optional[date]
+    comment: str
+    status: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    deleted_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass
 class TaskEntry:
     id: int
     owner_chat_id: int
@@ -597,6 +615,23 @@ class Storage:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS finance_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    entry_kind TEXT NOT NULL DEFAULT 'receivable',
+                    title TEXT NOT NULL DEFAULT '',
+                    counterparty TEXT NOT NULL DEFAULT '',
+                    amount REAL NOT NULL DEFAULT 0,
+                    due_date TEXT,
+                    comment TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    deleted_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             columns = {
@@ -610,6 +645,9 @@ class Storage:
             }
             payable_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(payables)").fetchall()
+            }
+            finance_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(finance_entries)").fetchall()
             }
             task_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
@@ -710,6 +748,23 @@ class Storage:
                     conn.execute(f"ALTER TABLE payroll_entries ADD COLUMN {column_name} {column_def}")
             if "deleted_at" not in payable_columns:
                 conn.execute("ALTER TABLE payables ADD COLUMN deleted_at TEXT")
+            finance_alters = [
+                ("entry_kind", "TEXT NOT NULL DEFAULT 'receivable'"),
+                ("title", "TEXT NOT NULL DEFAULT ''"),
+                ("counterparty", "TEXT NOT NULL DEFAULT ''"),
+                ("amount", "REAL NOT NULL DEFAULT 0"),
+                ("due_date", "TEXT"),
+                ("comment", "TEXT NOT NULL DEFAULT ''"),
+                ("status", "TEXT NOT NULL DEFAULT 'active'"),
+                ("created_by_user_id", "INTEGER"),
+                ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
+                ("deleted_at", "TEXT"),
+                ("created_at", "TEXT NOT NULL DEFAULT ''"),
+                ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in finance_alters:
+                if column_name not in finance_columns:
+                    conn.execute(f"ALTER TABLE finance_entries ADD COLUMN {column_name} {column_def}")
             if "assignee_kind" not in task_columns:
                 conn.execute("ALTER TABLE tasks ADD COLUMN assignee_kind TEXT NOT NULL DEFAULT 'user'")
             if "assignee_role_code" not in task_columns:
@@ -3371,6 +3426,71 @@ class Storage:
             )
             return cursor.rowcount
 
+    def list_finance_entries(self, owner_chat_id: int, include_deleted: bool = False) -> list[FinanceEntry]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    id, owner_chat_id, entry_kind, title, counterparty, amount, due_date, comment,
+                    status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
+                FROM finance_entries
+                WHERE owner_chat_id = ? AND (? = 1 OR deleted_at IS NULL)
+                ORDER BY deleted_at IS NOT NULL, status = 'closed', COALESCE(due_date, '9999-12-31') ASC, created_at DESC, id DESC
+                """,
+                (owner_chat_id, 1 if include_deleted else 0),
+            ).fetchall()
+        return [self._finance_entry_from_row(row) for row in rows]
+
+    def add_finance_entry(
+        self,
+        owner_chat_id: int,
+        entry_kind: str,
+        title: str,
+        counterparty: str,
+        amount: float,
+        due_date: date | None,
+        comment: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int:
+        with self.connection() as conn:
+            now = datetime.utcnow().isoformat()
+            cursor = conn.execute(
+                """
+                INSERT INTO finance_entries (
+                    owner_chat_id, entry_kind, title, counterparty, amount, due_date, comment,
+                    status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?)
+                """,
+                (
+                    owner_chat_id,
+                    entry_kind.strip(),
+                    title.strip(),
+                    counterparty.strip(),
+                    amount,
+                    due_date.strftime(DATE_FMT) if due_date is not None else None,
+                    comment.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    now,
+                    now,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def update_finance_entry_status(self, owner_chat_id: int, entry_id: int, status: str) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE finance_entries
+                SET status = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (status.strip(), datetime.utcnow().isoformat(), entry_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
     def list_tasks(self, owner_chat_id: int, include_deleted: bool = False) -> list[TaskEntry]:
         with self.connection() as conn:
             rows = conn.execute(
@@ -3663,6 +3783,25 @@ class Storage:
             paid_amount=float(row["paid_amount"]),
             paid_date=date.fromisoformat(row["paid_date"]) if row["paid_date"] else None,
             due_date=date.fromisoformat(row["due_date"]),
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
+            deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None,
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _finance_entry_from_row(row: sqlite3.Row) -> FinanceEntry:
+        return FinanceEntry(
+            id=int(row["id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            entry_kind=row["entry_kind"] or "receivable",
+            title=row["title"] or "",
+            counterparty=row["counterparty"] or "",
+            amount=float(row["amount"]) if row["amount"] is not None else 0.0,
+            due_date=date.fromisoformat(row["due_date"]) if row["due_date"] else None,
+            comment=row["comment"] or "",
+            status=row["status"] or "active",
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
             created_by_name=row["created_by_name"] or "",
             deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None,
