@@ -3992,19 +3992,22 @@ def layout(
       border-color: color-mix(in srgb, var(--warn) 36%, white 64%);
     }}
     .payroll-accrual-cell {{
-      display: grid;
-      gap: 4px;
+      position: relative;
       width: 100%;
+      min-height: 62px;
+      padding-top: 10px;
     }}
     .payroll-accrual-cell-head {{
+      position: absolute;
+      top: 0;
+      right: 0;
       display: flex;
       justify-content: flex-end;
       align-items: flex-start;
-      min-height: 22px;
-      width: 100%;
     }}
     .payroll-accrual-cell-head .status-menu {{
       margin-left: auto;
+      margin-right: 0;
     }}
     .payroll-note-display {{
       margin-top: 6px;
@@ -4065,19 +4068,23 @@ def layout(
     }}
     .payroll-selectable {{
       border-radius: 18px;
-      transition: background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+      transition: background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease, outline-color 0.18s ease;
     }}
     .payroll-selection-mode .payroll-selectable {{
       cursor: pointer;
       box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 80%, white 20%);
+      outline: 3px solid transparent;
+      outline-offset: 3px;
     }}
     .payroll-selection-mode .payroll-selectable:hover {{
       background: color-mix(in srgb, var(--soft) 70%, white 30%);
+      outline-color: color-mix(in srgb, var(--line) 45%, white 55%);
     }}
     .payroll-selectable.is-selected {{
       background: color-mix(in srgb, var(--warn-soft) 86%, white 14%);
       color: color-mix(in srgb, var(--text) 82%, var(--warn) 18%);
       box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--warn) 72%, white 28%), 0 8px 18px rgba(184, 112, 18, 0.14);
+      outline-color: color-mix(in srgb, var(--warn) 80%, white 20%);
     }}
     .contract-advance-stack {{
       display: grid;
