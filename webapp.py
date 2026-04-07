@@ -8689,9 +8689,9 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
 FINANCE_KIND_META = {
     "receivable": ("Дебиторка", "chip ok"),
     "dispute": ("Суды / споры", "chip warn"),
-    "receivable_contractor": ("Задолженность подрядчика", "chip ok"),
-    "receivable_court": ("Судебная задолженность", "chip warn"),
-    "receivable_customs": ("Таможенная задолженность", "chip accent"),
+    "receivable_contractor": ("Подрядчик", "chip ok"),
+    "receivable_court": ("Суд", "chip warn"),
+    "receivable_customs": ("Таможня", "chip accent"),
     "receivable_other": ("Иные задолженности", "chip"),
     "financing": ("Финансирование", "chip danger"),
     "loan": ("Займ", "chip danger"),
@@ -8939,9 +8939,9 @@ def render_finance_section(
               <select name="entry_kind" required>
                 <option value="receivable">Дебиторка</option>
                 <option value="dispute">Суды / споры</option>
-                <option value="receivable_contractor">Задолженность подрядчика</option>
-                <option value="receivable_court">Судебная задолженность</option>
-                <option value="receivable_customs">Таможенная задолженность</option>
+                <option value="receivable_contractor">Подрядчик</option>
+                <option value="receivable_court">Суд</option>
+                <option value="receivable_customs">Таможня</option>
                 <option value="receivable_other">Иные задолженности</option>
                 <option value="loan">Займ</option>
                 <option value="credit">Кредит</option>
@@ -9237,9 +9237,9 @@ def render_finance_receivables_section(
     kind_options = "".join(
         f'<option value="{escape(code)}"{" selected" if code == kind_filter else ""}>{escape(label)}</option>'
         for code, label in [
-            ("receivable_contractor", "Задолженность подрядчика"),
-            ("receivable_court", "Судебная задолженность"),
-            ("receivable_customs", "Таможенная задолженность"),
+            ("receivable_contractor", "Подрядчик"),
+            ("receivable_court", "Суд"),
+            ("receivable_customs", "Таможня"),
             ("receivable_other", "Иные задолженности"),
         ]
     )
@@ -9277,9 +9277,9 @@ def render_finance_receivables_section(
             <div class="field">
               <label>Категория</label>
               <select name="entry_kind" required>
-                <option value="receivable_contractor">Задолженность подрядчика</option>
-                <option value="receivable_court">Судебная задолженность</option>
-                <option value="receivable_customs">Таможенная задолженность</option>
+                <option value="receivable_contractor">Подрядчик</option>
+                <option value="receivable_court">Суд</option>
+                <option value="receivable_customs">Таможня</option>
                 <option value="receivable_other">Иные задолженности</option>
               </select>
             </div>
