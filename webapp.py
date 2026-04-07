@@ -3441,6 +3441,12 @@ def layout(
       font-weight: 600;
       border: 1px solid transparent;
       background: rgba(255,255,255,0.04);
+      transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+    }}
+    .nav-link:hover {{
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(255,255,255,0.10);
+      color: rgba(255,255,255,0.92);
     }}
     .nav-link.active {{
       color: white;
@@ -3490,6 +3496,12 @@ def layout(
       font-weight: 600;
       background: rgba(255,255,255,0.03);
       border: 1px solid transparent;
+      transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+    }}
+    .nav-sublink:hover {{
+      background: rgba(255,255,255,0.07);
+      border-color: rgba(255,255,255,0.10);
+      color: rgba(255,255,255,0.9);
     }}
     .nav-sublink.active {{
       color: white;
