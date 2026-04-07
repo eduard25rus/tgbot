@@ -4864,17 +4864,15 @@ def layout(
       align-items: center;
     }}
     .finance-total-chip {{
-      color: #fff;
-      border-color: transparent;
       font-weight: 700;
     }}
     .finance-total-chip.creditor {{
-      background: linear-gradient(135deg, #c77a24, #9d5417);
-      box-shadow: 0 14px 32px rgba(164, 88, 20, 0.18);
+      background: #f9dede;
+      color: #922b2b;
     }}
     .finance-total-chip.debtor {{
-      background: linear-gradient(135deg, #5f9d74, #47795a);
-      box-shadow: 0 14px 32px rgba(71, 121, 90, 0.18);
+      background: #e2f4e8;
+      color: #1c6a38;
     }}
     .auction-head {{
       display: flex;
