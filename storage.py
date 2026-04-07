@@ -229,6 +229,7 @@ class FinanceEntry:
     counterparty: str
     amount: float
     due_date: Optional[date]
+    payment_date: Optional[date]
     comment: str
     status: str
     created_by_user_id: Optional[int]
@@ -624,6 +625,7 @@ class Storage:
                     counterparty TEXT NOT NULL DEFAULT '',
                     amount REAL NOT NULL DEFAULT 0,
                     due_date TEXT,
+                    payment_date TEXT,
                     comment TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'active',
                     created_by_user_id INTEGER,
@@ -754,6 +756,7 @@ class Storage:
                 ("counterparty", "TEXT NOT NULL DEFAULT ''"),
                 ("amount", "REAL NOT NULL DEFAULT 0"),
                 ("due_date", "TEXT"),
+                ("payment_date", "TEXT"),
                 ("comment", "TEXT NOT NULL DEFAULT ''"),
                 ("status", "TEXT NOT NULL DEFAULT 'active'"),
                 ("created_by_user_id", "INTEGER"),
@@ -3431,7 +3434,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT
-                    id, owner_chat_id, entry_kind, title, counterparty, amount, due_date, comment,
+                    id, owner_chat_id, entry_kind, title, counterparty, amount, due_date, payment_date, comment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
                 FROM finance_entries
                 WHERE owner_chat_id = ? AND (? = 1 OR deleted_at IS NULL)
@@ -3449,6 +3452,7 @@ class Storage:
         counterparty: str,
         amount: float,
         due_date: date | None,
+        payment_date: date | None,
         comment: str,
         created_by_user_id: int | None,
         created_by_name: str,
@@ -3458,10 +3462,10 @@ class Storage:
             cursor = conn.execute(
                 """
                 INSERT INTO finance_entries (
-                    owner_chat_id, entry_kind, title, counterparty, amount, due_date, comment,
+                    owner_chat_id, entry_kind, title, counterparty, amount, due_date, payment_date, comment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -3470,6 +3474,7 @@ class Storage:
                     counterparty.strip(),
                     amount,
                     due_date.strftime(DATE_FMT) if due_date is not None else None,
+                    payment_date.strftime(DATE_FMT) if payment_date is not None else None,
                     comment.strip(),
                     created_by_user_id,
                     created_by_name.strip(),
@@ -3500,6 +3505,7 @@ class Storage:
         counterparty: str,
         amount: float,
         due_date: date | None,
+        payment_date: date | None,
         comment: str,
     ) -> bool:
         with self.connection() as conn:
@@ -3512,6 +3518,7 @@ class Storage:
                     counterparty = ?,
                     amount = ?,
                     due_date = ?,
+                    payment_date = ?,
                     comment = ?,
                     updated_at = ?
                 WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
@@ -3522,6 +3529,7 @@ class Storage:
                     counterparty.strip(),
                     amount,
                     due_date.strftime(DATE_FMT) if due_date is not None else None,
+                    payment_date.strftime(DATE_FMT) if payment_date is not None else None,
                     comment.strip(),
                     datetime.utcnow().isoformat(),
                     entry_id,
@@ -3839,6 +3847,7 @@ class Storage:
             counterparty=row["counterparty"] or "",
             amount=float(row["amount"]) if row["amount"] is not None else 0.0,
             due_date=date.fromisoformat(row["due_date"]) if row["due_date"] else None,
+            payment_date=date.fromisoformat(row["payment_date"]) if row["payment_date"] else None,
             comment=row["comment"] or "",
             status=row["status"] or "active",
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,

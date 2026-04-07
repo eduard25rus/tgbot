@@ -6836,10 +6836,10 @@ def build_events_calendar_items(
                             event_group="fact",
                         )
                     )
-            if metrics["outstanding"] > 0.009 and entry.due_date < today and entry.due_date.year == month.year and entry.due_date.month == month.month:
-                items.append(
-                    calendar_event_item(
-                        entry.due_date,
+                if metrics["outstanding"] > 0.009 and entry.due_date < today and entry.due_date.year == month.year and entry.due_date.month == month.month:
+                    items.append(
+                        calendar_event_item(
+                            entry.due_date,
                         "Просрочена оплата подрядчику",
                         note,
                         "alert",
@@ -6868,6 +6868,22 @@ def build_events_calendar_items(
                         "fact payables",
                         section_id="payables",
                         event_group="fact",
+                        )
+                    )
+
+    if has_permission(current_user, "finance", "view"):
+        for entry in storage.list_finance_entries(owner_chat_id):
+            if entry.status == "closed":
+                continue
+            if entry.entry_kind == "credit" and entry.payment_date is not None and entry.payment_date.year == month.year and entry.payment_date.month == month.month:
+                items.append(
+                    calendar_event_item(
+                        entry.payment_date,
+                        "Платеж по кредиту",
+                        f"{entry.counterparty.strip() or 'Кредит'} · {entry.title.strip() or 'Без основания'}",
+                        "deadline finance",
+                        section_id="finance",
+                        event_group="deadline",
                     )
                 )
 
@@ -7002,6 +7018,7 @@ def render_events_calendar_section(
         ("contracts", "Контракты"),
         ("auctions", "Аукционы"),
         ("payables", "Кредиторка"),
+        ("finance", "Финансы"),
         ("payroll", "Зарплата"),
     ]
     group_options = [
@@ -8744,6 +8761,12 @@ def finance_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <label>Срок</label>
             <input type="date" name="due_date" value="{entry.due_date.isoformat() if entry.due_date else ''}">
           </div>
+          {f'''
+          <div class="field">
+            <label>Дата платежа</label>
+            <input type="date" name="payment_date" value="{entry.payment_date.isoformat() if entry.payment_date else ''}">
+          </div>
+          ''' if base_path == "/finance-loans" else ""}
           <div class="field span-2">
             <label>Комментарий</label>
             <textarea name="comment">{escape(entry.comment)}</textarea>
@@ -9019,14 +9042,13 @@ def render_finance_loans_section(
             <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
               <div class="timeline-title">{escape(entry.counterparty)}</div>
             </span>
-            <div class="contract-table-subtle">Наведите, чтобы посмотреть автора</div>
           </td>
           <td>
             <div>{escape(entry.title)}</div>
             <div class="contract-table-subtle">{escape(entry.comment) if entry.comment else "Без комментария"}</div>
           </td>
           <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
-          <td class="nowrap" style="text-align:center;">{format_date(entry.due_date) if entry.due_date else "—"}</td>
+          <td class="nowrap" style="text-align:center;">{format_date(entry.due_date) if entry.due_date else "—"}{f'<div class="contract-table-subtle">Платеж: {format_date(entry.payment_date)}</div>' if entry.payment_date else ''}</td>
           <td>{finance_status_control(owner_chat_id, entry, current_user, active_tab, kind_filter, "/finance-loans")}</td>
         </tr>
         """
@@ -9067,6 +9089,10 @@ def render_finance_loans_section(
             <div class="field">
               <label>Срок / контрольная дата</label>
               <input type="date" name="due_date">
+            </div>
+            <div class="field">
+              <label>Дата платежа по кредиту</label>
+              <input type="date" name="payment_date">
             </div>
             <div class="field span-2">
               <label>Комментарий</label>
@@ -9998,7 +10024,7 @@ def app(environ, start_response):
         selected_month = parse_month_key(query.get("month", [""])[0]) or date.today().replace(day=1)
         section_filter = query.get("section", [""])[0].strip()
         event_group_filter = query.get("kind", [""])[0].strip()
-        if section_filter not in {"", "contracts", "auctions", "payables", "payroll"}:
+        if section_filter not in {"", "contracts", "auctions", "payables", "finance", "payroll"}:
             section_filter = ""
         if event_group_filter not in {"", "deadline", "fact", "alert"}:
             event_group_filter = ""
@@ -10077,6 +10103,7 @@ def app(environ, start_response):
                 counterparty,
                 amount,
                 due_date,
+                None,
                 comment,
                 (current_user or {}).get("id"),
                 actor_name,
@@ -10104,12 +10131,16 @@ def app(environ, start_response):
             due_date_raw = form.get("due_date", "").strip()
             comment = form.get("comment", "").strip()
             due_date = parse_date(due_date_raw) if due_date_raw else None
+            payment_date_raw = form.get("payment_date", "").strip()
+            payment_date = parse_date(payment_date_raw) if payment_date_raw else None
             if entry_kind not in {"loan", "credit", "contribution", "financing"}:
                 raise ValueError("Выберите тип финансирования")
             if not counterparty:
                 raise ValueError("Укажите контрагента")
             if not title:
                 raise ValueError("Укажите основание")
+            if entry_kind == "credit" and payment_date is None:
+                raise ValueError("Для кредита нужно указать дату платежа")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             storage.add_finance_entry(
                 current_owner,
@@ -10118,6 +10149,7 @@ def app(environ, start_response):
                 counterparty,
                 amount,
                 due_date,
+                payment_date,
                 comment,
                 (current_user or {}).get("id"),
                 actor_name,
@@ -10165,7 +10197,7 @@ def app(environ, start_response):
                 raise ValueError("Укажите контрагента")
             if not title:
                 raise ValueError("Укажите основание")
-            storage.update_finance_entry(current_owner, entry_id, entry_kind, title, counterparty, amount, due_date, comment)
+            storage.update_finance_entry(current_owner, entry_id, entry_kind, title, counterparty, amount, due_date, None, comment)
         except ValueError as exc:
             body = render_finance_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
             html = layout("Финансовый анализ", body, owners, current_owner, "finance", current_user)
@@ -10191,15 +10223,19 @@ def app(environ, start_response):
             title = form.get("title", "").strip()
             amount = parse_amount(form.get("amount", "").strip())
             due_date_raw = form.get("due_date", "").strip()
+            payment_date_raw = form.get("payment_date", "").strip()
             comment = form.get("comment", "").strip()
             due_date = parse_date(due_date_raw) if due_date_raw else None
+            payment_date = parse_date(payment_date_raw) if payment_date_raw else None
             if entry_kind not in {"loan", "credit", "contribution", "financing"}:
                 raise ValueError("Выберите тип финансирования")
             if not counterparty:
                 raise ValueError("Укажите контрагента")
             if not title:
                 raise ValueError("Укажите основание")
-            storage.update_finance_entry(current_owner, entry_id, entry_kind, title, counterparty, amount, due_date, comment)
+            if entry_kind == "credit" and payment_date is None:
+                raise ValueError("Для кредита нужно указать дату платежа")
+            storage.update_finance_entry(current_owner, entry_id, entry_kind, title, counterparty, amount, due_date, payment_date, comment)
         except ValueError as exc:
             body = render_finance_loans_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
             html = layout(
