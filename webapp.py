@@ -4825,6 +4825,44 @@ def layout(
       color: #fff;
       background: #a62e2e;
     }}
+    .finance-bucket {{
+      padding: 0;
+      overflow: hidden;
+    }}
+    .finance-bucket summary {{
+      list-style: none;
+      cursor: pointer;
+      padding: 16px 18px;
+      display: grid;
+      grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr);
+      gap: 12px;
+      align-items: center;
+    }}
+    .finance-bucket summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .finance-bucket-meta {{
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+    }}
+    .finance-bucket-link {{
+      display: none;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(181, 110, 30, 0.18);
+      background: rgba(194, 122, 36, 0.12);
+      color: #8d5818;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+    }}
+    .finance-bucket[open] .finance-bucket-link {{
+      display: inline-flex;
+      align-items: center;
+    }}
     .auction-head {{
       display: flex;
       align-items: center;
@@ -8850,19 +8888,19 @@ def render_finance_section(
         target_label: str = "Перейти в раздел",
     ) -> str:
         return f"""
-        <details class="card" style="padding:0; overflow:hidden;">
-          <summary style="list-style:none; cursor:pointer; padding:16px 18px; display:grid; grid-template-columns:minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+        <details class="card finance-bucket">
+          <summary>
             <div>
               <div class="timeline-title">{escape(title)}</div>
               <div class="contract-table-subtle">{escape(subtitle)}</div>
             </div>
-            <div style="text-align:right; font-weight:700;">{format_amount(total_amount)}</div>
+            <div class="finance-bucket-meta">
+              <a class="finance-bucket-link" href="{escape(target_href)}" onclick="event.stopPropagation();">{escape(target_label)}</a>
+              <div style="text-align:right; font-weight:700;">{format_amount(total_amount)}</div>
+            </div>
           </summary>
           <div style="padding:0 18px 16px; border-top:1px dashed var(--line); display:grid; gap:10px;">
             {items_html or f'<div class="contract-table-subtle" style="padding-top:12px;">{escape(empty_label)}</div>'}
-            <div style="padding-top:4px; display:flex; justify-content:flex-end;">
-              <a class="secondary-btn" style="padding:8px 12px; font-size:13px; border-radius:12px;" href="{escape(target_href)}">{escape(target_label)}</a>
-            </div>
           </div>
         </details>
         """
