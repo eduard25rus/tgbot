@@ -8846,6 +8846,8 @@ def render_finance_section(
         total_amount: float,
         items_html: str,
         empty_label: str,
+        target_href: str,
+        target_label: str = "Перейти в раздел",
     ) -> str:
         return f"""
         <details class="card" style="padding:0; overflow:hidden;">
@@ -8857,6 +8859,9 @@ def render_finance_section(
             <div style="text-align:right; font-weight:700;">{format_amount(total_amount)}</div>
           </summary>
           <div style="padding:0 18px 16px; border-top:1px dashed var(--line); display:grid; gap:10px;">
+            <div style="padding-top:12px; display:flex; justify-content:flex-end;">
+              <a class="secondary-btn" href="{escape(target_href)}">{escape(target_label)}</a>
+            </div>
             {items_html or f'<div class="contract-table-subtle" style="padding-top:12px;">{escape(empty_label)}</div>'}
           </div>
         </details>
@@ -9108,11 +9113,11 @@ def render_finance_section(
         <div class="chip">Итого кредиторки: {format_amount(total_creditor)}</div>
       </div>
       <div style="display:grid; gap:10px;">
-        {render_analysis_bucket("Займы", "Ручные заемные обязательства", loan_total, loan_items_html, "Активных займов сейчас нет.")}
-        {render_analysis_bucket("Кредиты", "Банковские и иные кредитные обязательства", credit_total, credit_items_html, "Активных кредитов сейчас нет.")}
-        {render_analysis_bucket("Взносы и финансирование", "Внутренние вливания и прочее финансирование", contribution_total, contribution_items_html, "Записей по взносам и финансированию сейчас нет.")}
-        {render_analysis_bucket("Прочие обязательства", "Ручные финансовые обязательства вне кредитов и займов", other_liability_total, liability_items_html, "Прочих обязательств сейчас нет.")}
-        {render_analysis_bucket("Кредиторка подрядчикам", "Автоматически из рабочего раздела кредиторки", current_payables_total, payable_items_html, "Активной подрядной кредиторки сейчас нет.")}
+        {render_analysis_bucket("Займы", "Ручные заемные обязательства", loan_total, loan_items_html, "Активных займов сейчас нет.", f"/finance-loans?owner={owner_chat_id}&tab=active&kind=loan")}
+        {render_analysis_bucket("Кредиты", "Банковские и иные кредитные обязательства", credit_total, credit_items_html, "Активных кредитов сейчас нет.", f"/finance-loans?owner={owner_chat_id}&tab=active&kind=credit")}
+        {render_analysis_bucket("Взносы и финансирование", "Внутренние вливания и прочее финансирование", contribution_total, contribution_items_html, "Записей по взносам и финансированию сейчас нет.", f"/finance-loans?owner={owner_chat_id}&tab=active&kind=contribution")}
+        {render_analysis_bucket("Прочие обязательства", "Налоги и прочие ручные обязательства вне кредитов и займов", other_liability_total, liability_items_html, "Прочих обязательств сейчас нет.", f"/finance-analysis?owner={owner_chat_id}&tab=active&kind=liability")}
+        {render_analysis_bucket("Кредиторка подрядчикам", "Автоматически из рабочего раздела кредиторки", current_payables_total, payable_items_html, "Активной подрядной кредиторки сейчас нет.", f"/payables?owner={owner_chat_id}&tab=active")}
       </div>
     </section>
     <section class="card panel" style="margin-top:18px;">
@@ -9124,10 +9129,10 @@ def render_finance_section(
         <div class="chip">Итого дебиторки: {format_amount(total_debtor)}</div>
       </div>
       <div style="display:grid; gap:10px;">
-        {render_analysis_bucket("Суд", "Суммы в споре, претензии или судебной работе", dispute_total, court_items_html, "Судебных позиций сейчас нет.")}
-        {render_analysis_bucket("Таможня", "Таможенные требования и возвраты", customs_receivable_total, customs_items_html, "Таможенных позиций сейчас нет.")}
-        {render_analysis_bucket("Подрядчики", "Переплаты и задолженности подрядчиков перед компанией", contractor_receivable_total, contractor_receivable_items_html, "Задолженностей подрядчиков сейчас нет.")}
-        {render_analysis_bucket("Иные задолженности", "Прочие требования и возвраты вне подрядчиков, суда и таможни", other_receivable_total, other_receivable_items_html, "Прочих задолженностей сейчас нет.")}
+        {render_analysis_bucket("Суд", "Суммы в споре, претензии или судебной работе", dispute_total, court_items_html, "Судебных позиций сейчас нет.", f"/finance-receivables?owner={owner_chat_id}&tab=active&kind=receivable_court")}
+        {render_analysis_bucket("Таможня", "Таможенные требования и возвраты", customs_receivable_total, customs_items_html, "Таможенных позиций сейчас нет.", f"/finance-receivables?owner={owner_chat_id}&tab=active&kind=receivable_customs")}
+        {render_analysis_bucket("Подрядчики", "Переплаты и задолженности подрядчиков перед компанией", contractor_receivable_total, contractor_receivable_items_html, "Задолженностей подрядчиков сейчас нет.", f"/finance-receivables?owner={owner_chat_id}&tab=active&kind=receivable_contractor")}
+        {render_analysis_bucket("Иные задолженности", "Прочие требования и возвраты вне подрядчиков, суда и таможни", other_receivable_total, other_receivable_items_html, "Прочих задолженностей сейчас нет.", f"/finance-receivables?owner={owner_chat_id}&tab=active&kind=receivable_other")}
       </div>
     </section>
     """
