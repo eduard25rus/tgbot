@@ -8814,8 +8814,9 @@ def render_finance_section(
         <tr>
           <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, kind_filter)}</td>
           <td>
-            <div class="timeline-title">{escape(entry.counterparty)}</div>
-            <div class="contract-table-subtle">Добавил {escape(entry.created_by_name or 'Автор неизвестен')} · {format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ))}</div>
+            <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
+              <div class="timeline-title">{escape(entry.counterparty)}</div>
+            </span>
           </td>
           <td>
             <div>{escape(entry.title)}</div>
@@ -8842,7 +8843,7 @@ def render_finance_section(
         <thead>
           <tr>
             <th>Тип</th>
-            <th>Контрагент / кто занес</th>
+            <th>Контрагент</th>
             <th>Основание / комментарий</th>
             <th class="nowrap">Сумма</th>
             <th class="nowrap">Срок</th>
@@ -9153,14 +9154,6 @@ def render_finance_loans_section(
       </form>
       {flash_html}
       <table class="table contract-table" style="margin-top:18px;">
-        <colgroup>
-          <col style="width: 14%;">
-          <col style="width: 27%;">
-          <col style="width: 23%;">
-          <col style="width: 14%;">
-          <col style="width: 11%;">
-          <col style="width: 11%;">
-        </colgroup>
         <thead>
           <tr>
             <th>Тип</th>
