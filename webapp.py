@@ -9016,8 +9016,10 @@ def render_finance_loans_section(
         <tr>
           <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, kind_filter, "/finance-loans", ("loan", "credit", "contribution", "financing"))}</td>
           <td>
-            <div class="timeline-title">{escape(entry.counterparty)}</div>
-            <div class="contract-table-subtle">Добавил {escape(entry.created_by_name or 'Автор неизвестен')} · {format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ))}</div>
+            <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
+              <div class="timeline-title">{escape(entry.counterparty)}</div>
+            </span>
+            <div class="contract-table-subtle">Наведите, чтобы посмотреть автора</div>
           </td>
           <td>
             <div>{escape(entry.title)}</div>
