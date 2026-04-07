@@ -8828,6 +8828,15 @@ def render_finance_section(
         if entry.entry_kind in {"dispute", "receivable_court"}
     )
     financing_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"financing", "loan", "credit", "contribution", "liability"})
+    loan_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "loan")
+    credit_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "credit")
+    contribution_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"contribution", "financing"})
+    other_liability_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "liability")
+    contractor_receivable_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "receivable_contractor")
+    customs_receivable_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "receivable_customs")
+    other_receivable_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"receivable_other", "receivable"})
+    total_creditor = current_payables_total + financing_total
+    total_debtor = receivable_total + dispute_total
     net_position = receivable_total + dispute_total - financing_total - current_payables_total
     overdue_count = sum(1 for entry in active_entries if entry.due_date is not None and entry.due_date < datetime.now(VLADIVOSTOK_TZ).date())
 
@@ -8920,6 +8929,94 @@ def render_finance_section(
         </thead>
         <tbody>{payables_reference_rows or '<tr><td colspan="5">Активной подрядной кредиторки сейчас нет.</td></tr>'}</tbody>
       </table>
+    </section>
+    """
+
+    analysis_groups = f"""
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Кредиторка</h2>
+          <div class="panel-sub">Обязательства компании, которые сейчас нужно держать под контролем в одном срезе.</div>
+        </div>
+        <div class="chip">Итого кредиторки: {format_amount(total_creditor)}</div>
+      </div>
+      <div style="display:grid; gap:10px;">
+        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+          <div>
+            <div class="timeline-title">Займы</div>
+            <div class="contract-table-subtle">Ручные заемные обязательства</div>
+          </div>
+          <div style="text-align:right; font-weight:700;">{format_amount(loan_total)}</div>
+        </div>
+        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+          <div>
+            <div class="timeline-title">Кредиты</div>
+            <div class="contract-table-subtle">Банковские и иные кредитные обязательства</div>
+          </div>
+          <div style="text-align:right; font-weight:700;">{format_amount(credit_total)}</div>
+        </div>
+        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+          <div>
+            <div class="timeline-title">Взносы и финансирование</div>
+            <div class="contract-table-subtle">Внутренние вливания и прочее финансирование</div>
+          </div>
+          <div style="text-align:right; font-weight:700;">{format_amount(contribution_total)}</div>
+        </div>
+        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+          <div>
+            <div class="timeline-title">Прочие обязательства</div>
+            <div class="contract-table-subtle">Ручные финансовые обязательства вне кредитов и займов</div>
+          </div>
+          <div style="text-align:right; font-weight:700;">{format_amount(other_liability_total)}</div>
+        </div>
+        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+          <div>
+            <div class="timeline-title">Кредиторка подрядчикам</div>
+            <div class="contract-table-subtle">Автоматически из рабочего раздела кредиторки</div>
+          </div>
+          <div style="text-align:right; font-weight:700;">{format_amount(current_payables_total)}</div>
+        </div>
+      </div>
+    </section>
+    <section class="card panel" style="margin-top:18px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Дебиторка</h2>
+          <div class="panel-sub">Что компании должны вернуть или погасить, включая судебные и спорные суммы.</div>
+        </div>
+        <div class="chip">Итого дебиторки: {format_amount(total_debtor)}</div>
+      </div>
+      <div style="display:grid; gap:10px;">
+        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+          <div>
+            <div class="timeline-title">Суд</div>
+            <div class="contract-table-subtle">Суммы в споре, претензии или судебной работе</div>
+          </div>
+          <div style="text-align:right; font-weight:700;">{format_amount(dispute_total)}</div>
+        </div>
+        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+          <div>
+            <div class="timeline-title">Таможня</div>
+            <div class="contract-table-subtle">Таможенные требования и возвраты</div>
+          </div>
+          <div style="text-align:right; font-weight:700;">{format_amount(customs_receivable_total)}</div>
+        </div>
+        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+          <div>
+            <div class="timeline-title">Подрядчики</div>
+            <div class="contract-table-subtle">Переплаты и задолженности подрядчиков перед компанией</div>
+          </div>
+          <div style="text-align:right; font-weight:700;">{format_amount(contractor_receivable_total)}</div>
+        </div>
+        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+          <div>
+            <div class="timeline-title">Иные задолженности</div>
+            <div class="contract-table-subtle">Прочие требования и возвраты вне подрядчиков, суда и таможни</div>
+          </div>
+          <div style="text-align:right; font-weight:700;">{format_amount(other_receivable_total)}</div>
+        </div>
+      </div>
     </section>
     """
 
@@ -9030,6 +9127,7 @@ def render_finance_section(
       </form>
       {flash_html}
     </section>
+    {analysis_groups}
     {register_html}
     {payables_reference}
     {add_section}
