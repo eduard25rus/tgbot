@@ -3200,10 +3200,10 @@ def layout(
             for code, label, href in FINANCE_NAV_SECTIONS
         )
         nav_links += f"""
-        <div class="nav-group">
-          <a class="nav-link nav-group-link{' active' if active_finance_key else ''}" href="/finance-analysis">Финансы</a>
+        <details class="nav-group"{" open" if active_finance_key else ""}>
+          <summary class="nav-link nav-group-link{' active' if active_finance_key else ''}">Финансы</summary>
           <div class="nav-subnav">{finance_links}</div>
-        </div>
+        </details>
         """
     hero_title, hero_copy = SECTION_HERO.get(active_section, SECTION_HERO["contracts"])
     if hero_title_override:
@@ -3447,8 +3447,30 @@ def layout(
       display: grid;
       gap: 8px;
     }}
+    .nav-group > summary {{
+      list-style: none;
+    }}
+    .nav-group > summary::-webkit-details-marker {{
+      display: none;
+    }}
     .nav-group-link {{
       margin-bottom: 0;
+      cursor: pointer;
+      position: relative;
+      padding-right: 38px;
+    }}
+    .nav-group-link::after {{
+      content: "▾";
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      color: rgba(255,255,255,0.64);
+      transition: transform 0.18s ease, color 0.18s ease;
+    }}
+    .nav-group:not([open]) .nav-group-link::after {{
+      transform: translateY(-50%) rotate(-90deg);
     }}
     .nav-subnav {{
       display: grid;
