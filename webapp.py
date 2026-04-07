@@ -3090,6 +3090,13 @@ SECTIONS = [
     ("access", "Доступы", "/access"),
 ]
 
+FINANCE_NAV_SECTIONS = [
+    ("finance", "Финанализ", "/finance-analysis"),
+    ("payables", "Кредиторка", "/payables"),
+    ("finance_loans", "Кредиты и займы", "/finance-loans"),
+    ("expenses", "Расходы", "/expenses"),
+]
+
 SECTION_LABELS = {section_id: label for section_id, label, _ in SECTIONS}
 
 
@@ -3142,6 +3149,7 @@ def layout(
     current_user: dict | None = None,
     hero_title_override: str | None = None,
     hero_copy_override: str | None = None,
+    active_subsection: str | None = None,
 ) -> str:
     current_preview_options = current_user.get("preview_role_options", ROLE_PREVIEW_OPTIONS) if current_user else ROLE_PREVIEW_OPTIONS
     current_theme_options = THEME_PREVIEW_OPTIONS
@@ -3172,15 +3180,31 @@ def layout(
         Локальный прототип. Дальше можно вынести это в общий backend и подключить вместе с Telegram.
       </div>
         """
-    visible_sections = [
-        (section_id, label, href)
-        for section_id, label, href in SECTIONS
-        if current_user is None or has_permission(current_user, section_id, "view")
-    ]
+    finance_nav_ids = {item[0] for item in FINANCE_NAV_SECTIONS}
+    show_finance_group = bool(current_user and current_user.get("is_super_admin"))
+    visible_sections = []
+    for section_id, label, href in SECTIONS:
+        if current_user is not None and not has_permission(current_user, section_id, "view"):
+            continue
+        if show_finance_group and section_id in {"finance", "payables", "expenses"}:
+            continue
+        visible_sections.append((section_id, label, href))
     nav_links = "".join(
-        f'<a class="nav-link{" active" if section_id == active_section else ""}" href="{href}">{label}</a>'
+        f'<a class="nav-link{" active" if section_id == active_section and not active_subsection else ""}" href="{href}">{label}</a>'
         for section_id, label, href in visible_sections
     )
+    if show_finance_group:
+        active_finance_key = active_subsection or (active_section if active_section in finance_nav_ids else "")
+        finance_links = "".join(
+            f'<a class="nav-sublink{" active" if code == active_finance_key else ""}" href="{href}">{label}</a>'
+            for code, label, href in FINANCE_NAV_SECTIONS
+        )
+        nav_links += f"""
+        <div class="nav-group">
+          <a class="nav-link nav-group-link{' active' if active_finance_key else ''}" href="/finance-analysis">Финансы</a>
+          <div class="nav-subnav">{finance_links}</div>
+        </div>
+        """
     hero_title, hero_copy = SECTION_HERO.get(active_section, SECTION_HERO["contracts"])
     if hero_title_override:
         hero_title = hero_title_override
@@ -3418,6 +3442,33 @@ def layout(
       color: white;
       background: rgba(255,255,255,0.14);
       border-color: rgba(255,255,255,0.16);
+    }}
+    .nav-group {{
+      display: grid;
+      gap: 8px;
+    }}
+    .nav-group-link {{
+      margin-bottom: 0;
+    }}
+    .nav-subnav {{
+      display: grid;
+      gap: 6px;
+      padding-left: 12px;
+    }}
+    .nav-sublink {{
+      display: block;
+      padding: 10px 12px;
+      border-radius: 14px;
+      color: rgba(255,255,255,0.72);
+      font-size: 14px;
+      font-weight: 600;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid transparent;
+    }}
+    .nav-sublink.active {{
+      color: white;
+      background: rgba(255,255,255,0.11);
+      border-color: rgba(255,255,255,0.14);
     }}
     .sidebar-note {{
       padding: 16px;
@@ -8583,7 +8634,10 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
 FINANCE_KIND_META = {
     "receivable": ("Дебиторка", "chip ok"),
     "dispute": ("Суды / споры", "chip warn"),
-    "financing": ("Займы / кредиты", "chip danger"),
+    "financing": ("Финансирование", "chip danger"),
+    "loan": ("Займ", "chip danger"),
+    "credit": ("Кредит", "chip danger"),
+    "contribution": ("Взнос", "chip accent"),
     "liability": ("Прочие обязательства", "chip"),
 }
 
@@ -8611,7 +8665,7 @@ def finance_kind_chip(kind: str) -> str:
     return f'<span class="{css}">{escape(label)}</span>'
 
 
-def finance_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, kind_filter: str) -> str:
+def finance_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, kind_filter: str, base_path: str = "/finance-analysis") -> str:
     label, css = FINANCE_STATUS_META.get(entry.status, FINANCE_STATUS_META["active"])
     if not has_permission(current_user, "finance", "edit"):
         return f'<span class="{css}">{escape(label)}</span>'
@@ -8623,7 +8677,7 @@ def finance_status_control(owner_chat_id: int, entry, current_user: dict | None,
     <details class="status-menu">
       <summary><span class="{css}">{escape(label)}</span></summary>
       <div class="status-popover">
-        <form class="form-grid" method="post" action="/finance-analysis/{entry.id}/status{finance_query_suffix(owner_chat_id, active_tab, kind_filter)}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/status{finance_query_suffix(owner_chat_id, active_tab, kind_filter)}">
           <div class="field">
             <label>Статус позиции</label>
             <select name="status">{options}</select>
@@ -8656,7 +8710,7 @@ def render_finance_section(
 
     receivable_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "receivable")
     dispute_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "dispute")
-    financing_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"financing", "liability"})
+    financing_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"financing", "loan", "credit", "contribution", "liability"})
     net_position = receivable_total + dispute_total - financing_total - current_payables_total
     overdue_count = sum(1 for entry in active_entries if entry.due_date is not None and entry.due_date < datetime.now(VLADIVOSTOK_TZ).date())
 
@@ -8767,7 +8821,9 @@ def render_finance_section(
               <select name="entry_kind" required>
                 <option value="receivable">Дебиторка</option>
                 <option value="dispute">Суды / споры</option>
-                <option value="financing">Займы / кредиты</option>
+                <option value="loan">Займ</option>
+                <option value="credit">Кредит</option>
+                <option value="contribution">Взнос</option>
                 <option value="liability">Прочие обязательства</option>
               </select>
             </div>
@@ -8854,6 +8910,168 @@ def render_finance_section(
     </section>
     {register_html}
     {payables_reference}
+    {add_section}
+    """
+
+
+def render_finance_loans_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    active_tab: str = "active",
+    flash_message: str = "",
+    success: bool = False,
+    kind_filter: str = "",
+) -> str:
+    loan_kinds = {"loan", "credit", "contribution", "financing"}
+    entries = [entry for entry in storage.list_finance_entries(owner_chat_id) if entry.entry_kind in loan_kinds]
+    active_entries = [entry for entry in entries if entry.status != "closed"]
+    archive_entries = [entry for entry in entries if entry.status == "closed"]
+    source_entries = archive_entries if active_tab == "archive" else active_entries
+    if kind_filter not in {"", "loan", "credit", "contribution", "financing"}:
+        kind_filter = ""
+    source_entries = [entry for entry in source_entries if not kind_filter or entry.entry_kind == kind_filter]
+    total_active = sum(entry.amount for entry in active_entries)
+    total_loans = sum(entry.amount for entry in active_entries if entry.entry_kind == "loan")
+    total_credits = sum(entry.amount for entry in active_entries if entry.entry_kind == "credit")
+    total_contributions = sum(entry.amount for entry in active_entries if entry.entry_kind in {"contribution", "financing"})
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    kind_options = "".join(
+        f'<option value="{escape(code)}"{" selected" if code == kind_filter else ""}>{escape(label)}</option>'
+        for code, label in [
+            ("loan", "Только займы"),
+            ("credit", "Только кредиты"),
+            ("contribution", "Только взносы"),
+            ("financing", "Прочее финансирование"),
+        ]
+    )
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td>{finance_kind_chip(entry.entry_kind)}</td>
+          <td>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">Добавил {escape(entry.created_by_name or 'Автор неизвестен')} · {format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ))}</div>
+          </td>
+          <td>
+            <div>{escape(entry.title)}</div>
+            <div class="contract-table-subtle">{escape(entry.comment) if entry.comment else "Без комментария"}</div>
+          </td>
+          <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+          <td class="nowrap" style="text-align:center;">{format_date(entry.due_date) if entry.due_date else "—"}</td>
+          <td>{finance_status_control(owner_chat_id, entry, current_user, active_tab, kind_filter, "/finance-loans")}</td>
+        </tr>
+        """
+        for entry in source_entries
+    )
+    add_section = ""
+    if has_permission(current_user, "finance", "edit") and active_tab != "archive":
+        add_section = f"""
+        <section class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Добавить займ или кредит</h2>
+              <div class="panel-sub">Ручной реестр займов, кредитов и финансовых взносов. Пока ведем здесь отдельно, дальше подтянем в общую аналитику.</div>
+            </div>
+          </div>
+          <form class="form-grid" method="post" action="/finance-loans/new{finance_query_suffix(owner_chat_id, active_tab, kind_filter)}">
+            <div class="field">
+              <label>Тип</label>
+              <select name="entry_kind" required>
+                <option value="loan">Займ</option>
+                <option value="credit">Кредит</option>
+                <option value="contribution">Взнос</option>
+                <option value="financing">Прочее финансирование</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Кому должны / от кого финансирование</label>
+              <input type="text" name="counterparty" placeholder="Например, Сбербанк" required>
+            </div>
+            <div class="field span-2">
+              <label>Основание</label>
+              <input type="text" name="title" placeholder="Например, Кредитная линия на оборотные средства" required>
+            </div>
+            <div class="field">
+              <label>Сумма, ₽</label>
+              <input type="text" name="amount" data-money-input="1" placeholder="Например, 5000000" required>
+            </div>
+            <div class="field">
+              <label>Срок / контрольная дата</label>
+              <input type="date" name="due_date">
+            </div>
+            <div class="field span-2">
+              <label>Комментарий</label>
+              <textarea name="comment" placeholder="Например, график платежа, ставка, назначение, договоренность"></textarea>
+            </div>
+            <button class="submit-btn" type="submit">Добавить в реестр</button>
+          </form>
+        </section>
+        """
+    return f"""
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Все обязательства</div>
+        <div class="stat-value">{format_amount(total_active)}</div>
+        <div class="stat-note">Активные кредиты, займы и взносы</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Займы</div>
+        <div class="stat-value">{format_amount(total_loans)}</div>
+        <div class="stat-note">Ручные заемные обязательства</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Кредиты</div>
+        <div class="stat-value">{format_amount(total_credits)}</div>
+        <div class="stat-note">Банковские и кредитные обязательства</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Взносы / финансирование</div>
+        <div class="stat-value">{format_amount(total_contributions)}</div>
+        <div class="stat-note">Внутренние вливания и прочее финансирование</div>
+      </article>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Кредиты и займы</h2>
+          <div class="panel-sub">Отдельный ручной реестр кредитных и заемных обязательств. Пока ведем здесь отдельно от общего финанализа, чтобы не смешивать логику.</div>
+        </div>
+      </div>
+      <div class="tab-row">
+        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/finance-loans{finance_query_suffix(owner_chat_id, 'active', kind_filter)}">В работе<span class="tab-count">{len(active_entries)}</span></a>
+        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/finance-loans{finance_query_suffix(owner_chat_id, 'archive', kind_filter)}">Архив<span class="tab-count">{len(archive_entries)}</span></a>
+      </div>
+      <form class="action-row" method="get" action="/finance-loans" style="justify-content: space-between; align-items:end; margin-top:14px;">
+        <input type="hidden" name="owner" value="{owner_chat_id}">
+        <input type="hidden" name="tab" value="{active_tab}">
+        <div class="field" style="min-width: 280px; margin:0;">
+          <label>Показать тип</label>
+          <select name="kind">
+            <option value="">Все виды</option>
+            {kind_options}
+          </select>
+        </div>
+        <div class="action-row" style="gap:10px;">
+          <button class="secondary-btn" type="submit">Показать</button>
+          {f'<a class="secondary-btn" href="/finance-loans{finance_query_suffix(owner_chat_id, active_tab, "")}">Сбросить фильтр</a>' if kind_filter else ""}
+        </div>
+      </form>
+      {flash_html}
+      <table class="table contract-table" style="margin-top:18px;">
+        <thead>
+          <tr>
+            <th>Тип</th>
+            <th>Контрагент / кто занес</th>
+            <th>Основание / комментарий</th>
+            <th class="nowrap">Сумма</th>
+            <th class="nowrap">Срок</th>
+            <th class="nowrap">Статус</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html or '<tr><td colspan="6">Пока нет записей по кредитам и займам.</td></tr>'}</tbody>
+      </table>
+    </section>
     {add_section}
     """
 
@@ -9737,6 +9955,30 @@ def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
+    if path == "/finance-loans" and method == "GET":
+        denied = guard("finance", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        if active_tab not in {"active", "archive"}:
+            active_tab = "active"
+        body = render_finance_loans_section(storage, current_owner, current_user, active_tab, kind_filter=kind_filter)
+        html = layout(
+            "Кредиты и займы",
+            body,
+            owners,
+            current_owner,
+            "finance",
+            current_user,
+            hero_title_override="Кредиты и займы",
+            hero_copy_override="Ручной реестр кредитов, займов и финансовых взносов, который потом подтянем в общую финансовую аналитику.",
+            active_subsection="finance_loans",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
     if path == "/finance-analysis/new" and method == "POST":
         denied = guard("finance", "edit")
         if denied:
@@ -9778,6 +10020,57 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
         return redirect(start_response, f"/finance-analysis{finance_query_suffix(current_owner, active_tab, kind_filter)}")
 
+    if path == "/finance-loans/new" and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            entry_kind = form.get("entry_kind", "").strip()
+            counterparty = form.get("counterparty", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            due_date_raw = form.get("due_date", "").strip()
+            comment = form.get("comment", "").strip()
+            due_date = parse_date(due_date_raw) if due_date_raw else None
+            if entry_kind not in {"loan", "credit", "contribution", "financing"}:
+                raise ValueError("Выберите тип финансирования")
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not title:
+                raise ValueError("Укажите основание")
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            storage.add_finance_entry(
+                current_owner,
+                entry_kind,
+                title,
+                counterparty,
+                amount,
+                due_date,
+                comment,
+                (current_user or {}).get("id"),
+                actor_name,
+            )
+        except ValueError as exc:
+            body = render_finance_loans_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
+            html = layout(
+                "Кредиты и займы",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Кредиты и займы",
+                hero_copy_override="Ручной реестр кредитов, займов и финансовых взносов, который потом подтянем в общую финансовую аналитику.",
+                active_subsection="finance_loans",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/finance-loans{finance_query_suffix(current_owner, active_tab, kind_filter)}")
+
     if path.startswith("/finance-analysis/") and path.endswith("/status") and method == "POST":
         denied = guard("finance", "edit")
         if denied:
@@ -9799,6 +10092,38 @@ def app(environ, start_response):
         storage.update_finance_entry_status(current_owner, entry_id, status)
         target_tab = "archive" if status == "closed" else "active"
         return redirect(start_response, f"/finance-analysis{finance_query_suffix(current_owner, target_tab, kind_filter)}")
+
+    if path.startswith("/finance-loans/") and path.endswith("/status") and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        status = form.get("status", "").strip()
+        if status not in FINANCE_STATUS_META:
+            body = render_finance_loans_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False, kind_filter)
+            html = layout(
+                "Кредиты и займы",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Кредиты и займы",
+                hero_copy_override="Ручной реестр кредитов, займов и финансовых взносов, который потом подтянем в общую финансовую аналитику.",
+                active_subsection="finance_loans",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        storage.update_finance_entry_status(current_owner, entry_id, status)
+        target_tab = "archive" if status == "closed" else "active"
+        return redirect(start_response, f"/finance-loans{finance_query_suffix(current_owner, target_tab, kind_filter)}")
 
     if path == "/tasks" and method == "GET":
         denied = guard("tasks", "view")
