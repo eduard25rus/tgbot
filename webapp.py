@@ -8840,6 +8840,172 @@ def render_finance_section(
     net_position = receivable_total + dispute_total - financing_total - current_payables_total
     overdue_count = sum(1 for entry in active_entries if entry.due_date is not None and entry.due_date < datetime.now(VLADIVOSTOK_TZ).date())
 
+    def render_analysis_bucket(
+        title: str,
+        subtitle: str,
+        total_amount: float,
+        items_html: str,
+        empty_label: str,
+    ) -> str:
+        return f"""
+        <details class="card" style="padding:0; overflow:hidden;">
+          <summary style="list-style:none; cursor:pointer; padding:16px 18px; display:grid; grid-template-columns:minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
+            <div>
+              <div class="timeline-title">{escape(title)}</div>
+              <div class="contract-table-subtle">{escape(subtitle)}</div>
+            </div>
+            <div style="text-align:right; font-weight:700;">{format_amount(total_amount)}</div>
+          </summary>
+          <div style="padding:0 18px 16px; border-top:1px dashed var(--line); display:grid; gap:10px;">
+            {items_html or f'<div class="contract-table-subtle" style="padding-top:12px;">{escape(empty_label)}</div>'}
+          </div>
+        </details>
+        """
+
+    loan_items_html = "".join(
+        f"""
+        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+          <div>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">{escape(entry.title)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
+          </div>
+        </div>
+        """
+        for entry in active_entries
+        if entry.entry_kind == "loan"
+    )
+    credit_items_html = "".join(
+        f"""
+        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+          <div>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">{escape(entry.title)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div class="contract-table-subtle">{f'Платеж: {format_date(entry.payment_date)}' if entry.payment_date else (format_date(entry.due_date) if entry.due_date else "Без срока")}</div>
+          </div>
+        </div>
+        """
+        for entry in active_entries
+        if entry.entry_kind == "credit"
+    )
+    contribution_items_html = "".join(
+        f"""
+        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+          <div>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">{escape(entry.title)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
+          </div>
+        </div>
+        """
+        for entry in active_entries
+        if entry.entry_kind in {"contribution", "financing"}
+    )
+    liability_items_html = "".join(
+        f"""
+        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+          <div>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">{escape(entry.title)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
+          </div>
+        </div>
+        """
+        for entry in active_entries
+        if entry.entry_kind == "liability"
+    )
+    payable_items_html = "".join(
+        f"""
+        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+          <div>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">{escape(entry.object_name or 'Без объекта')}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;">{format_amount(payable_metrics(entry)["outstanding"])}</div>
+            <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
+          </div>
+        </div>
+        """
+        for entry in active_payables
+    )
+    court_items_html = "".join(
+        f"""
+        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+          <div>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">{escape(entry.title)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
+          </div>
+        </div>
+        """
+        for entry in active_entries
+        if entry.entry_kind in {"dispute", "receivable_court"}
+    )
+    customs_items_html = "".join(
+        f"""
+        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+          <div>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">{escape(entry.title)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
+          </div>
+        </div>
+        """
+        for entry in active_entries
+        if entry.entry_kind == "receivable_customs"
+    )
+    contractor_receivable_items_html = "".join(
+        f"""
+        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+          <div>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">{escape(entry.title)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
+          </div>
+        </div>
+        """
+        for entry in active_entries
+        if entry.entry_kind == "receivable_contractor"
+    )
+    other_receivable_items_html = "".join(
+        f"""
+        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+          <div>
+            <div class="timeline-title">{escape(entry.counterparty)}</div>
+            <div class="contract-table-subtle">{escape(entry.title)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
+          </div>
+        </div>
+        """
+        for entry in active_entries
+        if entry.entry_kind in {"receivable_other", "receivable"}
+    )
+
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     kind_options = "".join(
         f'<option value="{escape(code)}"{" selected" if code == kind_filter else ""}>{escape(label)}</option>'
@@ -8942,41 +9108,11 @@ def render_finance_section(
         <div class="chip">Итого кредиторки: {format_amount(total_creditor)}</div>
       </div>
       <div style="display:grid; gap:10px;">
-        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
-          <div>
-            <div class="timeline-title">Займы</div>
-            <div class="contract-table-subtle">Ручные заемные обязательства</div>
-          </div>
-          <div style="text-align:right; font-weight:700;">{format_amount(loan_total)}</div>
-        </div>
-        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
-          <div>
-            <div class="timeline-title">Кредиты</div>
-            <div class="contract-table-subtle">Банковские и иные кредитные обязательства</div>
-          </div>
-          <div style="text-align:right; font-weight:700;">{format_amount(credit_total)}</div>
-        </div>
-        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
-          <div>
-            <div class="timeline-title">Взносы и финансирование</div>
-            <div class="contract-table-subtle">Внутренние вливания и прочее финансирование</div>
-          </div>
-          <div style="text-align:right; font-weight:700;">{format_amount(contribution_total)}</div>
-        </div>
-        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
-          <div>
-            <div class="timeline-title">Прочие обязательства</div>
-            <div class="contract-table-subtle">Ручные финансовые обязательства вне кредитов и займов</div>
-          </div>
-          <div style="text-align:right; font-weight:700;">{format_amount(other_liability_total)}</div>
-        </div>
-        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
-          <div>
-            <div class="timeline-title">Кредиторка подрядчикам</div>
-            <div class="contract-table-subtle">Автоматически из рабочего раздела кредиторки</div>
-          </div>
-          <div style="text-align:right; font-weight:700;">{format_amount(current_payables_total)}</div>
-        </div>
+        {render_analysis_bucket("Займы", "Ручные заемные обязательства", loan_total, loan_items_html, "Активных займов сейчас нет.")}
+        {render_analysis_bucket("Кредиты", "Банковские и иные кредитные обязательства", credit_total, credit_items_html, "Активных кредитов сейчас нет.")}
+        {render_analysis_bucket("Взносы и финансирование", "Внутренние вливания и прочее финансирование", contribution_total, contribution_items_html, "Записей по взносам и финансированию сейчас нет.")}
+        {render_analysis_bucket("Прочие обязательства", "Ручные финансовые обязательства вне кредитов и займов", other_liability_total, liability_items_html, "Прочих обязательств сейчас нет.")}
+        {render_analysis_bucket("Кредиторка подрядчикам", "Автоматически из рабочего раздела кредиторки", current_payables_total, payable_items_html, "Активной подрядной кредиторки сейчас нет.")}
       </div>
     </section>
     <section class="card panel" style="margin-top:18px;">
@@ -8988,34 +9124,10 @@ def render_finance_section(
         <div class="chip">Итого дебиторки: {format_amount(total_debtor)}</div>
       </div>
       <div style="display:grid; gap:10px;">
-        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
-          <div>
-            <div class="timeline-title">Суд</div>
-            <div class="contract-table-subtle">Суммы в споре, претензии или судебной работе</div>
-          </div>
-          <div style="text-align:right; font-weight:700;">{format_amount(dispute_total)}</div>
-        </div>
-        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
-          <div>
-            <div class="timeline-title">Таможня</div>
-            <div class="contract-table-subtle">Таможенные требования и возвраты</div>
-          </div>
-          <div style="text-align:right; font-weight:700;">{format_amount(customs_receivable_total)}</div>
-        </div>
-        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
-          <div>
-            <div class="timeline-title">Подрядчики</div>
-            <div class="contract-table-subtle">Переплаты и задолженности подрядчиков перед компанией</div>
-          </div>
-          <div style="text-align:right; font-weight:700;">{format_amount(contractor_receivable_total)}</div>
-        </div>
-        <div class="card" style="padding:16px 18px; display:grid; grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr); gap:12px; align-items:center;">
-          <div>
-            <div class="timeline-title">Иные задолженности</div>
-            <div class="contract-table-subtle">Прочие требования и возвраты вне подрядчиков, суда и таможни</div>
-          </div>
-          <div style="text-align:right; font-weight:700;">{format_amount(other_receivable_total)}</div>
-        </div>
+        {render_analysis_bucket("Суд", "Суммы в споре, претензии или судебной работе", dispute_total, court_items_html, "Судебных позиций сейчас нет.")}
+        {render_analysis_bucket("Таможня", "Таможенные требования и возвраты", customs_receivable_total, customs_items_html, "Таможенных позиций сейчас нет.")}
+        {render_analysis_bucket("Подрядчики", "Переплаты и задолженности подрядчиков перед компанией", contractor_receivable_total, contractor_receivable_items_html, "Задолженностей подрядчиков сейчас нет.")}
+        {render_analysis_bucket("Иные задолженности", "Прочие требования и возвраты вне подрядчиков, суда и таможни", other_receivable_total, other_receivable_items_html, "Прочих задолженностей сейчас нет.")}
       </div>
     </section>
     """
