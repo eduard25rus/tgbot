@@ -8711,6 +8711,50 @@ def finance_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
+def finance_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, kind_filter: str, base_path: str = "/finance-analysis", allowed_kinds: tuple[str, ...] | None = None) -> str:
+    if not has_permission(current_user, "finance", "edit"):
+        return finance_kind_chip(entry.entry_kind)
+    available_kinds = allowed_kinds or tuple(FINANCE_KIND_META.keys())
+    kind_options = "".join(
+        f'<option value="{code}"{" selected" if code == entry.entry_kind else ""}>{escape(FINANCE_KIND_META.get(code, ("Финансовая позиция", ""))[0])}</option>'
+        for code in available_kinds
+    )
+    return f"""
+    <details class="status-menu">
+      <summary>{finance_kind_chip(entry.entry_kind)}</summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update{finance_query_suffix(owner_chat_id, active_tab, kind_filter)}">
+          <div class="field">
+            <label>Тип позиции</label>
+            <select name="entry_kind">{kind_options}</select>
+          </div>
+          <div class="field">
+            <label>Контрагент</label>
+            <input type="text" name="counterparty" value="{escape(entry.counterparty)}" required>
+          </div>
+          <div class="field span-2">
+            <label>Основание</label>
+            <input type="text" name="title" value="{escape(entry.title)}" required>
+          </div>
+          <div class="field">
+            <label>Сумма, ₽</label>
+            <input type="text" name="amount" data-money-input="1" value="{escape(format_amount_input(entry.amount))}" required>
+          </div>
+          <div class="field">
+            <label>Срок</label>
+            <input type="date" name="due_date" value="{entry.due_date.isoformat() if entry.due_date else ''}">
+          </div>
+          <div class="field span-2">
+            <label>Комментарий</label>
+            <textarea name="comment">{escape(entry.comment)}</textarea>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить изменения</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
 def render_finance_section(
     storage: Storage,
     owner_chat_id: int,
@@ -8745,7 +8789,7 @@ def render_finance_section(
     rows_html = "".join(
         f"""
         <tr>
-          <td>{finance_kind_chip(entry.entry_kind)}</td>
+          <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, kind_filter)}</td>
           <td>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">Добавил {escape(entry.created_by_name or 'Автор неизвестен')} · {format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ))}</div>
@@ -8970,7 +9014,7 @@ def render_finance_loans_section(
     rows_html = "".join(
         f"""
         <tr>
-          <td>{finance_kind_chip(entry.entry_kind)}</td>
+          <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, kind_filter, "/finance-loans", ("loan", "credit", "contribution", "financing"))}</td>
           <td>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">Добавил {escape(entry.created_by_name or 'Автор неизвестен')} · {format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ))}</div>
@@ -10076,6 +10120,84 @@ def app(environ, start_response):
                 (current_user or {}).get("id"),
                 actor_name,
             )
+        except ValueError as exc:
+            body = render_finance_loans_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
+            html = layout(
+                "Кредиты и займы",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Кредиты и займы",
+                hero_copy_override="Ручной реестр кредитов, займов и финансовых взносов, который потом подтянем в общую финансовую аналитику.",
+                active_subsection="finance_loans",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/finance-loans{finance_query_suffix(current_owner, active_tab, kind_filter)}")
+
+    if path.startswith("/finance-analysis/") and path.endswith("/update") and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            entry_kind = form.get("entry_kind", "").strip()
+            counterparty = form.get("counterparty", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            due_date_raw = form.get("due_date", "").strip()
+            comment = form.get("comment", "").strip()
+            due_date = parse_date(due_date_raw) if due_date_raw else None
+            if entry_kind not in FINANCE_KIND_META:
+                raise ValueError("Выберите тип финансовой позиции")
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not title:
+                raise ValueError("Укажите основание")
+            storage.update_finance_entry(current_owner, entry_id, entry_kind, title, counterparty, amount, due_date, comment)
+        except ValueError as exc:
+            body = render_finance_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
+            html = layout("Финансовый анализ", body, owners, current_owner, "finance", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/finance-analysis{finance_query_suffix(current_owner, active_tab, kind_filter)}")
+
+    if path.startswith("/finance-loans/") and path.endswith("/update") and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            entry_kind = form.get("entry_kind", "").strip()
+            counterparty = form.get("counterparty", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            due_date_raw = form.get("due_date", "").strip()
+            comment = form.get("comment", "").strip()
+            due_date = parse_date(due_date_raw) if due_date_raw else None
+            if entry_kind not in {"loan", "credit", "contribution", "financing"}:
+                raise ValueError("Выберите тип финансирования")
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not title:
+                raise ValueError("Укажите основание")
+            storage.update_finance_entry(current_owner, entry_id, entry_kind, title, counterparty, amount, due_date, comment)
         except ValueError as exc:
             body = render_finance_loans_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
             html = layout(

@@ -3491,6 +3491,45 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def update_finance_entry(
+        self,
+        owner_chat_id: int,
+        entry_id: int,
+        entry_kind: str,
+        title: str,
+        counterparty: str,
+        amount: float,
+        due_date: date | None,
+        comment: str,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE finance_entries
+                SET
+                    entry_kind = ?,
+                    title = ?,
+                    counterparty = ?,
+                    amount = ?,
+                    due_date = ?,
+                    comment = ?,
+                    updated_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (
+                    entry_kind.strip(),
+                    title.strip(),
+                    counterparty.strip(),
+                    amount,
+                    due_date.strftime(DATE_FMT) if due_date is not None else None,
+                    comment.strip(),
+                    datetime.utcnow().isoformat(),
+                    entry_id,
+                    owner_chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
     def list_tasks(self, owner_chat_id: int, include_deleted: bool = False) -> list[TaskEntry]:
         with self.connection() as conn:
             rows = conn.execute(
