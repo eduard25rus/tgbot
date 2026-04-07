@@ -9038,7 +9038,7 @@ def render_finance_loans_section(
         f"""
         <tr>
           <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, kind_filter, "/finance-loans", ("loan", "credit", "contribution", "financing"))}</td>
-          <td>
+          <td class="nowrap">
             <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
               <div class="timeline-title">{escape(entry.counterparty)}</div>
             </span>
@@ -9153,10 +9153,18 @@ def render_finance_loans_section(
       </form>
       {flash_html}
       <table class="table contract-table" style="margin-top:18px;">
+        <colgroup>
+          <col style="width: 14%;">
+          <col style="width: 27%;">
+          <col style="width: 23%;">
+          <col style="width: 14%;">
+          <col style="width: 11%;">
+          <col style="width: 11%;">
+        </colgroup>
         <thead>
           <tr>
             <th>Тип</th>
-            <th>Контрагент / кто занес</th>
+            <th>Контрагент</th>
             <th>Основание / комментарий</th>
             <th class="nowrap">Сумма</th>
             <th class="nowrap">Срок</th>
