@@ -3093,6 +3093,7 @@ SECTIONS = [
 FINANCE_NAV_SECTIONS = [
     ("finance", "Финанализ", "/finance-analysis"),
     ("payables", "Кредиторка", "/payables"),
+    ("finance_receivables", "Дебиторка", "/finance-receivables"),
     ("finance_loans", "Кредиты и займы", "/finance-loans"),
     ("expenses", "Расходы", "/expenses"),
 ]
@@ -8676,6 +8677,10 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
 FINANCE_KIND_META = {
     "receivable": ("Дебиторка", "chip ok"),
     "dispute": ("Суды / споры", "chip warn"),
+    "receivable_contractor": ("Задолженность подрядчика", "chip ok"),
+    "receivable_court": ("Судебная задолженность", "chip warn"),
+    "receivable_customs": ("Таможенная задолженность", "chip accent"),
+    "receivable_other": ("Иные задолженности", "chip"),
     "financing": ("Финансирование", "chip danger"),
     "loan": ("Займ", "chip danger"),
     "credit": ("Кредит", "chip danger"),
@@ -8800,8 +8805,16 @@ def render_finance_section(
     source_entries = archive_entries if active_tab == "archive" else active_entries
     entries = [entry for entry in source_entries if not kind_filter or entry.entry_kind == kind_filter]
 
-    receivable_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "receivable")
-    dispute_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "dispute")
+    receivable_total = sum(
+        entry.amount
+        for entry in active_entries
+        if entry.entry_kind in {"receivable", "receivable_contractor", "receivable_customs", "receivable_other"}
+    )
+    dispute_total = sum(
+        entry.amount
+        for entry in active_entries
+        if entry.entry_kind in {"dispute", "receivable_court"}
+    )
     financing_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"financing", "loan", "credit", "contribution", "liability"})
     net_position = receivable_total + dispute_total - financing_total - current_payables_total
     overdue_count = sum(1 for entry in active_entries if entry.due_date is not None and entry.due_date < datetime.now(VLADIVOSTOK_TZ).date())
@@ -8914,6 +8927,10 @@ def render_finance_section(
               <select name="entry_kind" required>
                 <option value="receivable">Дебиторка</option>
                 <option value="dispute">Суды / споры</option>
+                <option value="receivable_contractor">Задолженность подрядчика</option>
+                <option value="receivable_court">Судебная задолженность</option>
+                <option value="receivable_customs">Таможенная задолженность</option>
+                <option value="receivable_other">Иные задолженности</option>
                 <option value="loan">Займ</option>
                 <option value="credit">Кредит</option>
                 <option value="contribution">Взнос</option>
@@ -9168,6 +9185,183 @@ def render_finance_loans_section(
           </tr>
         </thead>
         <tbody>{rows_html or '<tr><td colspan="6">Пока нет записей по кредитам и займам.</td></tr>'}</tbody>
+      </table>
+    </section>
+    {add_section}
+    """
+
+
+def render_finance_receivables_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    active_tab: str = "active",
+    flash_message: str = "",
+    success: bool = False,
+    kind_filter: str = "",
+) -> str:
+    receivable_kinds = {
+        "receivable",
+        "dispute",
+        "receivable_contractor",
+        "receivable_court",
+        "receivable_customs",
+        "receivable_other",
+    }
+    entries = [entry for entry in storage.list_finance_entries(owner_chat_id) if entry.entry_kind in receivable_kinds]
+    active_entries = [entry for entry in entries if entry.status != "closed"]
+    archive_entries = [entry for entry in entries if entry.status == "closed"]
+    source_entries = archive_entries if active_tab == "archive" else active_entries
+    allowed_filters = {"", "receivable_contractor", "receivable_court", "receivable_customs", "receivable_other", "receivable", "dispute"}
+    if kind_filter not in allowed_filters:
+        kind_filter = ""
+    source_entries = [entry for entry in source_entries if not kind_filter or entry.entry_kind == kind_filter]
+    total_active = sum(entry.amount for entry in active_entries)
+    total_contractor = sum(entry.amount for entry in active_entries if entry.entry_kind == "receivable_contractor")
+    total_court = sum(entry.amount for entry in active_entries if entry.entry_kind in {"receivable_court", "dispute"})
+    total_customs = sum(entry.amount for entry in active_entries if entry.entry_kind == "receivable_customs")
+    total_other = sum(entry.amount for entry in active_entries if entry.entry_kind in {"receivable_other", "receivable"})
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    kind_options = "".join(
+        f'<option value="{escape(code)}"{" selected" if code == kind_filter else ""}>{escape(label)}</option>'
+        for code, label in [
+            ("receivable_contractor", "Задолженность подрядчика"),
+            ("receivable_court", "Судебная задолженность"),
+            ("receivable_customs", "Таможенная задолженность"),
+            ("receivable_other", "Иные задолженности"),
+        ]
+    )
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, kind_filter, "/finance-receivables", ("receivable_contractor", "receivable_court", "receivable_customs", "receivable_other"))}</td>
+          <td class="nowrap">
+            <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
+              <div class="timeline-title">{escape(entry.counterparty)}</div>
+            </span>
+          </td>
+          <td>
+            <div>{escape(entry.title)}</div>
+            <div class="contract-table-subtle">{escape(entry.comment) if entry.comment else "Без комментария"}</div>
+          </td>
+          <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+          <td class="nowrap" style="text-align:center;">{format_date(entry.due_date) if entry.due_date else "—"}</td>
+          <td>{finance_status_control(owner_chat_id, entry, current_user, active_tab, kind_filter, "/finance-receivables")}</td>
+        </tr>
+        """
+        for entry in source_entries
+    )
+    add_section = ""
+    if has_permission(current_user, "finance", "edit") and active_tab != "archive":
+        add_section = f"""
+        <section class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Добавить дебиторку</h2>
+              <div class="panel-sub">Ручной реестр дебиторки и требований: подрядчики, судебные суммы, таможня и прочие задолженности.</div>
+            </div>
+          </div>
+          <form class="form-grid" method="post" action="/finance-receivables/new{finance_query_suffix(owner_chat_id, active_tab, kind_filter)}">
+            <div class="field">
+              <label>Категория</label>
+              <select name="entry_kind" required>
+                <option value="receivable_contractor">Задолженность подрядчика</option>
+                <option value="receivable_court">Судебная задолженность</option>
+                <option value="receivable_customs">Таможенная задолженность</option>
+                <option value="receivable_other">Иные задолженности</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Контрагент / должник</label>
+              <input type="text" name="counterparty" placeholder="Например, Эко групп" required>
+            </div>
+            <div class="field span-2">
+              <label>Основание</label>
+              <input type="text" name="title" placeholder="Например, Переплата подрядчику по объекту" required>
+            </div>
+            <div class="field">
+              <label>Сумма, ₽</label>
+              <input type="text" name="amount" data-money-input="1" placeholder="Например, 250000" required>
+            </div>
+            <div class="field">
+              <label>Срок / контрольная дата</label>
+              <input type="date" name="due_date">
+            </div>
+            <div class="field span-2">
+              <label>Комментарий</label>
+              <textarea name="comment" placeholder="Например, стадия взыскания, кто ведет, в чем риск"></textarea>
+            </div>
+            <button class="submit-btn" type="submit">Добавить в реестр</button>
+          </form>
+        </section>
+        """
+    return f"""
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Вся дебиторка</div>
+        <div class="stat-value">{format_amount(total_active)}</div>
+        <div class="stat-note">Активные ручные требования и задолженности</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Подрядчики</div>
+        <div class="stat-value">{format_amount(total_contractor)}</div>
+        <div class="stat-note">Должны вернуть или оплатить</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Судебная</div>
+        <div class="stat-value">{format_amount(total_court)}</div>
+        <div class="stat-note">Суммы в претензии и суде</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Таможенная</div>
+        <div class="stat-value">{format_amount(total_customs)}</div>
+        <div class="stat-note">Таможенные требования и возвраты</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Иная</div>
+        <div class="stat-value">{format_amount(total_other)}</div>
+        <div class="stat-note">Прочие виды дебиторской задолженности</div>
+      </article>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Дебиторка</h2>
+          <div class="panel-sub">Отдельный ручной реестр задолженностей, которые должны вернуть или погасить компании.</div>
+        </div>
+      </div>
+      <div class="tab-row">
+        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/finance-receivables{finance_query_suffix(owner_chat_id, 'active', kind_filter)}">В работе<span class="tab-count">{len(active_entries)}</span></a>
+        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/finance-receivables{finance_query_suffix(owner_chat_id, 'archive', kind_filter)}">Архив<span class="tab-count">{len(archive_entries)}</span></a>
+      </div>
+      <form class="action-row" method="get" action="/finance-receivables" style="justify-content: space-between; align-items:end; margin-top:14px;">
+        <input type="hidden" name="owner" value="{owner_chat_id}">
+        <input type="hidden" name="tab" value="{active_tab}">
+        <div class="field" style="min-width: 320px; margin:0;">
+          <label>Показать категорию</label>
+          <select name="kind">
+            <option value="">Все категории</option>
+            {kind_options}
+          </select>
+        </div>
+        <div class="action-row" style="gap:10px;">
+          <button class="secondary-btn" type="submit">Показать</button>
+          {f'<a class="secondary-btn" href="/finance-receivables{finance_query_suffix(owner_chat_id, active_tab, "")}">Сбросить фильтр</a>' if kind_filter else ""}
+        </div>
+      </form>
+      {flash_html}
+      <table class="table contract-table" style="margin-top:18px;">
+        <thead>
+          <tr>
+            <th>Тип</th>
+            <th>Контрагент</th>
+            <th>Основание / комментарий</th>
+            <th class="nowrap">Сумма</th>
+            <th class="nowrap">Срок</th>
+            <th class="nowrap">Статус</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html or '<tr><td colspan="6">Пока нет записей по дебиторке.</td></tr>'}</tbody>
       </table>
     </section>
     {add_section}
@@ -10077,6 +10271,30 @@ def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
+    if path == "/finance-receivables" and method == "GET":
+        denied = guard("finance", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        if active_tab not in {"active", "archive"}:
+            active_tab = "active"
+        body = render_finance_receivables_section(storage, current_owner, current_user, active_tab, kind_filter=kind_filter)
+        html = layout(
+            "Дебиторка",
+            body,
+            owners,
+            current_owner,
+            "finance",
+            current_user,
+            hero_title_override="Дебиторка",
+            hero_copy_override="Ручной реестр задолженностей и требований: подрядчики, судебные суммы, таможня и прочие дебиторские позиции.",
+            active_subsection="finance_receivables",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
     if path == "/finance-analysis/new" and method == "POST":
         denied = guard("finance", "edit")
         if denied:
@@ -10175,6 +10393,58 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
         return redirect(start_response, f"/finance-loans{finance_query_suffix(current_owner, active_tab, kind_filter)}")
 
+    if path == "/finance-receivables/new" and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            entry_kind = form.get("entry_kind", "").strip()
+            counterparty = form.get("counterparty", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            due_date_raw = form.get("due_date", "").strip()
+            comment = form.get("comment", "").strip()
+            due_date = parse_date(due_date_raw) if due_date_raw else None
+            if entry_kind not in {"receivable_contractor", "receivable_court", "receivable_customs", "receivable_other"}:
+                raise ValueError("Выберите категорию дебиторки")
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not title:
+                raise ValueError("Укажите основание")
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            storage.add_finance_entry(
+                current_owner,
+                entry_kind,
+                title,
+                counterparty,
+                amount,
+                due_date,
+                None,
+                comment,
+                (current_user or {}).get("id"),
+                actor_name,
+            )
+        except ValueError as exc:
+            body = render_finance_receivables_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
+            html = layout(
+                "Дебиторка",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Дебиторка",
+                hero_copy_override="Ручной реестр задолженностей и требований: подрядчики, судебные суммы, таможня и прочие дебиторские позиции.",
+                active_subsection="finance_receivables",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/finance-receivables{finance_query_suffix(current_owner, active_tab, kind_filter)}")
+
     if path.startswith("/finance-analysis/") and path.endswith("/update") and method == "POST":
         denied = guard("finance", "edit")
         if denied:
@@ -10257,6 +10527,50 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
         return redirect(start_response, f"/finance-loans{finance_query_suffix(current_owner, active_tab, kind_filter)}")
 
+    if path.startswith("/finance-receivables/") and path.endswith("/update") and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            entry_kind = form.get("entry_kind", "").strip()
+            counterparty = form.get("counterparty", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            due_date_raw = form.get("due_date", "").strip()
+            comment = form.get("comment", "").strip()
+            due_date = parse_date(due_date_raw) if due_date_raw else None
+            if entry_kind not in {"receivable_contractor", "receivable_court", "receivable_customs", "receivable_other"}:
+                raise ValueError("Выберите категорию дебиторки")
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not title:
+                raise ValueError("Укажите основание")
+            storage.update_finance_entry(current_owner, entry_id, entry_kind, title, counterparty, amount, due_date, None, comment)
+        except ValueError as exc:
+            body = render_finance_receivables_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
+            html = layout(
+                "Дебиторка",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Дебиторка",
+                hero_copy_override="Ручной реестр задолженностей и требований: подрядчики, судебные суммы, таможня и прочие дебиторские позиции.",
+                active_subsection="finance_receivables",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/finance-receivables{finance_query_suffix(current_owner, active_tab, kind_filter)}")
+
     if path.startswith("/finance-analysis/") and path.endswith("/status") and method == "POST":
         denied = guard("finance", "edit")
         if denied:
@@ -10310,6 +10624,38 @@ def app(environ, start_response):
         storage.update_finance_entry_status(current_owner, entry_id, status)
         target_tab = "archive" if status == "closed" else "active"
         return redirect(start_response, f"/finance-loans{finance_query_suffix(current_owner, target_tab, kind_filter)}")
+
+    if path.startswith("/finance-receivables/") and path.endswith("/status") and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        status = form.get("status", "").strip()
+        if status not in FINANCE_STATUS_META:
+            body = render_finance_receivables_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False, kind_filter)
+            html = layout(
+                "Дебиторка",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Дебиторка",
+                hero_copy_override="Ручной реестр задолженностей и требований: подрядчики, судебные суммы, таможня и прочие дебиторские позиции.",
+                active_subsection="finance_receivables",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        storage.update_finance_entry_status(current_owner, entry_id, status)
+        target_tab = "archive" if status == "closed" else "active"
+        return redirect(start_response, f"/finance-receivables{finance_query_suffix(current_owner, target_tab, kind_filter)}")
 
     if path == "/tasks" and method == "GET":
         denied = guard("tasks", "view")
