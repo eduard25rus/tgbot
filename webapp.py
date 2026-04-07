@@ -4851,9 +4851,9 @@ def layout(
       display: none;
       padding: 6px 10px;
       border-radius: 999px;
-      border: 1px solid rgba(181, 110, 30, 0.18);
-      background: rgba(194, 122, 36, 0.12);
-      color: #8d5818;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.82);
+      color: var(--muted);
       font-size: 12px;
       font-weight: 700;
       line-height: 1;
@@ -4862,6 +4862,19 @@ def layout(
     .finance-bucket[open] .finance-bucket-link {{
       display: inline-flex;
       align-items: center;
+    }}
+    .finance-total-chip {{
+      color: #fff;
+      border-color: transparent;
+      font-weight: 700;
+    }}
+    .finance-total-chip.creditor {{
+      background: linear-gradient(135deg, #c77a24, #9d5417);
+      box-shadow: 0 14px 32px rgba(164, 88, 20, 0.18);
+    }}
+    .finance-total-chip.debtor {{
+      background: linear-gradient(135deg, #5f9d74, #47795a);
+      box-shadow: 0 14px 32px rgba(71, 121, 90, 0.18);
     }}
     .auction-head {{
       display: flex;
@@ -8913,7 +8926,7 @@ def render_finance_section(
             <div class="contract-table-subtle">{escape(entry.title)}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div>{format_amount(entry.amount)}</div>
             <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
           </div>
         </div>
@@ -8929,7 +8942,7 @@ def render_finance_section(
             <div class="contract-table-subtle">{escape(entry.title)}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div>{format_amount(entry.amount)}</div>
             <div class="contract-table-subtle">{f'Платеж: {format_date(entry.payment_date)}' if entry.payment_date else (format_date(entry.due_date) if entry.due_date else "Без срока")}</div>
           </div>
         </div>
@@ -8945,7 +8958,7 @@ def render_finance_section(
             <div class="contract-table-subtle">{escape(entry.title)}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div>{format_amount(entry.amount)}</div>
             <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
           </div>
         </div>
@@ -8961,7 +8974,7 @@ def render_finance_section(
             <div class="contract-table-subtle">{escape(entry.title)}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div>{format_amount(entry.amount)}</div>
             <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
           </div>
         </div>
@@ -8977,7 +8990,7 @@ def render_finance_section(
             <div class="contract-table-subtle">{escape(entry.object_name or 'Без объекта')}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-weight:700;">{format_amount(payable_metrics(entry)["outstanding"])}</div>
+            <div>{format_amount(payable_metrics(entry)["outstanding"])}</div>
             <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
           </div>
         </div>
@@ -8992,7 +9005,7 @@ def render_finance_section(
             <div class="contract-table-subtle">{escape(entry.title)}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div>{format_amount(entry.amount)}</div>
             <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
           </div>
         </div>
@@ -9008,7 +9021,7 @@ def render_finance_section(
             <div class="contract-table-subtle">{escape(entry.title)}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div>{format_amount(entry.amount)}</div>
             <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
           </div>
         </div>
@@ -9024,7 +9037,7 @@ def render_finance_section(
             <div class="contract-table-subtle">{escape(entry.title)}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-weight:700;">{format_amount(entry.amount)}</div>
+            <div>{format_amount(entry.amount)}</div>
             <div class="contract-table-subtle">{format_date(entry.due_date) if entry.due_date else "Без срока"}</div>
           </div>
         </div>
@@ -9148,7 +9161,7 @@ def render_finance_section(
           <h2 class="panel-title">Кредиторка</h2>
           <div class="panel-sub">Обязательства компании, которые сейчас нужно держать под контролем в одном срезе.</div>
         </div>
-        <div class="chip">Итого кредиторки: {format_amount(total_creditor)}</div>
+        <div class="chip finance-total-chip creditor">Итого кредиторки: {format_amount(total_creditor)}</div>
       </div>
       <div style="display:grid; gap:10px;">
         {render_analysis_bucket("Займы", "Ручные заемные обязательства", loan_total, loan_items_html, "Активных займов сейчас нет.", f"/finance-loans?owner={owner_chat_id}&tab=active&kind=loan")}
@@ -9164,7 +9177,7 @@ def render_finance_section(
           <h2 class="panel-title">Дебиторка</h2>
           <div class="panel-sub">Что компании должны вернуть или погасить, включая судебные и спорные суммы.</div>
         </div>
-        <div class="chip">Итого дебиторки: {format_amount(total_debtor)}</div>
+        <div class="chip finance-total-chip debtor">Итого дебиторки: {format_amount(total_debtor)}</div>
       </div>
       <div style="display:grid; gap:10px;">
         {render_analysis_bucket("Суд", "Суммы в споре, претензии или судебной работе", dispute_total, court_items_html, "Судебных позиций сейчас нет.", f"/finance-receivables?owner={owner_chat_id}&tab=active&kind=receivable_court")}
