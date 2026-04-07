@@ -3385,9 +3385,12 @@ def layout(
       top: 18px;
       align-self: start;
       min-height: calc(100vh - 48px);
+      max-height: calc(100vh - 36px);
       display: grid;
       grid-template-rows: auto auto 1fr auto;
       gap: 18px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }}
     .brand-mark {{
       font-size: 12px;
@@ -8813,7 +8816,7 @@ def render_finance_section(
         f"""
         <tr>
           <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, kind_filter)}</td>
-          <td>
+          <td class="nowrap">
             <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
               <div class="timeline-title">{escape(entry.counterparty)}</div>
             </span>
