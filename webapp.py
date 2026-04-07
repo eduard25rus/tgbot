@@ -4864,6 +4864,12 @@ def layout(
       align-items: center;
     }}
     .finance-total-chip {{
+      gap: 6px;
+    }}
+    .finance-total-chip-label {{
+      font-weight: 500;
+    }}
+    .finance-total-chip-value {{
       font-weight: 700;
     }}
     .finance-total-chip.creditor {{
@@ -9159,7 +9165,7 @@ def render_finance_section(
           <h2 class="panel-title">Кредиторка</h2>
           <div class="panel-sub">Обязательства компании, которые сейчас нужно держать под контролем в одном срезе.</div>
         </div>
-        <div class="chip finance-total-chip creditor">Итого кредиторки: {format_amount(total_creditor)}</div>
+        <div class="chip finance-total-chip creditor"><span class="finance-total-chip-label">Итого кредиторки:</span><span class="finance-total-chip-value">{format_amount(total_creditor)}</span></div>
       </div>
       <div style="display:grid; gap:10px;">
         {render_analysis_bucket("Займы", "Ручные заемные обязательства", loan_total, loan_items_html, "Активных займов сейчас нет.", f"/finance-loans?owner={owner_chat_id}&tab=active&kind=loan")}
@@ -9175,7 +9181,7 @@ def render_finance_section(
           <h2 class="panel-title">Дебиторка</h2>
           <div class="panel-sub">Что компании должны вернуть или погасить, включая судебные и спорные суммы.</div>
         </div>
-        <div class="chip finance-total-chip debtor">Итого дебиторки: {format_amount(total_debtor)}</div>
+        <div class="chip finance-total-chip debtor"><span class="finance-total-chip-label">Итого дебиторки:</span><span class="finance-total-chip-value">{format_amount(total_debtor)}</span></div>
       </div>
       <div style="display:grid; gap:10px;">
         {render_analysis_bucket("Суд", "Суммы в споре, претензии или судебной работе", dispute_total, court_items_html, "Судебных позиций сейчас нет.", f"/finance-receivables?owner={owner_chat_id}&tab=active&kind=receivable_court")}
