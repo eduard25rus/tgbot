@@ -8859,17 +8859,17 @@ def render_finance_section(
             <div style="text-align:right; font-weight:700;">{format_amount(total_amount)}</div>
           </summary>
           <div style="padding:0 18px 16px; border-top:1px dashed var(--line); display:grid; gap:10px;">
-            <div style="padding-top:12px; display:flex; justify-content:flex-end;">
-              <a class="secondary-btn" href="{escape(target_href)}">{escape(target_label)}</a>
-            </div>
             {items_html or f'<div class="contract-table-subtle" style="padding-top:12px;">{escape(empty_label)}</div>'}
+            <div style="padding-top:4px; display:flex; justify-content:flex-end;">
+              <a class="secondary-btn" style="padding:8px 12px; font-size:13px; border-radius:12px;" href="{escape(target_href)}">{escape(target_label)}</a>
+            </div>
           </div>
         </details>
         """
 
     loan_items_html = "".join(
         f"""
-        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+        <div style="padding-top:12px; padding-left:18px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
           <div>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">{escape(entry.title)}</div>
@@ -8885,7 +8885,7 @@ def render_finance_section(
     )
     credit_items_html = "".join(
         f"""
-        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+        <div style="padding-top:12px; padding-left:18px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
           <div>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">{escape(entry.title)}</div>
@@ -8901,7 +8901,7 @@ def render_finance_section(
     )
     contribution_items_html = "".join(
         f"""
-        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+        <div style="padding-top:12px; padding-left:18px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
           <div>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">{escape(entry.title)}</div>
@@ -8917,7 +8917,7 @@ def render_finance_section(
     )
     liability_items_html = "".join(
         f"""
-        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+        <div style="padding-top:12px; padding-left:18px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
           <div>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">{escape(entry.title)}</div>
@@ -8933,7 +8933,7 @@ def render_finance_section(
     )
     payable_items_html = "".join(
         f"""
-        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+        <div style="padding-top:12px; padding-left:18px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
           <div>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">{escape(entry.object_name or 'Без объекта')}</div>
@@ -8948,7 +8948,7 @@ def render_finance_section(
     )
     court_items_html = "".join(
         f"""
-        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+        <div style="padding-top:12px; padding-left:18px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
           <div>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">{escape(entry.title)}</div>
@@ -8964,7 +8964,7 @@ def render_finance_section(
     )
     customs_items_html = "".join(
         f"""
-        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+        <div style="padding-top:12px; padding-left:18px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
           <div>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">{escape(entry.title)}</div>
@@ -8980,7 +8980,7 @@ def render_finance_section(
     )
     contractor_receivable_items_html = "".join(
         f"""
-        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+        <div style="padding-top:12px; padding-left:18px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
           <div>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">{escape(entry.title)}</div>
@@ -8996,7 +8996,7 @@ def render_finance_section(
     )
     other_receivable_items_html = "".join(
         f"""
-        <div style="padding-top:12px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
+        <div style="padding-top:12px; padding-left:18px; display:grid; grid-template-columns:minmax(220px, 1.1fr) minmax(160px, 0.9fr); gap:12px; align-items:start;">
           <div>
             <div class="timeline-title">{escape(entry.counterparty)}</div>
             <div class="contract-table-subtle">{escape(entry.title)}</div>
