@@ -73,6 +73,7 @@ class LegalLetter:
     id: int
     contract_id: int
     direction: str
+    source_channel: str
     letter_date: date
     subject: str
     comment: str
@@ -390,6 +391,7 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     contract_id INTEGER NOT NULL,
                     direction TEXT NOT NULL DEFAULT 'outgoing',
+                    source_channel TEXT NOT NULL DEFAULT 'mail',
                     letter_date TEXT NOT NULL,
                     subject TEXT NOT NULL DEFAULT '',
                     comment TEXT NOT NULL DEFAULT '',
@@ -651,6 +653,9 @@ class Storage:
             finance_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(finance_entries)").fetchall()
             }
+            legal_letter_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(legal_letters)").fetchall()
+            }
             task_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
             }
@@ -768,6 +773,8 @@ class Storage:
             for column_name, column_def in finance_alters:
                 if column_name not in finance_columns:
                     conn.execute(f"ALTER TABLE finance_entries ADD COLUMN {column_name} {column_def}")
+            if "source_channel" not in legal_letter_columns:
+                conn.execute("ALTER TABLE legal_letters ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'mail'")
             if "assignee_kind" not in task_columns:
                 conn.execute("ALTER TABLE tasks ADD COLUMN assignee_kind TEXT NOT NULL DEFAULT 'user'")
             if "assignee_role_code" not in task_columns:
@@ -2289,6 +2296,7 @@ class Storage:
         chat_id: int,
         contract_id: int,
         direction: str,
+        source_channel: str,
         letter_date: date,
         subject: str,
         comment: str,
@@ -2311,14 +2319,15 @@ class Storage:
             cursor = conn.execute(
                 """
                 INSERT INTO legal_letters (
-                    contract_id, direction, letter_date, subject, comment,
+                    contract_id, direction, source_channel, letter_date, subject, comment,
                     file_name, file_path, created_by_user_id, created_by_name, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     contract_id,
                     direction,
+                    source_channel,
                     letter_date.strftime(DATE_FMT),
                     subject.strip(),
                     comment.strip(),
@@ -2358,6 +2367,7 @@ class Storage:
         chat_id: int,
         letter_id: int,
         direction: str,
+        source_channel: str,
         letter_date: date,
         subject: str,
         comment: str,
@@ -2366,7 +2376,7 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE legal_letters
-                SET direction = ?, letter_date = ?, subject = ?, comment = ?
+                SET direction = ?, source_channel = ?, letter_date = ?, subject = ?, comment = ?
                 WHERE id = ?
                   AND contract_id IN (
                       SELECT id FROM contracts WHERE chat_id = ?
@@ -2374,6 +2384,7 @@ class Storage:
                 """,
                 (
                     direction,
+                    source_channel,
                     letter_date.strftime(DATE_FMT),
                     subject.strip(),
                     comment.strip(),
@@ -2401,7 +2412,7 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT l.id, l.contract_id, l.direction, l.letter_date, l.subject, l.comment,
+                SELECT l.id, l.contract_id, l.direction, l.source_channel, l.letter_date, l.subject, l.comment,
                        l.file_name, l.file_path, l.created_by_user_id, l.created_by_name, l.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM legal_letters l
@@ -2492,7 +2503,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT l.id, l.contract_id, l.direction, l.letter_date, l.subject, l.comment,
+                SELECT l.id, l.contract_id, l.direction, l.source_channel, l.letter_date, l.subject, l.comment,
                        l.file_name, l.file_path, l.created_by_user_id, l.created_by_name, l.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM legal_letters l
@@ -2778,6 +2789,7 @@ class Storage:
             id=row["id"],
             contract_id=row["contract_id"],
             direction=row["direction"] or "outgoing",
+            source_channel=row["source_channel"] or "mail",
             letter_date=date.fromisoformat(row["letter_date"]),
             subject=row["subject"] or "",
             comment=row["comment"] or "",

@@ -375,6 +375,10 @@ LEGAL_LETTER_META = {
     "incoming": ("← Входящее", "chip danger"),
     "outgoing": ("→ Исходящее", "chip ok"),
 }
+LEGAL_CHANNEL_META = {
+    "mail": "Почта",
+    "eis": "ЕИС",
+}
 LEGAL_UPLOAD_MIME = {
     ".pdf": "application/pdf",
     ".jpg": "image/jpeg",
@@ -1666,6 +1670,13 @@ def render_legal_letter_editor(owner_chat_id: int, contract_id: int, letter, att
             <select name="direction" required>
               <option value="outgoing"{" selected" if letter.direction == "outgoing" else ""}>Исходящее</option>
               <option value="incoming"{" selected" if letter.direction == "incoming" else ""}>Входящее</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Канал</label>
+            <select name="source_channel" required>
+              <option value="mail"{" selected" if (letter.source_channel or "mail") == "mail" else ""}>Почта</option>
+              <option value="eis"{" selected" if letter.source_channel == "eis" else ""}>ЕИС</option>
             </select>
           </div>
           <div class="field">
@@ -6435,7 +6446,10 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
     legal_letters_html = "".join(
         f"""
         <tr>
-          <td style="text-align:center;"><span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span></td>
+          <td style="text-align:center;">
+            <span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span>
+            <div class="contract-table-subtle">{escape(LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта"))}</div>
+          </td>
           <td class="nowrap">{format_date(letter.letter_date)}</td>
           <td>
             {render_legal_letter_editor(owner_chat_id, contract.id, letter, attachment_map.get(letter.id, []), current_user)}
@@ -6498,6 +6512,13 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
                 <select name="direction" required>
                   <option value="outgoing">Исходящее</option>
                   <option value="incoming">Входящее</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Канал</label>
+                <select name="source_channel" required>
+                  <option value="mail">Почта</option>
+                  <option value="eis">ЕИС</option>
                 </select>
               </div>
               <div class="field">
@@ -12808,6 +12829,9 @@ def app(environ, start_response):
             direction = form.get("direction", "outgoing").strip()
             if direction not in LEGAL_LETTER_META:
                 raise ValueError("Некорректный тип письма")
+            source_channel = form.get("source_channel", "mail").strip()
+            if source_channel not in LEGAL_CHANNEL_META:
+                raise ValueError("Некорректный канал письма")
             letter_date_raw = form.get("letter_date", "").strip()
             if not letter_date_raw:
                 raise ValueError("Укажите дату письма")
@@ -12821,6 +12845,7 @@ def app(environ, start_response):
                 current_owner,
                 contract_id,
                 direction,
+                source_channel,
                 parse_date(letter_date_raw),
                 subject,
                 form.get("comment", ""),
@@ -12884,13 +12909,16 @@ def app(environ, start_response):
             direction = form.get("direction", "outgoing").strip()
             if direction not in LEGAL_LETTER_META:
                 raise ValueError("Некорректный тип письма")
+            source_channel = form.get("source_channel", "mail").strip()
+            if source_channel not in LEGAL_CHANNEL_META:
+                raise ValueError("Некорректный канал письма")
             letter_date_raw = form.get("letter_date", "").strip()
             if not letter_date_raw:
                 raise ValueError("Укажите дату письма")
             subject = form.get("subject", "").strip()
             if not subject:
                 raise ValueError("Укажите, о чем письмо")
-            if not storage.update_legal_letter(current_owner, letter_id, direction, parse_date(letter_date_raw), subject, form.get("comment", "")):
+            if not storage.update_legal_letter(current_owner, letter_id, direction, source_channel, parse_date(letter_date_raw), subject, form.get("comment", "")):
                 raise ValueError("Не удалось обновить письмо")
             uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
             if uploads:
