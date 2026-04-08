@@ -3352,7 +3352,7 @@ def layout(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{escape(title)}</title>
+  <title>{escape(f"CRM - {title}")}</title>
   <style>
     :root {{
       --bg: #f4efe7;
