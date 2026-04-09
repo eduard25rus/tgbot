@@ -3353,6 +3353,7 @@ def layout(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{escape(f"CRM - {title}")}</title>
+  <link rel="icon" type="image/png" href="/brand/felis-logo.png">
   <style>
     :root {{
       --bg: #f4efe7;
@@ -10407,6 +10408,14 @@ def app(environ, start_response):
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Logo not found"]
         start_response("200 OK", [("Content-Type", "image/jpeg")])
+        return [logo_path.read_bytes()]
+
+    if path == "/brand/felis-logo.png" and method == "GET":
+        logo_path = Path(__file__).resolve().with_name("felis-logo.png")
+        if not logo_path.exists():
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Logo not found"]
+        start_response("200 OK", [("Content-Type", "image/png")])
         return [logo_path.read_bytes()]
 
     if path == "/login" and method == "POST":
