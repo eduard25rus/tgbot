@@ -114,6 +114,34 @@ class ContractMeeting:
 
 
 @dataclass
+class ConstructionReport:
+    id: int
+    contract_id: int
+    report_date: date
+    work_description: str
+    workers_count: int
+    day_comment: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+    updated_at: datetime
+    contract_title: str
+    chat_id: int
+
+
+@dataclass
+class ConstructionReportPhoto:
+    id: int
+    report_id: int
+    contract_id: int
+    file_name: str
+    file_path: str
+    created_at: datetime
+    contract_title: str
+    chat_id: int
+
+
+@dataclass
 class ContractEvent:
     id: int
     chat_id: int
@@ -440,6 +468,29 @@ class Storage:
                     FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS construction_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    contract_id INTEGER NOT NULL,
+                    report_date TEXT NOT NULL,
+                    work_description TEXT NOT NULL DEFAULT '',
+                    workers_count INTEGER NOT NULL DEFAULT 0,
+                    day_comment TEXT NOT NULL DEFAULT '',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS construction_report_photos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    report_id INTEGER NOT NULL,
+                    file_name TEXT NOT NULL DEFAULT '',
+                    file_path TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(report_id) REFERENCES construction_reports(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS contract_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER NOT NULL,
@@ -687,6 +738,9 @@ class Storage:
             meeting_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(contract_meetings)").fetchall()
             }
+            construction_report_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(construction_reports)").fetchall()
+            }
             task_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
             }
@@ -818,6 +872,19 @@ class Storage:
             for column_name, column_def in meeting_alters:
                 if column_name and column_name not in meeting_columns:
                     conn.execute(f"ALTER TABLE contract_meetings ADD COLUMN {column_name} {column_def}")
+            construction_report_alters = [
+                ("report_date", "TEXT NOT NULL DEFAULT ''"),
+                ("work_description", "TEXT NOT NULL DEFAULT ''"),
+                ("workers_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("day_comment", "TEXT NOT NULL DEFAULT ''"),
+                ("created_by_user_id", "INTEGER"),
+                ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
+                ("created_at", "TEXT NOT NULL DEFAULT ''"),
+                ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in construction_report_alters:
+                if column_name and column_name not in construction_report_columns:
+                    conn.execute(f"ALTER TABLE construction_reports ADD COLUMN {column_name} {column_def}")
             if "assignee_kind" not in task_columns:
                 conn.execute("ALTER TABLE tasks ADD COLUMN assignee_kind TEXT NOT NULL DEFAULT 'user'")
             if "assignee_role_code" not in task_columns:
@@ -2509,6 +2576,104 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def add_construction_report(
+        self,
+        chat_id: int,
+        contract_id: int,
+        report_date: date,
+        work_description: str,
+        workers_count: int,
+        day_comment: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int | None:
+        with self.connection() as conn:
+            contract = conn.execute(
+                """
+                SELECT id
+                FROM contracts
+                WHERE id = ? AND chat_id = ?
+                """,
+                (contract_id, chat_id),
+            ).fetchone()
+            if contract is None:
+                return None
+            now = datetime.utcnow().isoformat()
+            cursor = conn.execute(
+                """
+                INSERT INTO construction_reports (
+                    contract_id, report_date, work_description, workers_count,
+                    day_comment, created_by_user_id, created_by_name, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    contract_id,
+                    report_date.strftime(DATE_FMT),
+                    work_description.strip(),
+                    max(0, int(workers_count)),
+                    day_comment.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    now,
+                    now,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def update_construction_report(
+        self,
+        chat_id: int,
+        report_id: int,
+        report_date: date,
+        work_description: str,
+        workers_count: int,
+        day_comment: str,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE construction_reports
+                SET report_date = ?, work_description = ?, workers_count = ?, day_comment = ?, updated_at = ?
+                WHERE id = ?
+                  AND contract_id IN (
+                      SELECT id FROM contracts WHERE chat_id = ?
+                  )
+                """,
+                (
+                    report_date.strftime(DATE_FMT),
+                    work_description.strip(),
+                    max(0, int(workers_count)),
+                    day_comment.strip(),
+                    datetime.utcnow().isoformat(),
+                    report_id,
+                    chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def add_construction_report_photo(self, chat_id: int, report_id: int, file_name: str, file_path: str) -> int | None:
+        with self.connection() as conn:
+            report = conn.execute(
+                """
+                SELECT r.id
+                FROM construction_reports r
+                JOIN contracts c ON c.id = r.contract_id
+                WHERE r.id = ? AND c.chat_id = ?
+                """,
+                (report_id, chat_id),
+            ).fetchone()
+            if report is None:
+                return None
+            cursor = conn.execute(
+                """
+                INSERT INTO construction_report_photos (report_id, file_name, file_path, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (report_id, file_name.strip(), file_path.strip(), datetime.utcnow().isoformat()),
+            )
+            return int(cursor.lastrowid)
+
     def get_payment(self, chat_id: int, payment_id: int) -> Payment | None:
         with self.connection() as conn:
             row = conn.execute(
@@ -2553,6 +2718,21 @@ class Storage:
             ).fetchone()
         return self._contract_meeting_from_row(row) if row else None
 
+    def get_construction_report(self, chat_id: int, report_id: int) -> ConstructionReport | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT r.id, r.contract_id, r.report_date, r.work_description, r.workers_count, r.day_comment,
+                       r.created_by_user_id, r.created_by_name, r.created_at, r.updated_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM construction_reports r
+                JOIN contracts c ON c.id = r.contract_id
+                WHERE c.chat_id = ? AND r.id = ?
+                """,
+                (chat_id, report_id),
+            ).fetchone()
+        return self._construction_report_from_row(row) if row else None
+
     def get_legal_letter_attachment(self, chat_id: int, attachment_id: int) -> LegalLetterAttachment | None:
         with self.connection() as conn:
             row = conn.execute(
@@ -2567,6 +2747,21 @@ class Storage:
                 (attachment_id, chat_id),
             ).fetchone()
         return self._legal_letter_attachment_from_row(row) if row else None
+
+    def get_construction_report_photo(self, chat_id: int, photo_id: int) -> ConstructionReportPhoto | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT p.id, p.report_id, r.contract_id, p.file_name, p.file_path, p.created_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM construction_report_photos p
+                JOIN construction_reports r ON r.id = p.report_id
+                JOIN contracts c ON c.id = r.contract_id
+                WHERE p.id = ? AND c.chat_id = ?
+                """,
+                (photo_id, chat_id),
+            ).fetchone()
+        return self._construction_report_photo_from_row(row) if row else None
 
     def delete_legal_letter_attachment(self, chat_id: int, attachment_id: int) -> bool:
         with self.connection() as conn:
@@ -2661,6 +2856,22 @@ class Storage:
             ).fetchall()
         return [self._contract_meeting_from_row(row) for row in rows]
 
+    def list_construction_reports_for_contract(self, chat_id: int, contract_id: int) -> list[ConstructionReport]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.id, r.contract_id, r.report_date, r.work_description, r.workers_count, r.day_comment,
+                       r.created_by_user_id, r.created_by_name, r.created_at, r.updated_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM construction_reports r
+                JOIN contracts c ON c.id = r.contract_id
+                WHERE c.chat_id = ? AND c.id = ?
+                ORDER BY r.report_date DESC, r.id DESC
+                """,
+                (chat_id, contract_id),
+            ).fetchall()
+        return [self._construction_report_from_row(row) for row in rows]
+
     def list_legal_letter_attachments_for_contract(self, chat_id: int, contract_id: int) -> list[LegalLetterAttachment]:
         with self.connection() as conn:
             rows = conn.execute(
@@ -2676,6 +2887,22 @@ class Storage:
                 (chat_id, contract_id),
             ).fetchall()
         return [self._legal_letter_attachment_from_row(row) for row in rows]
+
+    def list_construction_report_photos_for_contract(self, chat_id: int, contract_id: int) -> list[ConstructionReportPhoto]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.id, p.report_id, r.contract_id, p.file_name, p.file_path, p.created_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM construction_report_photos p
+                JOIN construction_reports r ON r.id = p.report_id
+                JOIN contracts c ON c.id = r.contract_id
+                WHERE c.chat_id = ? AND c.id = ?
+                ORDER BY p.id ASC
+                """,
+                (chat_id, contract_id),
+            ).fetchall()
+        return [self._construction_report_photo_from_row(row) for row in rows]
 
     def list_contract_events(self, chat_id: int, contract_id: int) -> list[ContractEvent]:
         with self.connection() as conn:
@@ -2960,6 +3187,36 @@ class Storage:
             created_by_name=row["created_by_name"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            contract_title=row["contract_title"],
+            chat_id=row["chat_id"],
+        )
+
+    @staticmethod
+    def _construction_report_from_row(row: sqlite3.Row) -> ConstructionReport:
+        return ConstructionReport(
+            id=row["id"],
+            contract_id=row["contract_id"],
+            report_date=date.fromisoformat(row["report_date"]) if row["report_date"] else date.today(),
+            work_description=row["work_description"] or "",
+            workers_count=int(row["workers_count"] or 0),
+            day_comment=row["day_comment"] or "",
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            contract_title=row["contract_title"],
+            chat_id=row["chat_id"],
+        )
+
+    @staticmethod
+    def _construction_report_photo_from_row(row: sqlite3.Row) -> ConstructionReportPhoto:
+        return ConstructionReportPhoto(
+            id=row["id"],
+            report_id=row["report_id"],
+            contract_id=row["contract_id"],
+            file_name=row["file_name"] or "",
+            file_path=row["file_path"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],
         )

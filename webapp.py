@@ -387,6 +387,7 @@ LEGAL_UPLOAD_MIME = {
     ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+CONSTRUCTION_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 
 
 @dataclass
@@ -548,6 +549,17 @@ def resolve_legal_letter_file(storage: Storage, letter) -> tuple[Path, str, str]
     return absolute_path, safe_filename, content_type
 
 
+def resolve_construction_report_photo(storage: Storage, photo) -> tuple[Path, str, str]:
+    upload_root = contract_upload_root(storage).resolve()
+    absolute_path = (upload_root / photo.file_path).resolve()
+    if upload_root not in absolute_path.parents and absolute_path != upload_root:
+        raise ValueError("Forbidden")
+    safe_filename, content_type = detect_legal_file_type(absolute_path, photo.file_name or absolute_path.name or "photo")
+    if not content_type.startswith("image/"):
+        raise ValueError("Construction report attachment is not an image")
+    return absolute_path, safe_filename, content_type
+
+
 def render_legal_file_preview_page(file_url: str, download_url: str, safe_filename: str, content_type: str) -> str:
     if content_type == "application/pdf":
         preview_html = f'''
@@ -635,6 +647,29 @@ def save_legal_letter_uploads(storage: Storage, owner_chat_id: int, contract_id:
         relative_path = file_path.relative_to(upload_root).as_posix()
         if storage.add_legal_letter_attachment(owner_chat_id, letter_id, original_name, relative_path) is None:
             raise ValueError("Не удалось сохранить вложение")
+
+
+def save_construction_report_photos(storage: Storage, owner_chat_id: int, contract_id: int, report_id: int, uploads: list[UploadedFile]) -> None:
+    upload_root = contract_upload_root(storage)
+    photos_dir = upload_root / "construction_reports" / str(owner_chat_id) / str(contract_id)
+    photos_dir.mkdir(parents=True, exist_ok=True)
+    for upload in uploads:
+        original_name = upload.filename.strip()
+        lower_name = original_name.lower()
+        if not any(lower_name.endswith(ext) for ext in CONSTRUCTION_PHOTO_EXTENSIONS):
+            raise ValueError("В строительный отчет можно прикреплять только JPG, JPEG или PNG")
+        file_bytes = upload.data
+        if not file_bytes:
+            raise ValueError("Одна из фотографий пустая")
+        if len(file_bytes) > 20 * 1024 * 1024:
+            raise ValueError("Каждая фотография должна быть не больше 20 МБ")
+        safe_name = secure_upload_name(original_name)
+        final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
+        file_path = photos_dir / final_name
+        file_path.write_bytes(file_bytes)
+        relative_path = file_path.relative_to(upload_root).as_posix()
+        if storage.add_construction_report_photo(owner_chat_id, report_id, original_name, relative_path) is None:
+            raise ValueError("Не удалось сохранить фотографию")
 
 
 def parse_amount(raw: str) -> float:
@@ -836,6 +871,14 @@ def can_view_contract_meetings(current_user: dict | None) -> bool:
 
 
 def can_edit_contract_meetings(current_user: dict | None) -> bool:
+    return has_permission(current_user, "contracts", "edit")
+
+
+def can_view_construction_reports(current_user: dict | None) -> bool:
+    return has_permission(current_user, "contracts", "view")
+
+
+def can_edit_construction_reports(current_user: dict | None) -> bool:
     return has_permission(current_user, "contracts", "edit")
 
 
@@ -1896,6 +1939,8 @@ def contract_timeline_badge(item: dict) -> str:
         return '<span class="chip warn">Встреча</span>'
     if kind == "meeting_update":
         return '<span class="chip">Изменение</span>'
+    if kind == "construction_report":
+        return '<span class="chip accent">Стройка</span>'
     if kind == "invoice":
         return '<span class="chip warn">Счет</span>'
     if kind == "stage_status":
@@ -1916,6 +1961,7 @@ def build_contract_timeline_items(storage: Storage, owner_chat_id: int, contract
     stages = storage.list_stages_for_contract(owner_chat_id, contract_id)
     legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract_id)
     meetings = storage.list_contract_meetings_for_contract(owner_chat_id, contract_id)
+    construction_reports = storage.list_construction_reports_for_contract(owner_chat_id, contract_id)
     payments = storage.list_payments_for_contract(owner_chat_id, contract_id)
 
     logged_refs = {
@@ -1987,6 +2033,25 @@ def build_contract_timeline_items(storage: Storage, owner_chat_id: int, contract
                 "kind": "payment",
                 "badge_label": "Оплата",
                 "badge_css": "chip ok",
+            }
+        )
+
+    for report in construction_reports:
+        source_ref = str(report.id)
+        if ("construction_report_create", source_ref) in logged_refs:
+            continue
+        description = report.work_description.strip()
+        if report.day_comment.strip():
+            description = f"{description}\nКомментарий дня: {report.day_comment.strip()}" if description else f"Комментарий дня: {report.day_comment.strip()}"
+        timeline_items.append(
+            {
+                "sort_date": report.report_date,
+                "title": f"Строительный отчет: {report.workers_count} рабочих",
+                "description": description,
+                "actor_name": report.created_by_name.strip() or "Автор неизвестен",
+                "kind": "construction_report",
+                "badge_label": "Стройка",
+                "badge_css": "chip accent",
             }
         )
 
@@ -2100,6 +2165,183 @@ def render_contract_timeline_page(storage: Storage, owner_chat_id: int, contract
         </div>
       </div>
       <div class="timeline">{rows_html}</div>
+    </section>
+    """
+
+
+def construction_workers_options(selected: int = 0) -> str:
+    return "".join(
+        f'<option value="{count}"{" selected" if count == selected else ""}>{count}</option>'
+        for count in range(0, 51)
+    )
+
+
+def render_construction_report_editor(owner_chat_id: int, contract_id: int, report, current_user: dict | None) -> str:
+    description_html = f'<div class="legal-letter-topic">{escape(report.work_description or "Без описания работ")}</div>'
+    if report.day_comment:
+        description_html += f'<div class="contract-table-subtle">{escape(report.day_comment)}</div>'
+    if not can_edit_construction_reports(current_user):
+        return description_html
+    return f"""
+    <details class="status-menu">
+      <summary>{description_html}</summary>
+      <div class="status-popover" style="min-width:520px;">
+        <form class="form-grid" method="post" action="/contracts/construction-reports/{report.id}/update?owner={owner_chat_id}&contract_id={contract_id}">
+          <div class="field">
+            <label>Дата отчета</label>
+            <input type="date" name="report_date" value="{report.report_date.isoformat()}" required>
+          </div>
+          <div class="field">
+            <label>Рабочих на объекте</label>
+            <select name="workers_count" required>
+              {construction_workers_options(report.workers_count)}
+            </select>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Выполненные работы</label>
+            <textarea name="work_description" required>{escape(report.work_description)}</textarea>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Комментарий по дню</label>
+            <textarea name="day_comment" placeholder="Полный день, 1/2 дня, погодные ограничения и т.д.">{escape(report.day_comment)}</textarea>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить отчет</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_construction_report_photos(owner_chat_id: int, contract_id: int, report_id: int, photos: list, current_user: dict | None) -> str:
+    files_html = "".join(
+        f'''<div class="legal-letter-file-stack">
+              <a class="legal-letter-file" href="/contracts/construction-photos/{photo.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(photo.file_name or 'Фото')}</a>
+              <a class="legal-letter-download" href="/contracts/construction-photos/{photo.id}/download?owner={owner_chat_id}">Скачать</a>
+            </div>'''
+        for photo in photos
+    ) or '<span class="contract-table-subtle">Фото не прикреплены</span>'
+    if not can_edit_construction_reports(current_user):
+        return files_html
+    return f"""
+    {files_html}
+    <details class="status-menu" style="margin-top:8px;">
+      <summary><span class="secondary-btn" style="padding:8px 12px; font-size:13px;">Добавить фото</span></summary>
+      <div class="status-popover" style="min-width:360px;">
+        <form class="form-grid" method="post" action="/contracts/construction-reports/{report_id}/photos/new?owner={owner_chat_id}&contract_id={contract_id}" enctype="multipart/form-data">
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Фотографии</label>
+            <input type="file" name="report_photos" accept="image/jpeg,.jpg,.jpeg,image/png,.png" multiple required>
+          </div>
+          <button class="submit-btn" type="submit">Загрузить фото</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def render_contract_construction_page(storage: Storage, owner_chat_id: int, contract_id: int, current_user: dict | None, flash_message: str = "") -> str:
+    contract = storage.get_contract(owner_chat_id, contract_id)
+    if contract is None:
+        return '<div class="card panel"><div class="empty">Контракт не найден.</div></div>'
+    if not can_view_construction_reports(current_user):
+        return render_forbidden_body("Контракты")
+
+    object_name = contract.object_name.strip() or contract.title
+    object_address = contract.object_address.strip()
+    title_line = f"{object_name}, {object_address}" if object_address else object_name
+    reports = storage.list_construction_reports_for_contract(owner_chat_id, contract_id)
+    photos = storage.list_construction_report_photos_for_contract(owner_chat_id, contract_id)
+    photo_map: dict[int, list] = {}
+    for photo in photos:
+        photo_map.setdefault(photo.report_id, []).append(photo)
+
+    report_rows = "".join(
+        f"""
+        <tr>
+          <td class="nowrap">{format_date(report.report_date)}</td>
+          <td>{render_construction_report_editor(owner_chat_id, contract_id, report, current_user)}</td>
+          <td class="nowrap" style="text-align:center;">{report.workers_count}</td>
+          <td>{render_construction_report_photos(owner_chat_id, contract_id, report.id, photo_map.get(report.id, []), current_user)}</td>
+          <td>
+            <div class="contract-table-subtle">{escape(report.created_by_name.strip() or 'Автор неизвестен')}</div>
+            <div class="contract-table-subtle">{format_date(report.created_at.astimezone(VLADIVOSTOK_TZ).date() if report.created_at.tzinfo else report.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
+          </td>
+        </tr>
+        """
+        for report in reports
+    ) or '<tr><td colspan="5">Строительных отчетов пока нет.</td></tr>'
+
+    add_report_button = ""
+    if can_edit_construction_reports(current_user):
+        add_report_button = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Добавить отчет</span></summary>
+          <div class="status-popover" style="min-width:560px;">
+            <form class="form-grid" method="post" action="/contracts/{contract_id}/construction/reports/new?owner={owner_chat_id}" enctype="multipart/form-data">
+              <div class="field">
+                <label>Дата отчета</label>
+                <input type="date" name="report_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
+              </div>
+              <div class="field">
+                <label>Рабочих на объекте</label>
+                <select name="workers_count" required>
+                  {construction_workers_options()}
+                </select>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Выполненные работы</label>
+                <textarea name="work_description" placeholder="Что фактически сделали на объекте за день" required></textarea>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Комментарий по дню</label>
+                <textarea name="day_comment" placeholder="Полный день, 1/2 дня, простой, погодные ограничения"></textarea>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Фотографии</label>
+                <input type="file" name="report_photos" accept="image/jpeg,.jpg,.jpeg,image/png,.png" multiple>
+              </div>
+              <button class="submit-btn" type="submit">Добавить отчет</button>
+            </form>
+          </div>
+        </details>
+        """
+
+    flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
+    return f"""
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head contract-detail-head">
+        <div>
+          <h2 class="panel-title">Строительный раздел</h2>
+          <div class="panel-sub">{escape(title_line)}</div>
+        </div>
+        <a class="chip contract-back-link" href="/contracts/{contract_id}?owner={owner_chat_id}">← Назад к контракту</a>
+      </div>
+      <div class="info-row">
+        <span class="chip">Отчетов: {len(reports)}</span>
+        <span class="chip">Контракт № {escape(contract.contract_number.strip() or 'Не указан')}</span>
+        {add_report_button}
+      </div>
+    </section>
+    {flash_html}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Отчеты со стройки</h2>
+          <div class="panel-sub">Ежедневная фиксация выполненных работ, людей на объекте и подтверждающих фотографий.</div>
+        </div>
+      </div>
+      <table class="table contract-table">
+        <thead>
+          <tr>
+            <th class="nowrap">Дата</th>
+            <th>Выполненные работы</th>
+            <th class="nowrap">Рабочих</th>
+            <th>Фото</th>
+            <th class="nowrap">Добавил</th>
+          </tr>
+        </thead>
+        <tbody>{report_rows}</tbody>
+      </table>
     </section>
     """
 
@@ -6691,6 +6933,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <span class="chip">Этапов: {len(payload["stages"])}</span>
         <span class="chip">Оплат: {len(payload["payments"])}</span>
         {f'<a class="secondary-btn" href="/contracts/{contract.id}/timeline?owner={owner_chat_id}">Хронология</a>' if can_view_contract_timeline(current_user) else ''}
+        {f'<a class="secondary-btn" href="/contracts/{contract.id}/construction?owner={owner_chat_id}">Строительный раздел</a>' if can_view_construction_reports(current_user) else ''}
         {f'<a class="secondary-btn info-row-end" href="{escape(contract.eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>' if contract.eis_url else ''}
       </div>
     </section>
@@ -13186,6 +13429,246 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
+    if path.startswith("/contracts/") and path.endswith("/construction/reports/new") and method == "POST":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        if not can_edit_construction_reports(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        contract_id = -1
+        try:
+            contract_id = int(path.split("/")[2])
+            contract = storage.get_contract(current_owner, contract_id)
+            if contract is None:
+                raise ValueError("Контракт не найден")
+            form, files = read_multipart_form_data(environ)
+            report_date_raw = form.get("report_date", "").strip()
+            if not report_date_raw:
+                raise ValueError("Укажите дату отчета")
+            work_description = form.get("work_description", "").strip()
+            if not work_description:
+                raise ValueError("Опишите выполненные работы")
+            workers_count = int(form.get("workers_count", "0") or "0")
+            if workers_count < 0:
+                raise ValueError("Количество рабочих не может быть отрицательным")
+            day_comment = form.get("day_comment", "").strip()
+            report_date = parse_date(report_date_raw)
+            actor_name = current_user.get("full_name", "").strip() if current_user else ""
+            created = storage.add_construction_report(
+                current_owner,
+                contract_id,
+                report_date,
+                work_description,
+                workers_count,
+                day_comment,
+                current_user.get("id") if current_user else None,
+                actor_name,
+            )
+            if created is None:
+                raise ValueError("Не удалось сохранить строительный отчет")
+            uploads = [item for item in files.get("report_photos", []) if item.filename.strip()]
+            if uploads:
+                save_construction_report_photos(storage, current_owner, contract_id, created, uploads)
+            description = work_description
+            if day_comment:
+                description = f"{description}\nКомментарий дня: {day_comment}"
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                report_date,
+                "construction_report",
+                f"Строительный отчет: {workers_count} рабочих",
+                description=description,
+                actor_name=actor_name,
+                source_kind="construction_report_create",
+                source_ref=str(created),
+            )
+            return redirect(start_response, f"/contracts/{contract_id}/construction?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_construction_page(storage, current_owner, contract_id, current_user, f"Не удалось добавить строительный отчет: {exc}")
+            html = layout("Строительный раздел", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/construction-reports/") and path.endswith("/update") and method == "POST":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        if not can_edit_construction_reports(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        contract_id = -1
+        try:
+            report_id = int(path.split("/")[3])
+            contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0] or "0")
+            report = storage.get_construction_report(current_owner, report_id)
+            if report is None:
+                raise ValueError("Строительный отчет не найден")
+            contract_id = contract_id or report.contract_id
+            form = read_post_data(environ)
+            report_date_raw = form.get("report_date", "").strip()
+            if not report_date_raw:
+                raise ValueError("Укажите дату отчета")
+            work_description = form.get("work_description", "").strip()
+            if not work_description:
+                raise ValueError("Опишите выполненные работы")
+            workers_count = int(form.get("workers_count", "0") or "0")
+            if workers_count < 0:
+                raise ValueError("Количество рабочих не может быть отрицательным")
+            day_comment = form.get("day_comment", "").strip()
+            report_date = parse_date(report_date_raw)
+            if not storage.update_construction_report(current_owner, report_id, report_date, work_description, workers_count, day_comment):
+                raise ValueError("Не удалось обновить строительный отчет")
+            description = work_description
+            if day_comment:
+                description = f"{description}\nКомментарий дня: {day_comment}"
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                report_date,
+                "construction_report",
+                f"Обновлен строительный отчет: {workers_count} рабочих",
+                description=description,
+                actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                source_kind="construction_report_update",
+                source_ref=f"{report_id}:{report_date.isoformat()}",
+            )
+            return redirect(start_response, f"/contracts/{contract_id}/construction?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_construction_page(storage, current_owner, contract_id, current_user, f"Не удалось обновить строительный отчет: {exc}")
+            html = layout("Строительный раздел", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/construction-reports/") and path.endswith("/photos/new") and method == "POST":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        if not can_edit_construction_reports(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        contract_id = -1
+        try:
+            report_id = int(path.split("/")[3])
+            contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0] or "0")
+            report = storage.get_construction_report(current_owner, report_id)
+            if report is None:
+                raise ValueError("Строительный отчет не найден")
+            contract_id = contract_id or report.contract_id
+            form, files = read_multipart_form_data(environ)
+            uploads = [item for item in files.get("report_photos", []) if item.filename.strip()]
+            if not uploads:
+                raise ValueError("Прикрепите хотя бы одну фотографию")
+            save_construction_report_photos(storage, current_owner, contract_id, report_id, uploads)
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                datetime.now(VLADIVOSTOK_TZ).date(),
+                "construction_report",
+                f"Добавлены фото к строительному отчету от {format_date(report.report_date)}",
+                description=f"Фотографий: {len(uploads)}",
+                actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                source_kind="construction_report_photos",
+                source_ref=f"{report_id}:{datetime.utcnow().isoformat()}",
+            )
+            return redirect(start_response, f"/contracts/{contract_id}/construction?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_construction_page(storage, current_owner, contract_id, current_user, f"Не удалось загрузить фото: {exc}")
+            html = layout("Строительный раздел", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/construction-photos/") and path.endswith("/file") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not can_view_construction_reports(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            photo_id = int(path.split("/")[3])
+            photo = storage.get_construction_report_photo(current_owner, photo_id)
+            if photo is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Photo not found"]
+            absolute_path, _, content_type = resolve_construction_report_photo(storage, photo)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            start_response("200 OK", [("Content-Type", content_type)])
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
+    if path.startswith("/contracts/construction-photos/") and path.endswith("/download") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not can_view_construction_reports(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            photo_id = int(path.split("/")[3])
+            photo = storage.get_construction_report_photo(current_owner, photo_id)
+            if photo is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Photo not found"]
+            absolute_path, safe_filename, content_type = resolve_construction_report_photo(storage, photo)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            start_response(
+                "200 OK",
+                [
+                    ("Content-Type", content_type),
+                    ("Content-Disposition", f'attachment; filename="{safe_filename}"'),
+                ],
+            )
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
+    if path.startswith("/contracts/construction-photos/") and path.endswith("/preview") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not can_view_construction_reports(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            photo_id = int(path.split("/")[3])
+            photo = storage.get_construction_report_photo(current_owner, photo_id)
+            if photo is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Photo not found"]
+            absolute_path, safe_filename, content_type = resolve_construction_report_photo(storage, photo)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            file_url = f"/contracts/construction-photos/{photo.id}/file?owner={current_owner}"
+            download_url = f"/contracts/construction-photos/{photo.id}/download?owner={current_owner}"
+            html = render_legal_file_preview_page(file_url, download_url, safe_filename, content_type)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
     if path.startswith("/contracts/letter-files/") and path.endswith("/delete") and method == "POST":
         denied = guard("contracts", "edit")
         if denied:
@@ -13440,6 +13923,7 @@ def app(environ, start_response):
                 "letter_update": "Изменение письма",
                 "meeting": "Встреча",
                 "meeting_update": "Изменение встречи",
+                "construction_report": "Строительный отчет",
                 "stage": "Этап",
             }.get(item.get("kind", ""), "Событие")
             writer.writerow(
@@ -13485,6 +13969,33 @@ def app(environ, start_response):
             current_user,
             hero_title_override="Хронология контракта",
             hero_copy_override="Единый журнал всех ключевых действий по контракту.",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/") and path.endswith("/construction") and method == "GET":
+        denied = guard("contracts", "view")
+        if denied:
+            return denied
+        if not can_view_construction_reports(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            contract_id = int(path.split("/")[2])
+        except ValueError:
+            contract_id = -1
+        body = render_contract_construction_page(storage, current_owner, contract_id, current_user)
+        html = layout(
+            "Строительный раздел",
+            body,
+            owners,
+            current_owner,
+            "contracts",
+            current_user,
+            hero_title_override="Строительный раздел",
+            hero_copy_override="Ежедневные отчеты со стройки, люди на объекте и фотофиксация хода работ.",
         )
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
