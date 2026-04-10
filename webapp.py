@@ -2245,6 +2245,70 @@ def render_construction_report_photos(owner_chat_id: int, contract_id: int, repo
     """
 
 
+def render_new_construction_report_page(storage: Storage, owner_chat_id: int, contract_id: int, current_user: dict | None, flash_message: str = "") -> str:
+    contract = storage.get_contract(owner_chat_id, contract_id)
+    if contract is None:
+        return '<div class="card panel"><div class="empty">Контракт не найден.</div></div>'
+    if not can_edit_construction_reports(current_user):
+        return render_forbidden_body("Контракты")
+    object_name = contract.object_name.strip() or contract.title
+    object_address = contract.object_address.strip()
+    title_line = f"{object_name}, {object_address}" if object_address else object_name
+    flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
+    return f"""
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head contract-detail-head">
+        <div>
+          <h2 class="panel-title">Добавить строительный отчет</h2>
+          <div class="panel-sub">{escape(title_line)}</div>
+        </div>
+        <a class="chip contract-back-link" href="/contracts/{contract_id}/construction?owner={owner_chat_id}">← Назад к строительному разделу</a>
+      </div>
+      <div class="info-row">
+        <span class="chip">Контракт № {escape(contract.contract_number.strip() or 'Не указан')}</span>
+        <span class="chip">Дата по умолчанию: {format_date(datetime.now(VLADIVOSTOK_TZ).date())}</span>
+      </div>
+    </section>
+    {flash_html}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Отчет за день</h2>
+          <div class="panel-sub">Заполните фактические работы, количество людей и прикрепите фотофиксацию.</div>
+        </div>
+      </div>
+      <form class="form-grid" method="post" action="/contracts/{contract_id}/construction/reports/new?owner={owner_chat_id}" enctype="multipart/form-data" style="grid-template-columns: minmax(220px, 0.45fr) minmax(220px, 0.45fr); gap:18px;">
+        <div class="field">
+          <label>Дата отчета</label>
+          <input type="date" name="report_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
+        </div>
+        <div class="field">
+          <label>Рабочих на объекте</label>
+          <select name="workers_count" required>
+            {construction_workers_options()}
+          </select>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Выполненные работы</label>
+          <textarea name="work_description" placeholder="Что фактически сделали на объекте за день" required style="min-height:180px;"></textarea>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Комментарий по дню</label>
+          <textarea name="day_comment" placeholder="Полный день, 1/2 дня, простой, погодные ограничения, важные замечания" style="min-height:120px;"></textarea>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Фотографии</label>
+          <input type="file" name="report_photos" accept="image/jpeg,.jpg,.jpeg,image/png,.png" multiple>
+        </div>
+        <div class="action-row" style="grid-column: 1 / -1; justify-content:flex-end;">
+          <a class="secondary-btn" href="/contracts/{contract_id}/construction?owner={owner_chat_id}">Отмена</a>
+          <button class="submit-btn" type="submit">Добавить отчет</button>
+        </div>
+      </form>
+    </section>
+    """
+
+
 def render_contract_construction_page(storage: Storage, owner_chat_id: int, contract_id: int, current_user: dict | None, flash_message: str = "") -> str:
     contract = storage.get_contract(owner_chat_id, contract_id)
     if contract is None:
@@ -2279,38 +2343,7 @@ def render_contract_construction_page(storage: Storage, owner_chat_id: int, cont
 
     add_report_button = ""
     if can_edit_construction_reports(current_user):
-        add_report_button = f"""
-        <details class="status-menu">
-          <summary><span class="secondary-btn">Добавить отчет</span></summary>
-          <div class="status-popover" style="min-width:560px;">
-            <form class="form-grid" method="post" action="/contracts/{contract_id}/construction/reports/new?owner={owner_chat_id}" enctype="multipart/form-data">
-              <div class="field">
-                <label>Дата отчета</label>
-                <input type="date" name="report_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
-              </div>
-              <div class="field">
-                <label>Рабочих на объекте</label>
-                <select name="workers_count" required>
-                  {construction_workers_options()}
-                </select>
-              </div>
-              <div class="field" style="grid-column: 1 / -1;">
-                <label>Выполненные работы</label>
-                <textarea name="work_description" placeholder="Что фактически сделали на объекте за день" required></textarea>
-              </div>
-              <div class="field" style="grid-column: 1 / -1;">
-                <label>Комментарий по дню</label>
-                <textarea name="day_comment" placeholder="Полный день, 1/2 дня, простой, погодные ограничения"></textarea>
-              </div>
-              <div class="field" style="grid-column: 1 / -1;">
-                <label>Фотографии</label>
-                <input type="file" name="report_photos" accept="image/jpeg,.jpg,.jpeg,image/png,.png" multiple>
-              </div>
-              <button class="submit-btn" type="submit">Добавить отчет</button>
-            </form>
-          </div>
-        </details>
-        """
+        add_report_button = f'<a class="secondary-btn" href="/contracts/{contract_id}/construction/reports/new?owner={owner_chat_id}">Добавить отчет</a>'
 
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     return f"""
@@ -13500,8 +13533,17 @@ def app(environ, start_response):
             )
             return redirect(start_response, f"/contracts/{contract_id}/construction?owner={current_owner}")
         except Exception as exc:
-            body = render_contract_construction_page(storage, current_owner, contract_id, current_user, f"Не удалось добавить строительный отчет: {exc}")
-            html = layout("Строительный раздел", body, owners, current_owner, "contracts", current_user)
+            body = render_new_construction_report_page(storage, current_owner, contract_id, current_user, f"Не удалось добавить строительный отчет: {exc}")
+            html = layout(
+                "Добавить строительный отчет",
+                body,
+                owners,
+                current_owner,
+                "contracts",
+                current_user,
+                hero_title_override="Добавить строительный отчет",
+                hero_copy_override="Форма ежедневного отчета по работам, людям на объекте и фотофиксации.",
+            )
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
@@ -13981,6 +14023,33 @@ def app(environ, start_response):
             current_user,
             hero_title_override="Хронология контракта",
             hero_copy_override="Единый журнал всех ключевых действий по контракту.",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/") and path.endswith("/construction/reports/new") and method == "GET":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        if not can_edit_construction_reports(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        try:
+            contract_id = int(path.split("/")[2])
+        except ValueError:
+            contract_id = -1
+        body = render_new_construction_report_page(storage, current_owner, contract_id, current_user)
+        html = layout(
+            "Добавить строительный отчет",
+            body,
+            owners,
+            current_owner,
+            "contracts",
+            current_user,
+            hero_title_override="Добавить строительный отчет",
+            hero_copy_override="Форма ежедневного отчета по работам, людям на объекте и фотофиксации.",
         )
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
