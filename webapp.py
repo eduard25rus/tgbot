@@ -831,6 +831,14 @@ def can_edit_legal_correspondence(current_user: dict | None) -> bool:
     return has_permission(current_user, "contracts", "edit")
 
 
+def can_view_contract_meetings(current_user: dict | None) -> bool:
+    return has_permission(current_user, "contracts", "view")
+
+
+def can_edit_contract_meetings(current_user: dict | None) -> bool:
+    return has_permission(current_user, "contracts", "edit")
+
+
 def can_view_contract_timeline(current_user: dict | None) -> bool:
     return has_active_admin_mode(current_user) or is_management_user(current_user)
 
@@ -1768,6 +1776,38 @@ def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user:
     """
 
 
+def render_contract_meeting_editor(owner_chat_id: int, contract_id: int, meeting, current_user: dict | None) -> str:
+    summary_html = f'<div class="legal-letter-topic">{escape(meeting.summary or "Без саммери")}</div>'
+    attendees_html = f'<div class="contract-table-subtle">{escape(meeting.attendees)}</div>' if meeting.attendees else ''
+    if not can_edit_contract_meetings(current_user):
+        return f"{summary_html}{attendees_html}"
+    return f"""
+    <details class="status-menu">
+      <summary>
+        {summary_html}
+        {attendees_html}
+      </summary>
+      <div class="status-popover" style="min-width:420px;">
+        <form class="form-grid" method="post" action="/contracts/meetings/{meeting.id}/update?owner={owner_chat_id}&contract_id={contract_id}">
+          <div class="field">
+            <label>Дата встречи</label>
+            <input type="date" name="meeting_date" value="{meeting.meeting_date.isoformat()}" required>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Саммери</label>
+            <textarea name="summary" required>{escape(meeting.summary)}</textarea>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Присутствующие</label>
+            <textarea name="attendees" placeholder="Например, Эдуард, Денис, представитель заказчика">{escape(meeting.attendees)}</textarea>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить встречу</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
 def render_contract_identity_block(owner_chat_id: int, contract, current_user: dict | None, total_amount: float) -> str:
     contract_number = contract.contract_number.strip() or "Не указан"
     nmck_label = format_amount(contract.nmck_amount) if contract.nmck_amount > 0 else "Не указана"
@@ -1852,6 +1892,10 @@ def contract_timeline_badge(item: dict) -> str:
         return '<span class="chip danger">Входящее</span>'
     if kind == "legal_outgoing":
         return '<span class="chip ok">Исходящее</span>'
+    if kind == "meeting":
+        return '<span class="chip warn">Встреча</span>'
+    if kind == "meeting_update":
+        return '<span class="chip">Изменение</span>'
     if kind == "invoice":
         return '<span class="chip warn">Счет</span>'
     if kind == "stage_status":
@@ -1871,6 +1915,7 @@ def build_contract_timeline_items(storage: Storage, owner_chat_id: int, contract
     logged_events = storage.list_contract_events(owner_chat_id, contract_id)
     stages = storage.list_stages_for_contract(owner_chat_id, contract_id)
     legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract_id)
+    meetings = storage.list_contract_meetings_for_contract(owner_chat_id, contract_id)
     payments = storage.list_payments_for_contract(owner_chat_id, contract_id)
 
     logged_refs = {
@@ -1907,6 +1952,25 @@ def build_contract_timeline_items(storage: Storage, owner_chat_id: int, contract
                 "kind": "legal_incoming" if letter.direction == "incoming" else "legal_outgoing",
                 "badge_label": direction_label,
                 "badge_css": badge_class,
+            }
+        )
+
+    for meeting in meetings:
+        source_ref = str(meeting.id)
+        if ("contract_meeting_create", source_ref) in logged_refs:
+            continue
+        meeting_description = meeting.summary.strip()
+        if meeting.attendees.strip():
+            meeting_description = f"{meeting_description}\nПрисутствующие: {meeting.attendees.strip()}" if meeting_description else f"Присутствующие: {meeting.attendees.strip()}"
+        timeline_items.append(
+            {
+                "sort_date": meeting.meeting_date,
+                "title": "Встреча руководства",
+                "description": meeting_description,
+                "actor_name": meeting.created_by_name.strip() or "Автор неизвестен",
+                "kind": "meeting",
+                "badge_label": "Встреча",
+                "badge_css": "chip warn",
             }
         )
 
@@ -6441,6 +6505,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
     ) or '<tr><td colspan="2">Оплат пока нет.</td></tr>'
     legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract.id) if can_view_legal_correspondence(current_user) else []
     legal_attachments = storage.list_legal_letter_attachments_for_contract(owner_chat_id, contract.id) if can_view_legal_correspondence(current_user) else []
+    contract_meetings = storage.list_contract_meetings_for_contract(owner_chat_id, contract.id) if can_view_contract_meetings(current_user) else []
     attachment_map: dict[int, list] = {}
     for attachment in legal_attachments:
         attachment_map.setdefault(attachment.letter_id, []).append(attachment)
@@ -6478,14 +6543,58 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         for letter in legal_letters
     ) or '<tr><td colspan="5">Юридических писем пока нет.</td></tr>'
     legal_section_html = ""
+    meetings_section_html = ""
     if can_view_legal_correspondence(current_user):
+        add_letter_button = ""
+        if can_edit_legal_correspondence(current_user):
+            add_letter_button = f'''
+              <details class="status-menu">
+                <summary><span class="secondary-btn">Добавить письмо</span></summary>
+                <div class="status-popover" style="min-width:520px;">
+                  <form class="form-grid" method="post" action="/contracts/{contract.id}/letters/new?owner={owner_chat_id}" enctype="multipart/form-data">
+                    <div class="field">
+                      <label>Тип письма</label>
+                      <select name="direction" required>
+                        <option value="outgoing">Исходящее</option>
+                        <option value="incoming">Входящее</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Канал</label>
+                      <select name="source_channel" required>
+                        <option value="mail">Почта</option>
+                        <option value="eis">ЕИС</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Дата письма</label>
+                      <input type="date" name="letter_date" required>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>О чем письмо</label>
+                      <input type="text" name="subject" placeholder="Например, просьба согласовать замену материалов" required>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Комментарий</label>
+                      <textarea name="comment" placeholder="Коротко зафиксируйте суть переписки"></textarea>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Файлы письма</label>
+                      <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" multiple required>
+                    </div>
+                    <button class="submit-btn" type="submit">Добавить письмо</button>
+                  </form>
+                </div>
+              </details>
+            '''
         legal_section_html = f"""
         <section class="card panel" style="margin-top:22px;">
           <div class="panel-head">
             <div>
               <h2 class="panel-title">Юридическая переписка</h2>
-              <div class="panel-sub">Входящие и исходящие письма по контракту с PDF-вложениями.</div>
+              <div class="panel-sub">Входящие и исходящие письма по контракту с вложениями.</div>
             </div>
+            {add_letter_button}
           </div>
           <table class="table contract-table">
             <thead>
@@ -6493,55 +6602,75 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
                 <th class="nowrap">Тип</th>
                 <th class="nowrap">Дата</th>
                 <th>О чем письмо</th>
-                <th class="nowrap">PDF</th>
+                <th class="nowrap">Файлы</th>
                 <th class="nowrap">Добавил</th>
               </tr>
             </thead>
             <tbody>{legal_letters_html}</tbody>
           </table>
-          {f'''
-          <section class="card panel" style="margin-top:18px; background:rgba(255,255,255,0.28);">
-            <div class="panel-head">
-              <div>
-                <h3 class="panel-title" style="font-size:22px;">Добавить письмо</h3>
-                <div class="panel-sub">Зафиксируйте входящее или исходящее письмо и прикрепите PDF.</div>
-              </div>
+        </section>
+        """
+
+    meetings_rows_html = "".join(
+        f"""
+        <tr>
+          <td class="nowrap">{format_date(meeting.meeting_date)}</td>
+          <td>{render_contract_meeting_editor(owner_chat_id, contract.id, meeting, current_user)}</td>
+          <td>{escape(meeting.attendees) if meeting.attendees else "—"}</td>
+          <td>
+            <div class="contract-table-subtle">{escape(meeting.created_by_name.strip() or 'Автор неизвестен')}</div>
+            <div class="contract-table-subtle">{format_date(meeting.created_at.astimezone(VLADIVOSTOK_TZ).date() if meeting.created_at.tzinfo else meeting.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
+          </td>
+        </tr>
+        """
+        for meeting in contract_meetings
+    ) or '<tr><td colspan="4">Встреч пока нет.</td></tr>'
+
+    if can_view_contract_meetings(current_user):
+        add_meeting_button = ""
+        if can_edit_contract_meetings(current_user):
+            add_meeting_button = f'''
+              <details class="status-menu">
+                <summary><span class="secondary-btn">Добавить встречу</span></summary>
+                <div class="status-popover" style="min-width:520px;">
+                  <form class="form-grid" method="post" action="/contracts/{contract.id}/meetings/new?owner={owner_chat_id}">
+                    <div class="field">
+                      <label>Дата встречи</label>
+                      <input type="date" name="meeting_date" required>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Саммери</label>
+                      <textarea name="summary" placeholder="О чем договорились, ключевые решения" required></textarea>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Присутствующие</label>
+                      <textarea name="attendees" placeholder="Например, Эдуард, Денис, представитель заказчика"></textarea>
+                    </div>
+                    <button class="submit-btn" type="submit">Добавить встречу</button>
+                  </form>
+                </div>
+              </details>
+            '''
+        meetings_section_html = f"""
+        <section class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Встречи руководства</h2>
+              <div class="panel-sub">Ключевые встречи по контракту, чтобы фиксировать договоренности и решения.</div>
             </div>
-            <form class="form-grid" method="post" action="/contracts/{contract.id}/letters/new?owner={owner_chat_id}" enctype="multipart/form-data">
-              <div class="field">
-                <label>Тип письма</label>
-                <select name="direction" required>
-                  <option value="outgoing">Исходящее</option>
-                  <option value="incoming">Входящее</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Канал</label>
-                <select name="source_channel" required>
-                  <option value="mail">Почта</option>
-                  <option value="eis">ЕИС</option>
-                </select>
-              </div>
-              <div class="field">
-                <label>Дата письма</label>
-                <input type="date" name="letter_date" required>
-              </div>
-              <div class="field" style="grid-column: 1 / -1;">
-                <label>О чем письмо</label>
-                <input type="text" name="subject" placeholder="Например, просьба согласовать замену материалов" required>
-              </div>
-              <div class="field" style="grid-column: 1 / -1;">
-                <label>Комментарий</label>
-                <textarea name="comment" placeholder="Коротко зафиксируйте суть переписки"></textarea>
-              </div>
-              <div class="field" style="grid-column: 1 / -1;">
-                <label>Файлы письма</label>
-                <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" multiple required>
-              </div>
-              <button class="submit-btn" type="submit">Добавить письмо</button>
-            </form>
-          </section>
-          ''' if can_edit_legal_correspondence(current_user) else ''}
+            {add_meeting_button}
+          </div>
+          <table class="table contract-table">
+            <thead>
+              <tr>
+                <th class="nowrap">Дата</th>
+                <th>Саммери</th>
+                <th class="nowrap">Присутствующие</th>
+                <th class="nowrap">Добавил</th>
+              </tr>
+            </thead>
+            <tbody>{meetings_rows_html}</tbody>
+          </table>
         </section>
         """
 
@@ -6609,7 +6738,8 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <tbody>{stages_html}</tbody>
       </table>
     </section>
-    {legal_section_html}
+        {legal_section_html}
+        {meetings_section_html}
     <section class="grid" style="margin-top:22px;">
       <section class="card panel">
         <div class="panel-head">
@@ -12950,6 +13080,112 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
+    if path.startswith("/contracts/") and path.endswith("/meetings/new") and method == "POST":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        if not can_edit_contract_meetings(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        contract_id = -1
+        try:
+            contract_id = int(path.split("/")[2])
+            contract = storage.get_contract(current_owner, contract_id)
+            if contract is None:
+                raise ValueError("Контракт не найден")
+            form = read_post_data(environ)
+            meeting_date_raw = form.get("meeting_date", "").strip()
+            if not meeting_date_raw:
+                raise ValueError("Укажите дату встречи")
+            summary = form.get("summary", "").strip()
+            if not summary:
+                raise ValueError("Укажите саммери встречи")
+            attendees = form.get("attendees", "").strip()
+            meeting_date = parse_date(meeting_date_raw)
+            actor_name = current_user.get("full_name", "").strip() if current_user else ""
+            created = storage.add_contract_meeting(
+                current_owner,
+                contract_id,
+                meeting_date,
+                summary,
+                attendees,
+                current_user.get("id") if current_user else None,
+                actor_name,
+            )
+            if created is None:
+                raise ValueError("Не удалось сохранить встречу")
+            description = summary
+            if attendees:
+                description = f"{description}\nПрисутствующие: {attendees}"
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                meeting_date,
+                "meeting",
+                "Встреча руководства",
+                description=description,
+                actor_name=actor_name,
+                source_kind="contract_meeting_create",
+                source_ref=str(created),
+            )
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить встречу: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/contracts/meetings/") and path.endswith("/update") and method == "POST":
+        denied = guard("contracts", "edit")
+        if denied:
+            return denied
+        if not can_edit_contract_meetings(current_user):
+            body = render_forbidden_body("Контракты")
+            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        contract_id = -1
+        try:
+            meeting_id = int(path.split("/")[3])
+            contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0] or "0")
+            meeting = storage.get_contract_meeting(current_owner, meeting_id)
+            if meeting is None:
+                raise ValueError("Встреча не найдена")
+            contract_id = contract_id or meeting.contract_id
+            form = read_post_data(environ)
+            meeting_date_raw = form.get("meeting_date", "").strip()
+            if not meeting_date_raw:
+                raise ValueError("Укажите дату встречи")
+            summary = form.get("summary", "").strip()
+            if not summary:
+                raise ValueError("Укажите саммери встречи")
+            attendees = form.get("attendees", "").strip()
+            meeting_date = parse_date(meeting_date_raw)
+            if not storage.update_contract_meeting(current_owner, meeting_id, meeting_date, summary, attendees):
+                raise ValueError("Не удалось обновить встречу")
+            description = summary
+            if attendees:
+                description = f"{description}\nПрисутствующие: {attendees}"
+            storage.add_contract_event(
+                current_owner,
+                contract_id,
+                meeting_date,
+                "meeting_update",
+                "Обновлена встреча руководства",
+                description=description,
+                actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                source_kind="contract_meeting_update",
+                source_ref=f"{meeting_id}:{meeting_date.isoformat()}",
+            )
+            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить встречу: {exc}")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
     if path.startswith("/contracts/letter-files/") and path.endswith("/delete") and method == "POST":
         denied = guard("contracts", "edit")
         if denied:
@@ -13202,6 +13438,8 @@ def app(environ, start_response):
                 "stage_status": "Статус этапа",
                 "payment": "Оплата",
                 "letter_update": "Изменение письма",
+                "meeting": "Встреча",
+                "meeting_update": "Изменение встречи",
                 "stage": "Этап",
             }.get(item.get("kind", ""), "Событие")
             writer.writerow(

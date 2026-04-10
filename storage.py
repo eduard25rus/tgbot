@@ -99,6 +99,21 @@ class LegalLetterAttachment:
 
 
 @dataclass
+class ContractMeeting:
+    id: int
+    contract_id: int
+    meeting_date: date
+    summary: str
+    attendees: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+    updated_at: datetime
+    contract_title: str
+    chat_id: int
+
+
+@dataclass
 class ContractEvent:
     id: int
     chat_id: int
@@ -412,6 +427,19 @@ class Storage:
                     FOREIGN KEY(letter_id) REFERENCES legal_letters(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS contract_meetings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    contract_id INTEGER NOT NULL,
+                    meeting_date TEXT NOT NULL,
+                    summary TEXT NOT NULL DEFAULT '',
+                    attendees TEXT NOT NULL DEFAULT '',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS contract_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER NOT NULL,
@@ -656,6 +684,9 @@ class Storage:
             legal_letter_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(legal_letters)").fetchall()
             }
+            meeting_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(contract_meetings)").fetchall()
+            }
             task_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
             }
@@ -775,6 +806,18 @@ class Storage:
                     conn.execute(f"ALTER TABLE finance_entries ADD COLUMN {column_name} {column_def}")
             if "source_channel" not in legal_letter_columns:
                 conn.execute("ALTER TABLE legal_letters ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'mail'")
+            meeting_alters = [
+                ("meeting_date", "TEXT NOT NULL DEFAULT ''"),
+                ("summary", "TEXT NOT NULL DEFAULT ''"),
+                ("attendees", "TEXT NOT NULL DEFAULT ''"),
+                ("created_by_user_id", "INTEGER"),
+                ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
+                ("created_at", "TEXT NOT NULL DEFAULT ''"),
+                ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in meeting_alters:
+                if column_name and column_name not in meeting_columns:
+                    conn.execute(f"ALTER TABLE contract_meetings ADD COLUMN {column_name} {column_def}")
             if "assignee_kind" not in task_columns:
                 conn.execute("ALTER TABLE tasks ADD COLUMN assignee_kind TEXT NOT NULL DEFAULT 'user'")
             if "assignee_role_code" not in task_columns:
@@ -2394,6 +2437,78 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def add_contract_meeting(
+        self,
+        chat_id: int,
+        contract_id: int,
+        meeting_date: date,
+        summary: str,
+        attendees: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int | None:
+        with self.connection() as conn:
+            contract = conn.execute(
+                """
+                SELECT id
+                FROM contracts
+                WHERE id = ? AND chat_id = ?
+                """,
+                (contract_id, chat_id),
+            ).fetchone()
+            if contract is None:
+                return None
+            now = datetime.utcnow().isoformat()
+            cursor = conn.execute(
+                """
+                INSERT INTO contract_meetings (
+                    contract_id, meeting_date, summary, attendees,
+                    created_by_user_id, created_by_name, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    contract_id,
+                    meeting_date.strftime(DATE_FMT),
+                    summary.strip(),
+                    attendees.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    now,
+                    now,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def update_contract_meeting(
+        self,
+        chat_id: int,
+        meeting_id: int,
+        meeting_date: date,
+        summary: str,
+        attendees: str,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE contract_meetings
+                SET meeting_date = ?, summary = ?, attendees = ?, updated_at = ?
+                WHERE id = ?
+                  AND contract_id IN (
+                      SELECT id FROM contracts WHERE chat_id = ?
+                  )
+                """,
+                (
+                    meeting_date.strftime(DATE_FMT),
+                    summary.strip(),
+                    attendees.strip(),
+                    datetime.utcnow().isoformat(),
+                    meeting_id,
+                    chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
     def get_payment(self, chat_id: int, payment_id: int) -> Payment | None:
         with self.connection() as conn:
             row = conn.execute(
@@ -2422,6 +2537,21 @@ class Storage:
                 (chat_id, letter_id),
             ).fetchone()
         return self._legal_letter_from_row(row) if row else None
+
+    def get_contract_meeting(self, chat_id: int, meeting_id: int) -> ContractMeeting | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.attendees,
+                       m.created_by_user_id, m.created_by_name, m.created_at, m.updated_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM contract_meetings m
+                JOIN contracts c ON c.id = m.contract_id
+                WHERE c.chat_id = ? AND m.id = ?
+                """,
+                (chat_id, meeting_id),
+            ).fetchone()
+        return self._contract_meeting_from_row(row) if row else None
 
     def get_legal_letter_attachment(self, chat_id: int, attachment_id: int) -> LegalLetterAttachment | None:
         with self.connection() as conn:
@@ -2514,6 +2644,22 @@ class Storage:
                 (chat_id, contract_id),
             ).fetchall()
         return [self._legal_letter_from_row(row) for row in rows]
+
+    def list_contract_meetings_for_contract(self, chat_id: int, contract_id: int) -> list[ContractMeeting]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.attendees,
+                       m.created_by_user_id, m.created_by_name, m.created_at, m.updated_at,
+                       c.title AS contract_title, c.chat_id AS chat_id
+                FROM contract_meetings m
+                JOIN contracts c ON c.id = m.contract_id
+                WHERE c.chat_id = ? AND c.id = ?
+                ORDER BY m.meeting_date DESC, m.id DESC
+                """,
+                (chat_id, contract_id),
+            ).fetchall()
+        return [self._contract_meeting_from_row(row) for row in rows]
 
     def list_legal_letter_attachments_for_contract(self, chat_id: int, contract_id: int) -> list[LegalLetterAttachment]:
         with self.connection() as conn:
@@ -2798,6 +2944,22 @@ class Storage:
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
             created_by_name=row["created_by_name"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
+            contract_title=row["contract_title"],
+            chat_id=row["chat_id"],
+        )
+
+    @staticmethod
+    def _contract_meeting_from_row(row: sqlite3.Row) -> ContractMeeting:
+        return ContractMeeting(
+            id=row["id"],
+            contract_id=row["contract_id"],
+            meeting_date=date.fromisoformat(row["meeting_date"]) if row["meeting_date"] else date.today(),
+            summary=row["summary"] or "",
+            attendees=row["attendees"] or "",
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],
         )
