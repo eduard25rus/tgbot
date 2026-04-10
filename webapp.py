@@ -1856,11 +1856,17 @@ def render_contract_identity_block(owner_chat_id: int, contract, current_user: d
     nmck_label = format_amount(contract.nmck_amount) if contract.nmck_amount > 0 else "Не указана"
     reduction_percent = round(((contract.nmck_amount - total_amount) / contract.nmck_amount) * 100, 2) if contract.nmck_amount > 0 else 0.0
     reduction_label = f"-{format_percent(reduction_percent)}" if reduction_percent > 0 else "0,0%"
+    eis_link = (
+        f'<a class="secondary-btn mini contract-eis-inline" href="{escape(contract.eis_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Смотреть на ЕИС</a>'
+        if contract.eis_url
+        else ""
+    )
     display = f"""
     <div class="contract-table-subtle" style="margin-top:6px;">Контракт № {escape(contract_number)}</div>
     <div class="contract-table-subtle" style="margin-top:6px; display:flex; gap:18px; flex-wrap:wrap;">
       <span>НМЦК: {escape(nmck_label)}</span>
       <span>Процент снижения: {escape(reduction_label)}</span>
+      {eis_link}
     </div>
     """
     if not can_edit_contract_stage_controls(current_user):
@@ -5133,6 +5139,13 @@ def layout(
       margin-top: 6px;
       width: max-content;
     }}
+    .contract-eis-inline {{
+      margin-top: -4px !important;
+      padding: 5px 11px !important;
+      font-size: 11px !important;
+      border-radius: 999px !important;
+      text-decoration: none;
+    }}
     .secondary-btn.danger {{
       color: #fff;
       border-color: rgba(184,50,50,0.35);
@@ -6934,7 +6947,6 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <span class="chip">Оплат: {len(payload["payments"])}</span>
         {f'<a class="secondary-btn" href="/contracts/{contract.id}/timeline?owner={owner_chat_id}">Хронология</a>' if can_view_contract_timeline(current_user) else ''}
         {f'<a class="secondary-btn" href="/contracts/{contract.id}/construction?owner={owner_chat_id}">Строительный раздел</a>' if can_view_construction_reports(current_user) else ''}
-        {f'<a class="secondary-btn info-row-end" href="{escape(contract.eis_url)}" target="_blank" rel="noopener">Смотреть на ЕИС</a>' if contract.eis_url else ''}
       </div>
     </section>
     <section class="stats">
