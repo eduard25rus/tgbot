@@ -1822,7 +1822,7 @@ def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user:
 def render_contract_meeting_editor(owner_chat_id: int, contract_id: int, meeting, current_user: dict | None) -> str:
     contractor_attendees = (meeting.contractor_attendees or meeting.attendees or "").strip()
     customer_attendees = (meeting.customer_attendees or "").strip()
-    summary_html = f'<div class="contract-table-subtle" style="font-size:16px; line-height:1.45; color:var(--ink);">{escape(meeting.summary or "Без саммери")}</div>'
+    summary_html = f'<div class="contract-table-subtle" style="font-size:14px; line-height:1.5; color:var(--ink);">{escape(meeting.summary or "Без саммери")}</div>'
     attendees_html = f"""
       <div class="contract-table-subtle" style="margin-top:10px;">
         <div><strong>От подрядчика:</strong> {escape(contractor_attendees) if contractor_attendees else '—'}</div>
