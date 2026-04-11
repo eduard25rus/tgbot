@@ -1822,9 +1822,11 @@ def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user:
 def render_contract_meeting_editor(owner_chat_id: int, contract_id: int, meeting, current_user: dict | None) -> str:
     contractor_attendees = (meeting.contractor_attendees or meeting.attendees or "").strip()
     customer_attendees = (meeting.customer_attendees or "").strip()
+    location = (meeting.location or "").strip()
     summary_html = f'<div class="contract-table-subtle" style="font-size:14px; line-height:1.5; color:var(--ink);">{escape(meeting.summary or "Без саммери")}</div>'
     attendees_html = f"""
       <div class="contract-table-subtle" style="margin-top:10px;">
+        <div><strong>Место встречи:</strong> {escape(location) if location else '—'}</div>
         <div><strong>От подрядчика:</strong> {escape(contractor_attendees) if contractor_attendees else '—'}</div>
         <div><strong>От заказчика:</strong> {escape(customer_attendees) if customer_attendees else '—'}</div>
       </div>
@@ -1846,6 +1848,10 @@ def render_contract_meeting_editor(owner_chat_id: int, contract_id: int, meeting
           <div class="field" style="grid-column: 1 / -1;">
             <label>Саммери</label>
             <textarea name="summary" required>{escape(meeting.summary)}</textarea>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Место встречи</label>
+            <input type="text" name="location" value="{escape(location)}" placeholder="Например, офис заказчика / объект / Zoom">
           </div>
           <div class="field" style="grid-column: 1 / -1;">
             <label>От подрядчика</label>
@@ -2023,8 +2029,11 @@ def build_contract_timeline_items(storage: Storage, owner_chat_id: int, contract
         if ("contract_meeting_create", source_ref) in logged_refs:
             continue
         meeting_description = meeting.summary.strip()
+        location = (meeting.location or "").strip()
         contractor_attendees = (meeting.contractor_attendees or meeting.attendees or "").strip()
         customer_attendees = (meeting.customer_attendees or "").strip()
+        if location:
+            meeting_description = f"{meeting_description}\nМесто встречи: {location}" if meeting_description else f"Место встречи: {location}"
         if contractor_attendees:
             meeting_description = f"{meeting_description}\nОт подрядчика: {contractor_attendees}" if meeting_description else f"От подрядчика: {contractor_attendees}"
         if customer_attendees:
@@ -6943,6 +6952,10 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
                     <div class="field" style="grid-column: 1 / -1;">
                       <label>Саммери</label>
                       <textarea name="summary" placeholder="О чем договорились, ключевые решения" required></textarea>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Место встречи</label>
+                      <input type="text" name="location" placeholder="Например, офис заказчика / объект / Zoom">
                     </div>
                     <div class="field" style="grid-column: 1 / -1;">
                       <label>От подрядчика</label>
@@ -13407,6 +13420,7 @@ def app(environ, start_response):
             summary = form.get("summary", "").strip()
             if not summary:
                 raise ValueError("Укажите саммери встречи")
+            location = form.get("location", "").strip()
             contractor_attendees = form.get("contractor_attendees", "").strip()
             customer_attendees = form.get("customer_attendees", "").strip()
             attendees = "\n".join(
@@ -13423,6 +13437,7 @@ def app(environ, start_response):
                 contract_id,
                 meeting_date,
                 summary,
+                location,
                 attendees,
                 contractor_attendees,
                 customer_attendees,
@@ -13432,6 +13447,8 @@ def app(environ, start_response):
             if created is None:
                 raise ValueError("Не удалось сохранить встречу")
             description = summary
+            if location:
+                description = f"{description}\nМесто встречи: {location}"
             if contractor_attendees:
                 description = f"{description}\nОт подрядчика: {contractor_attendees}"
             if customer_attendees:
@@ -13478,6 +13495,7 @@ def app(environ, start_response):
             summary = form.get("summary", "").strip()
             if not summary:
                 raise ValueError("Укажите саммери встречи")
+            location = form.get("location", "").strip()
             contractor_attendees = form.get("contractor_attendees", "").strip()
             customer_attendees = form.get("customer_attendees", "").strip()
             attendees = "\n".join(
@@ -13488,9 +13506,11 @@ def app(environ, start_response):
                 if item
             )
             meeting_date = parse_date(meeting_date_raw)
-            if not storage.update_contract_meeting(current_owner, meeting_id, meeting_date, summary, attendees, contractor_attendees, customer_attendees):
+            if not storage.update_contract_meeting(current_owner, meeting_id, meeting_date, summary, location, attendees, contractor_attendees, customer_attendees):
                 raise ValueError("Не удалось обновить встречу")
             description = summary
+            if location:
+                description = f"{description}\nМесто встречи: {location}"
             if contractor_attendees:
                 description = f"{description}\nОт подрядчика: {contractor_attendees}"
             if customer_attendees:

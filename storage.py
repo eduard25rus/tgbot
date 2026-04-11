@@ -104,6 +104,7 @@ class ContractMeeting:
     contract_id: int
     meeting_date: date
     summary: str
+    location: str
     attendees: str
     contractor_attendees: str
     customer_attendees: str
@@ -462,6 +463,7 @@ class Storage:
                     contract_id INTEGER NOT NULL,
                     meeting_date TEXT NOT NULL,
                     summary TEXT NOT NULL DEFAULT '',
+                    location TEXT NOT NULL DEFAULT '',
                     attendees TEXT NOT NULL DEFAULT '',
                     contractor_attendees TEXT NOT NULL DEFAULT '',
                     customer_attendees TEXT NOT NULL DEFAULT '',
@@ -867,6 +869,7 @@ class Storage:
             meeting_alters = [
                 ("meeting_date", "TEXT NOT NULL DEFAULT ''"),
                 ("summary", "TEXT NOT NULL DEFAULT ''"),
+                ("location", "TEXT NOT NULL DEFAULT ''"),
                 ("attendees", "TEXT NOT NULL DEFAULT ''"),
                 ("contractor_attendees", "TEXT NOT NULL DEFAULT ''"),
                 ("customer_attendees", "TEXT NOT NULL DEFAULT ''"),
@@ -2525,6 +2528,7 @@ class Storage:
         contract_id: int,
         meeting_date: date,
         summary: str,
+        location: str,
         attendees: str,
         contractor_attendees: str,
         customer_attendees: str,
@@ -2546,15 +2550,16 @@ class Storage:
             cursor = conn.execute(
                 """
                 INSERT INTO contract_meetings (
-                    contract_id, meeting_date, summary, attendees, contractor_attendees, customer_attendees,
+                    contract_id, meeting_date, summary, location, attendees, contractor_attendees, customer_attendees,
                     created_by_user_id, created_by_name, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     contract_id,
                     meeting_date.strftime(DATE_FMT),
                     summary.strip(),
+                    location.strip(),
                     attendees.strip(),
                     contractor_attendees.strip(),
                     customer_attendees.strip(),
@@ -2572,6 +2577,7 @@ class Storage:
         meeting_id: int,
         meeting_date: date,
         summary: str,
+        location: str,
         attendees: str,
         contractor_attendees: str,
         customer_attendees: str,
@@ -2580,7 +2586,7 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE contract_meetings
-                SET meeting_date = ?, summary = ?, attendees = ?, contractor_attendees = ?, customer_attendees = ?, updated_at = ?
+                SET meeting_date = ?, summary = ?, location = ?, attendees = ?, contractor_attendees = ?, customer_attendees = ?, updated_at = ?
                 WHERE id = ?
                   AND contract_id IN (
                       SELECT id FROM contracts WHERE chat_id = ?
@@ -2589,6 +2595,7 @@ class Storage:
                 (
                     meeting_date.strftime(DATE_FMT),
                     summary.strip(),
+                    location.strip(),
                     attendees.strip(),
                     contractor_attendees.strip(),
                     customer_attendees.strip(),
@@ -2730,7 +2737,7 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.attendees, m.contractor_attendees, m.customer_attendees,
+                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.location, m.attendees, m.contractor_attendees, m.customer_attendees,
                        m.created_by_user_id, m.created_by_name, m.created_at, m.updated_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM contract_meetings m
@@ -2867,7 +2874,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.attendees, m.contractor_attendees, m.customer_attendees,
+                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.location, m.attendees, m.contractor_attendees, m.customer_attendees,
                        m.created_by_user_id, m.created_by_name, m.created_at, m.updated_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM contract_meetings m
@@ -3205,6 +3212,7 @@ class Storage:
             contract_id=row["contract_id"],
             meeting_date=date.fromisoformat(row["meeting_date"]) if row["meeting_date"] else date.today(),
             summary=row["summary"] or "",
+            location=row["location"] or "",
             attendees=row["attendees"] or "",
             contractor_attendees=row["contractor_attendees"] or row["attendees"] or "",
             customer_attendees=row["customer_attendees"] or "",
