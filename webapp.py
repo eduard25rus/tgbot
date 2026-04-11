@@ -3399,7 +3399,10 @@ def render_auction_row(item, owner_chat_id: int, active_tab: str, row_number: in
         item.submit_decision_status not in {"submitted", "rejected"}
         and days_left <= 2
     )
-    if not show_deadline_note:
+    if active_tab in {"archive", "deleted"}:
+        deadline_note = ""
+        is_deadline_danger = False
+    elif not show_deadline_note:
         deadline_note = ""
     elif item.submit_decision_status not in {"submitted", "rejected"} and days_left <= 0:
         deadline_note = "Просрочен"
