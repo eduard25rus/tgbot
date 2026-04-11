@@ -1820,8 +1820,15 @@ def render_contract_signed_date_chip(owner_chat_id: int, contract, current_user:
 
 
 def render_contract_meeting_editor(owner_chat_id: int, contract_id: int, meeting, current_user: dict | None) -> str:
-    summary_html = f'<div class="legal-letter-topic">{escape(meeting.summary or "Без саммери")}</div>'
-    attendees_html = f'<div class="contract-table-subtle">{escape(meeting.attendees)}</div>' if meeting.attendees else ''
+    contractor_attendees = (meeting.contractor_attendees or meeting.attendees or "").strip()
+    customer_attendees = (meeting.customer_attendees or "").strip()
+    summary_html = f'<div class="contract-table-subtle" style="font-size:16px; line-height:1.45; color:var(--ink);">{escape(meeting.summary or "Без саммери")}</div>'
+    attendees_html = f"""
+      <div class="contract-table-subtle" style="margin-top:10px;">
+        <div><strong>От подрядчика:</strong> {escape(contractor_attendees) if contractor_attendees else '—'}</div>
+        <div><strong>От заказчика:</strong> {escape(customer_attendees) if customer_attendees else '—'}</div>
+      </div>
+    """
     if not can_edit_contract_meetings(current_user):
         return f"{summary_html}{attendees_html}"
     return f"""
@@ -1841,8 +1848,12 @@ def render_contract_meeting_editor(owner_chat_id: int, contract_id: int, meeting
             <textarea name="summary" required>{escape(meeting.summary)}</textarea>
           </div>
           <div class="field" style="grid-column: 1 / -1;">
-            <label>Присутствующие</label>
-            <textarea name="attendees" placeholder="Например, Эдуард, Денис, представитель заказчика">{escape(meeting.attendees)}</textarea>
+            <label>От подрядчика</label>
+            <textarea name="contractor_attendees" placeholder="Например, Эдуард, Денис">{escape(contractor_attendees)}</textarea>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>От заказчика</label>
+            <textarea name="customer_attendees" placeholder="Например, представитель заказчика, технадзор">{escape(customer_attendees)}</textarea>
           </div>
           <button class="submit-btn" type="submit">Сохранить встречу</button>
         </form>
@@ -2012,8 +2023,12 @@ def build_contract_timeline_items(storage: Storage, owner_chat_id: int, contract
         if ("contract_meeting_create", source_ref) in logged_refs:
             continue
         meeting_description = meeting.summary.strip()
-        if meeting.attendees.strip():
-            meeting_description = f"{meeting_description}\nПрисутствующие: {meeting.attendees.strip()}" if meeting_description else f"Присутствующие: {meeting.attendees.strip()}"
+        contractor_attendees = (meeting.contractor_attendees or meeting.attendees or "").strip()
+        customer_attendees = (meeting.customer_attendees or "").strip()
+        if contractor_attendees:
+            meeting_description = f"{meeting_description}\nОт подрядчика: {contractor_attendees}" if meeting_description else f"От подрядчика: {contractor_attendees}"
+        if customer_attendees:
+            meeting_description = f"{meeting_description}\nОт заказчика: {customer_attendees}" if meeting_description else f"От заказчика: {customer_attendees}"
         timeline_items.append(
             {
                 "sort_date": meeting.meeting_date,
@@ -6904,7 +6919,6 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <tr>
           <td class="nowrap">{format_date(meeting.meeting_date)}</td>
           <td>{render_contract_meeting_editor(owner_chat_id, contract.id, meeting, current_user)}</td>
-          <td>{escape(meeting.attendees) if meeting.attendees else "—"}</td>
           <td>
             <div class="contract-table-subtle">{escape(meeting.created_by_name.strip() or 'Автор неизвестен')}</div>
             <div class="contract-table-subtle">{format_date(meeting.created_at.astimezone(VLADIVOSTOK_TZ).date() if meeting.created_at.tzinfo else meeting.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
@@ -6912,7 +6926,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         </tr>
         """
         for meeting in contract_meetings
-    ) or '<tr><td colspan="4">Встреч пока нет.</td></tr>'
+    ) or '<tr><td colspan="3">Встреч пока нет.</td></tr>'
 
     if can_view_contract_meetings(current_user):
         add_meeting_button = ""
@@ -6931,8 +6945,12 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
                       <textarea name="summary" placeholder="О чем договорились, ключевые решения" required></textarea>
                     </div>
                     <div class="field" style="grid-column: 1 / -1;">
-                      <label>Присутствующие</label>
-                      <textarea name="attendees" placeholder="Например, Эдуард, Денис, представитель заказчика"></textarea>
+                      <label>От подрядчика</label>
+                      <textarea name="contractor_attendees" placeholder="Например, Эдуард, Денис"></textarea>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>От заказчика</label>
+                      <textarea name="customer_attendees" placeholder="Например, представитель заказчика, технадзор"></textarea>
                     </div>
                     <button class="submit-btn" type="submit">Добавить встречу</button>
                   </form>
@@ -6953,7 +6971,6 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
               <tr>
                 <th class="nowrap">Дата</th>
                 <th>Саммери</th>
-                <th class="nowrap">Присутствующие</th>
                 <th class="nowrap">Добавил</th>
               </tr>
             </thead>
@@ -13390,7 +13407,15 @@ def app(environ, start_response):
             summary = form.get("summary", "").strip()
             if not summary:
                 raise ValueError("Укажите саммери встречи")
-            attendees = form.get("attendees", "").strip()
+            contractor_attendees = form.get("contractor_attendees", "").strip()
+            customer_attendees = form.get("customer_attendees", "").strip()
+            attendees = "\n".join(
+                item for item in (
+                    f"От подрядчика: {contractor_attendees}" if contractor_attendees else "",
+                    f"От заказчика: {customer_attendees}" if customer_attendees else "",
+                )
+                if item
+            )
             meeting_date = parse_date(meeting_date_raw)
             actor_name = current_user.get("full_name", "").strip() if current_user else ""
             created = storage.add_contract_meeting(
@@ -13399,14 +13424,18 @@ def app(environ, start_response):
                 meeting_date,
                 summary,
                 attendees,
+                contractor_attendees,
+                customer_attendees,
                 current_user.get("id") if current_user else None,
                 actor_name,
             )
             if created is None:
                 raise ValueError("Не удалось сохранить встречу")
             description = summary
-            if attendees:
-                description = f"{description}\nПрисутствующие: {attendees}"
+            if contractor_attendees:
+                description = f"{description}\nОт подрядчика: {contractor_attendees}"
+            if customer_attendees:
+                description = f"{description}\nОт заказчика: {customer_attendees}"
             storage.add_contract_event(
                 current_owner,
                 contract_id,
@@ -13449,13 +13478,23 @@ def app(environ, start_response):
             summary = form.get("summary", "").strip()
             if not summary:
                 raise ValueError("Укажите саммери встречи")
-            attendees = form.get("attendees", "").strip()
+            contractor_attendees = form.get("contractor_attendees", "").strip()
+            customer_attendees = form.get("customer_attendees", "").strip()
+            attendees = "\n".join(
+                item for item in (
+                    f"От подрядчика: {contractor_attendees}" if contractor_attendees else "",
+                    f"От заказчика: {customer_attendees}" if customer_attendees else "",
+                )
+                if item
+            )
             meeting_date = parse_date(meeting_date_raw)
-            if not storage.update_contract_meeting(current_owner, meeting_id, meeting_date, summary, attendees):
+            if not storage.update_contract_meeting(current_owner, meeting_id, meeting_date, summary, attendees, contractor_attendees, customer_attendees):
                 raise ValueError("Не удалось обновить встречу")
             description = summary
-            if attendees:
-                description = f"{description}\nПрисутствующие: {attendees}"
+            if contractor_attendees:
+                description = f"{description}\nОт подрядчика: {contractor_attendees}"
+            if customer_attendees:
+                description = f"{description}\nОт заказчика: {customer_attendees}"
             storage.add_contract_event(
                 current_owner,
                 contract_id,

@@ -105,6 +105,8 @@ class ContractMeeting:
     meeting_date: date
     summary: str
     attendees: str
+    contractor_attendees: str
+    customer_attendees: str
     created_by_user_id: Optional[int]
     created_by_name: str
     created_at: datetime
@@ -461,6 +463,8 @@ class Storage:
                     meeting_date TEXT NOT NULL,
                     summary TEXT NOT NULL DEFAULT '',
                     attendees TEXT NOT NULL DEFAULT '',
+                    contractor_attendees TEXT NOT NULL DEFAULT '',
+                    customer_attendees TEXT NOT NULL DEFAULT '',
                     created_by_user_id INTEGER,
                     created_by_name TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -864,6 +868,8 @@ class Storage:
                 ("meeting_date", "TEXT NOT NULL DEFAULT ''"),
                 ("summary", "TEXT NOT NULL DEFAULT ''"),
                 ("attendees", "TEXT NOT NULL DEFAULT ''"),
+                ("contractor_attendees", "TEXT NOT NULL DEFAULT ''"),
+                ("customer_attendees", "TEXT NOT NULL DEFAULT ''"),
                 ("created_by_user_id", "INTEGER"),
                 ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
                 ("created_at", "TEXT NOT NULL DEFAULT ''"),
@@ -872,6 +878,15 @@ class Storage:
             for column_name, column_def in meeting_alters:
                 if column_name and column_name not in meeting_columns:
                     conn.execute(f"ALTER TABLE contract_meetings ADD COLUMN {column_name} {column_def}")
+            if "contractor_attendees" not in meeting_columns and "attendees" in meeting_columns:
+                conn.execute(
+                    """
+                    UPDATE contract_meetings
+                    SET contractor_attendees = COALESCE(NULLIF(attendees, ''), contractor_attendees)
+                    WHERE COALESCE(contractor_attendees, '') = ''
+                      AND COALESCE(attendees, '') != ''
+                    """
+                )
             construction_report_alters = [
                 ("report_date", "TEXT NOT NULL DEFAULT ''"),
                 ("work_description", "TEXT NOT NULL DEFAULT ''"),
@@ -2511,6 +2526,8 @@ class Storage:
         meeting_date: date,
         summary: str,
         attendees: str,
+        contractor_attendees: str,
+        customer_attendees: str,
         created_by_user_id: int | None,
         created_by_name: str,
     ) -> int | None:
@@ -2529,16 +2546,18 @@ class Storage:
             cursor = conn.execute(
                 """
                 INSERT INTO contract_meetings (
-                    contract_id, meeting_date, summary, attendees,
+                    contract_id, meeting_date, summary, attendees, contractor_attendees, customer_attendees,
                     created_by_user_id, created_by_name, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     contract_id,
                     meeting_date.strftime(DATE_FMT),
                     summary.strip(),
                     attendees.strip(),
+                    contractor_attendees.strip(),
+                    customer_attendees.strip(),
                     created_by_user_id,
                     created_by_name.strip(),
                     now,
@@ -2554,12 +2573,14 @@ class Storage:
         meeting_date: date,
         summary: str,
         attendees: str,
+        contractor_attendees: str,
+        customer_attendees: str,
     ) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE contract_meetings
-                SET meeting_date = ?, summary = ?, attendees = ?, updated_at = ?
+                SET meeting_date = ?, summary = ?, attendees = ?, contractor_attendees = ?, customer_attendees = ?, updated_at = ?
                 WHERE id = ?
                   AND contract_id IN (
                       SELECT id FROM contracts WHERE chat_id = ?
@@ -2569,6 +2590,8 @@ class Storage:
                     meeting_date.strftime(DATE_FMT),
                     summary.strip(),
                     attendees.strip(),
+                    contractor_attendees.strip(),
+                    customer_attendees.strip(),
                     datetime.utcnow().isoformat(),
                     meeting_id,
                     chat_id,
@@ -2707,7 +2730,7 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.attendees,
+                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.attendees, m.contractor_attendees, m.customer_attendees,
                        m.created_by_user_id, m.created_by_name, m.created_at, m.updated_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM contract_meetings m
@@ -2844,7 +2867,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.attendees,
+                SELECT m.id, m.contract_id, m.meeting_date, m.summary, m.attendees, m.contractor_attendees, m.customer_attendees,
                        m.created_by_user_id, m.created_by_name, m.created_at, m.updated_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM contract_meetings m
@@ -3183,6 +3206,8 @@ class Storage:
             meeting_date=date.fromisoformat(row["meeting_date"]) if row["meeting_date"] else date.today(),
             summary=row["summary"] or "",
             attendees=row["attendees"] or "",
+            contractor_attendees=row["contractor_attendees"] or row["attendees"] or "",
+            customer_attendees=row["customer_attendees"] or "",
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
             created_by_name=row["created_by_name"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
