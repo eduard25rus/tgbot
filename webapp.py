@@ -5708,6 +5708,12 @@ def layout(
     .auction-cell-center .chip {{
       max-width: 100%;
     }}
+    .auction-table td:nth-child(7) .chip {{
+      white-space: normal;
+      line-height: 1.15;
+      text-align: center;
+      overflow-wrap: anywhere;
+    }}
     .auction-cell-center .discount-value {{
       display: grid;
       width: 100%;
