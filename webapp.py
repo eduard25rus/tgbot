@@ -384,10 +384,11 @@ LEGAL_UPLOAD_MIME = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
+    ".webp": "image/webp",
     ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
-CONSTRUCTION_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+CONSTRUCTION_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 @dataclass
@@ -530,6 +531,10 @@ def detect_legal_file_type(file_path: Path, fallback_name: str) -> tuple[str, st
         if suffix not in {".jpg", ".jpeg"}:
             safe_filename = f"{Path(safe_filename).stem}.jpg"
         return safe_filename, "image/jpeg"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        if suffix != ".webp":
+            safe_filename = f"{Path(safe_filename).stem}.webp"
+        return safe_filename, "image/webp"
     if header.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
         if suffix != ".doc":
             safe_filename = f"{Path(safe_filename).stem}.doc"
@@ -657,7 +662,7 @@ def save_construction_report_photos(storage: Storage, owner_chat_id: int, contra
         original_name = upload.filename.strip()
         lower_name = original_name.lower()
         if not any(lower_name.endswith(ext) for ext in CONSTRUCTION_PHOTO_EXTENSIONS):
-            raise ValueError("В строительный отчет можно прикреплять только JPG, JPEG или PNG")
+            raise ValueError("В строительный отчет можно прикреплять только JPG, JPEG, PNG или WEBP")
         file_bytes = upload.data
         if not file_bytes:
             raise ValueError("Одна из фотографий пустая")
@@ -2260,7 +2265,7 @@ def render_construction_report_photos(owner_chat_id: int, contract_id: int, repo
         <form class="form-grid" method="post" action="/contracts/construction-reports/{report_id}/photos/new?owner={owner_chat_id}&contract_id={contract_id}" enctype="multipart/form-data">
           <div class="field" style="grid-column: 1 / -1;">
             <label>Фотографии</label>
-            <input type="file" name="report_photos" accept="image/jpeg,.jpg,.jpeg,image/png,.png" multiple required>
+            <input type="file" name="report_photos" accept="image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp" multiple required>
           </div>
           <button class="submit-btn" type="submit">Загрузить фото</button>
         </form>
@@ -2322,7 +2327,7 @@ def render_new_construction_report_page(storage: Storage, owner_chat_id: int, co
         </div>
         <div class="field" style="grid-column: 1 / -1;">
           <label>Фотографии</label>
-          <input type="file" name="report_photos" accept="image/jpeg,.jpg,.jpeg,image/png,.png" multiple>
+          <input type="file" name="report_photos" accept="image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp" multiple>
         </div>
         <div class="action-row" style="grid-column: 1 / -1; justify-content:flex-end;">
           <a class="secondary-btn" href="/contracts/{contract_id}/construction?owner={owner_chat_id}">Отмена</a>
