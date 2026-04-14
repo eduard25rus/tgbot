@@ -914,12 +914,14 @@ def task_status_meta(status: str) -> tuple[str, str]:
         "open": ("Открыта", "chip warn"),
         "done": ("Выполнена", "chip ok"),
         "not_done": ("Не выполнена", "chip danger"),
+        "archived": ("В архиве", "chip"),
     }.get(status, ("Открыта", "chip warn"))
 
 
 def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
     today = datetime.now(VLADIVOSTOK_TZ).date()
     tasks: list[dict] = []
+    archived_auto_refs = storage.list_archived_auto_task_refs(owner_chat_id)
 
     for contract in storage.list_contracts(owner_chat_id):
         contract_label = contract.object_name.strip() or contract.title
@@ -1111,7 +1113,7 @@ def build_auto_tasks(storage: Storage, owner_chat_id: int) -> list[dict]:
                 }
             )
 
-    return tasks
+    return [task for task in tasks if str(task.get("id", "")) not in archived_auto_refs]
 
 
 def task_visible_to_user(task: dict, current_user: dict | None) -> bool:
@@ -8536,6 +8538,14 @@ def can_comment_task(current_user: dict | None, task: dict) -> bool:
     return task_visible_to_user(task, current_user) or can_view_all_tasks(current_user)
 
 
+def can_archive_task(current_user: dict | None, task: dict) -> bool:
+    if current_user is None or not has_permission(current_user, "tasks", "edit"):
+        return False
+    if task.get("deleted_at") is not None:
+        return False
+    return can_view_all_tasks(current_user)
+
+
 def task_assignee_label(task: dict) -> str:
     if task.get("assignee_kind") == "role" or (not task.get("assignee_name") and task.get("assignee_role_name")):
         return task.get("assignee_role_name") or "Роль не указана"
@@ -8626,17 +8636,37 @@ def resolve_task_assignment(assign_mode: str, assignee_user_id_raw: str, assigne
 
 def render_task_status_control(owner_chat_id: int, task: dict, current_user: dict | None, active_tab: str, assignee_filter: str, group_by: str, source_filter: str) -> str:
     due_is_overdue = task["status"] == "open" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date()
+    action_html = ""
+    if can_archive_task(current_user, task):
+        if active_tab == "active" and task.get("status") == "open":
+            action_html = f'''
+            <form method="post" action="/tasks/archive{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" style="margin-top:6px;">
+              <input type="hidden" name="task_kind" value="{escape(task.get("task_kind", "manual"))}">
+              <input type="hidden" name="task_id" value="{escape(str(task.get("id", "")))}">
+              <button class="secondary-btn mini" type="submit">В архив</button>
+            </form>
+            '''
+        elif active_tab == "archive" and task.get("status") == "archived":
+            action_html = f'''
+            <form method="post" action="/tasks/archive/restore{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" style="margin-top:6px;">
+              <input type="hidden" name="task_kind" value="{escape(task.get("task_kind", "manual"))}">
+              <input type="hidden" name="task_id" value="{escape(str(task.get("id", "")))}">
+              <button class="secondary-btn mini" type="submit">Вернуть</button>
+            </form>
+            '''
     if task.get("task_kind") == "auto":
         label = "Просрочена" if due_is_overdue else "Авто"
         css = "chip danger" if due_is_overdue else "chip"
-        return f'<span class="{css}">{label}</span>'
+        if task.get("status") == "archived":
+            label, css = task_status_meta("archived")
+        return f'<div><span class="{css}">{label}</span>{action_html}</div>'
     label, css = task_status_meta(task["status"])
     if due_is_overdue:
         css = "chip danger"
     completion_note = ""
     if task.get("completion_comment"):
         completion_note = f'<div class="contract-table-subtle">{escape(task["completion_comment"])}</div>'
-    return f'<div><span class="{css}">{escape(label)}</span>{completion_note}</div>'
+    return f'<div><span class="{css}">{escape(label)}</span>{completion_note}{action_html}</div>'
 
 
 def render_tasks_section(
@@ -8675,10 +8705,12 @@ def render_tasks_section(
         for task in storage.list_tasks(owner_chat_id, include_deleted=True)
     ]
     auto_tasks = build_auto_tasks(storage, owner_chat_id)
+    archived_auto_tasks = storage.list_archived_auto_tasks(owner_chat_id)
     visible_manual_tasks = [task for task in manual_tasks if task_visible_to_user(task, current_user)]
     visible_auto_tasks = [task for task in auto_tasks if task_visible_to_user(task, current_user)]
+    visible_archived_auto_tasks = [task for task in archived_auto_tasks if task_visible_to_user(task, current_user)]
     if active_tab == "archive":
-        visible_tasks = [task for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] in {"done", "not_done"}]
+        visible_tasks = [task for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] in {"done", "not_done", "archived"}] + visible_archived_auto_tasks
     elif active_tab == "deleted":
         visible_tasks = [task for task in visible_manual_tasks if task["deleted_at"] is not None]
     else:
@@ -8724,7 +8756,7 @@ def render_tasks_section(
         ("payroll", "Зарплата"),
     ]
     active_count = sum(1 for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] == "open") + len(visible_auto_tasks)
-    archive_count = sum(1 for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] in {"done", "not_done"})
+    archive_count = sum(1 for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] in {"done", "not_done", "archived"}) + len(visible_archived_auto_tasks)
     deleted_count = sum(1 for task in visible_manual_tasks if task["deleted_at"] is not None)
     done_count = sum(1 for task in visible_tasks if task.get("status") == "done")
     not_done_count = sum(1 for task in visible_tasks if task.get("status") == "not_done")
@@ -9035,6 +9067,8 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
               </div>
               <div class="action-row" style="gap:10px;">
                 <button class="submit-btn" type="submit">Сохранить изменения</button>
+                <button class="secondary-btn" type="submit" formaction="/tasks/archive{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" formmethod="post" name="task_id" value="{task.id}" onclick="return confirm('Перенести задачу в архив?');">В архив</button>
+                <input type="hidden" name="task_kind" value="manual">
                 <button class="secondary-btn danger" type="submit" formaction="/tasks/{task.id}/delete{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" onclick="return confirm('Убрать задачу в удаленные?');">Удалить задачу</button>
               </div>
             </form>
@@ -11872,6 +11906,101 @@ def app(environ, start_response):
             else:
                 body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter, f"Не удалось добавить комментарий: {exc}")
                 html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/tasks/archive" and method == "POST":
+        denied = guard("tasks", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        assignee_filter = query.get("assignee", [""])[0].strip()
+        group_by = query.get("group", [""])[0].strip()
+        source_filter = query.get("source", [""])[0].strip()
+        form = read_post_data(environ)
+        task_kind = form.get("task_kind", "manual").strip()
+        task_id = form.get("task_id", "").strip()
+        try:
+            if task_kind == "manual":
+                task_id_int = int(task_id)
+                task = storage.get_task(current_owner, task_id_int)
+                if task is None:
+                    raise ValueError("Задача не найдена")
+                payload = {
+                    "id": task.id, "task_kind": "manual", "assignee_kind": task.assignee_kind,
+                    "assignee_user_id": task.assignee_user_id, "assignee_name": task.assignee_name,
+                    "assignee_role_code": task.assignee_role_code, "assignee_role_name": task.assignee_role_name,
+                    "created_by_user_id": task.created_by_user_id, "deleted_at": task.deleted_at,
+                }
+                if not can_archive_task(current_user, payload):
+                    raise ValueError("Недостаточно прав для архивирования задачи")
+                if not storage.update_task_status(
+                    current_owner,
+                    task_id_int,
+                    "archived",
+                    task.completion_comment,
+                    datetime.utcnow(),
+                    current_user.get("full_name", "").strip() if current_user else "",
+                ):
+                    raise ValueError("Не удалось перенести задачу в архив")
+            else:
+                auto_task = next((item for item in build_auto_tasks(storage, current_owner) if str(item.get("id", "")) == task_id), None)
+                if auto_task is None:
+                    raise ValueError("Системная задача не найдена")
+                if not can_archive_task(current_user, auto_task):
+                    raise ValueError("Недостаточно прав для архивирования задачи")
+                if not storage.archive_auto_task(
+                    current_owner,
+                    auto_task,
+                    datetime.utcnow(),
+                    current_user.get("full_name", "").strip() if current_user else "",
+                ):
+                    raise ValueError("Не удалось перенести системную задачу в архив")
+            return redirect(start_response, f"/tasks{task_query_suffix(current_owner, 'archive', assignee_filter, group_by, source_filter)}")
+        except Exception as exc:
+            body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter, f"Не удалось перенести задачу в архив: {exc}")
+            html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/tasks/archive/restore" and method == "POST":
+        denied = guard("tasks", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["archive"])[0].strip() or "archive"
+        assignee_filter = query.get("assignee", [""])[0].strip()
+        group_by = query.get("group", [""])[0].strip()
+        source_filter = query.get("source", [""])[0].strip()
+        form = read_post_data(environ)
+        task_kind = form.get("task_kind", "manual").strip()
+        task_id = form.get("task_id", "").strip()
+        try:
+            if task_kind == "manual":
+                task_id_int = int(task_id)
+                task = storage.get_task(current_owner, task_id_int)
+                if task is None:
+                    raise ValueError("Задача не найдена")
+                payload = {
+                    "id": task.id, "task_kind": "manual", "assignee_kind": task.assignee_kind,
+                    "assignee_user_id": task.assignee_user_id, "assignee_name": task.assignee_name,
+                    "assignee_role_code": task.assignee_role_code, "assignee_role_name": task.assignee_role_name,
+                    "created_by_user_id": task.created_by_user_id, "deleted_at": task.deleted_at,
+                }
+                if not can_archive_task(current_user, payload):
+                    raise ValueError("Недостаточно прав для возврата задачи")
+                if not storage.update_task_status(current_owner, task_id_int, "open", "", None, ""):
+                    raise ValueError("Не удалось вернуть задачу в работу")
+            else:
+                if not can_view_all_tasks(current_user):
+                    raise ValueError("Недостаточно прав для возврата системной задачи")
+                if not storage.restore_archived_auto_task(current_owner, task_id):
+                    raise ValueError("Не удалось вернуть системную задачу")
+            return redirect(start_response, f"/tasks{task_query_suffix(current_owner, 'active', assignee_filter, group_by, source_filter)}")
+        except Exception as exc:
+            body = render_tasks_section(storage, current_owner, current_user, active_tab, assignee_filter, group_by, source_filter, f"Не удалось вернуть задачу: {exc}")
+            html = layout("Задачи", body, owners, current_owner, "tasks", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 

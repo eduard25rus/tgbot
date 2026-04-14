@@ -597,6 +597,26 @@ class Storage:
                     FOREIGN KEY(comment_id) REFERENCES task_comments(id) ON DELETE SET NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS task_auto_archives (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    task_ref TEXT NOT NULL,
+                    source_section TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    due_date TEXT NOT NULL,
+                    assignee_kind TEXT NOT NULL DEFAULT 'role',
+                    assignee_user_id INTEGER,
+                    assignee_name TEXT NOT NULL DEFAULT '',
+                    assignee_role_code TEXT NOT NULL DEFAULT '',
+                    assignee_role_name TEXT NOT NULL DEFAULT '',
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    archived_at TEXT NOT NULL,
+                    archived_by_name TEXT NOT NULL DEFAULT '',
+                    UNIQUE(owner_chat_id, task_ref)
+                );
+
                 CREATE TABLE IF NOT EXISTS auctions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_chat_id INTEGER NOT NULL,
@@ -4406,6 +4426,114 @@ class Storage:
                 (owner_chat_id,),
             )
             return cursor.rowcount
+
+    def list_archived_auto_tasks(self, owner_chat_id: int) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    task_ref, source_section, title, description, due_date,
+                    assignee_kind, assignee_user_id, assignee_name, assignee_role_code, assignee_role_name,
+                    created_by_name, created_at, archived_at, archived_by_name
+                FROM task_auto_archives
+                WHERE owner_chat_id = ?
+                ORDER BY due_date ASC, archived_at DESC, id DESC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        items: list[dict] = []
+        for row in rows:
+            items.append(
+                {
+                    "id": row["task_ref"],
+                    "task_kind": "auto",
+                    "source_section": row["source_section"] or "",
+                    "title": row["title"] or "",
+                    "description": row["description"] or "",
+                    "due_date": date.fromisoformat(row["due_date"]),
+                    "assignee_kind": row["assignee_kind"] or "role",
+                    "assignee_user_id": int(row["assignee_user_id"]) if row["assignee_user_id"] is not None else None,
+                    "assignee_name": row["assignee_name"] or "",
+                    "assignee_role_code": row["assignee_role_code"] or "",
+                    "assignee_role_name": row["assignee_role_name"] or "",
+                    "status": "archived",
+                    "completion_comment": "",
+                    "created_by_name": row["created_by_name"] or "Система",
+                    "created_at": datetime.fromisoformat(row["created_at"]),
+                    "completed_at": datetime.fromisoformat(row["archived_at"]),
+                    "completed_by_name": row["archived_by_name"] or "",
+                    "deleted_at": None,
+                }
+            )
+        return items
+
+    def list_archived_auto_task_refs(self, owner_chat_id: int) -> set[str]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT task_ref FROM task_auto_archives WHERE owner_chat_id = ?",
+                (owner_chat_id,),
+            ).fetchall()
+        return {str(row["task_ref"]) for row in rows}
+
+    def archive_auto_task(self, owner_chat_id: int, task: dict, archived_at: datetime, archived_by_name: str) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO task_auto_archives (
+                    owner_chat_id, task_ref, source_section, title, description, due_date,
+                    assignee_kind, assignee_user_id, assignee_name, assignee_role_code, assignee_role_name,
+                    created_by_name, created_at, archived_at, archived_by_name
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_chat_id, task_ref) DO UPDATE SET
+                    source_section = excluded.source_section,
+                    title = excluded.title,
+                    description = excluded.description,
+                    due_date = excluded.due_date,
+                    assignee_kind = excluded.assignee_kind,
+                    assignee_user_id = excluded.assignee_user_id,
+                    assignee_name = excluded.assignee_name,
+                    assignee_role_code = excluded.assignee_role_code,
+                    assignee_role_name = excluded.assignee_role_name,
+                    created_by_name = excluded.created_by_name,
+                    created_at = excluded.created_at,
+                    archived_at = excluded.archived_at,
+                    archived_by_name = excluded.archived_by_name
+                """,
+                (
+                    owner_chat_id,
+                    str(task.get("id", "")),
+                    str(task.get("source_section", "")).strip(),
+                    str(task.get("title", "")).strip(),
+                    str(task.get("description", "")).strip(),
+                    task["due_date"].strftime(DATE_FMT),
+                    str(task.get("assignee_kind", "role")).strip(),
+                    task.get("assignee_user_id"),
+                    str(task.get("assignee_name", "")).strip(),
+                    str(task.get("assignee_role_code", "")).strip(),
+                    str(task.get("assignee_role_name", "")).strip(),
+                    str(task.get("created_by_name", "Система")).strip(),
+                    (
+                        task.get("created_at").isoformat()
+                        if isinstance(task.get("created_at"), datetime)
+                        else datetime.utcnow().isoformat()
+                    ),
+                    archived_at.isoformat(),
+                    archived_by_name.strip(),
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def restore_archived_auto_task(self, owner_chat_id: int, task_ref: str) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM task_auto_archives
+                WHERE owner_chat_id = ? AND task_ref = ?
+                """,
+                (owner_chat_id, task_ref),
+            )
+            return cursor.rowcount > 0
 
     def list_task_comments(self, owner_chat_id: int, task_id: int) -> list[TaskComment]:
         with self.connection() as conn:
