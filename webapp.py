@@ -2212,9 +2212,9 @@ def construction_workers_options(selected: int = 0) -> str:
 
 
 def render_construction_report_editor(owner_chat_id: int, contract_id: int, report, current_user: dict | None) -> str:
-    description_html = f'<div class="legal-letter-topic">{escape(report.work_description or "Без описания работ")}</div>'
+    description_html = f'<div class="legal-letter-topic" style="white-space:pre-line;">{escape(report.work_description or "Без описания работ")}</div>'
     if report.day_comment:
-        description_html += f'<div class="contract-table-subtle">{escape(report.day_comment)}</div>'
+        description_html += f'<div class="contract-table-subtle" style="white-space:pre-line;">{escape(report.day_comment)}</div>'
     if not can_edit_construction_reports(current_user):
         return description_html
     return f"""
