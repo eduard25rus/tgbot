@@ -4551,10 +4551,13 @@ def layout(
       display: none !important;
     }}
     .payroll-controls .secondary-btn {{
-      min-height: 48px;
+      min-height: 42px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 15px;
     }}
     .payroll-controls .status-menu {{
       display: flex;
@@ -4563,7 +4566,7 @@ def layout(
       display: flex;
     }}
     .payroll-controls .status-menu summary > .secondary-btn {{
-      min-height: 48px;
+      min-height: 42px;
       display: inline-flex;
       align-items: center;
     }}
@@ -4579,9 +4582,6 @@ def layout(
     .payroll-month-edit-toolbar {{
       display: flex;
       align-items: stretch;
-    }}
-    .payroll-month-edit-toolbar[hidden] {{
-      display: none !important;
     }}
     .payroll-month-index-cell {{
       display: inline-flex;
@@ -6569,12 +6569,12 @@ function updatePayrollMonthRemoveToolbar() {{
   const table = document.querySelector('.payroll-table');
   if (!table || !table.classList.contains('payroll-month-edit-mode')) {{
     input.value = "";
-    toolbar.hidden = true;
+    toolbar.style.display = "none";
     return;
   }}
   const checked = Array.from(document.querySelectorAll('.js-payroll-month-remove:checked'));
   input.value = checked.map((item) => item.value).join(',');
-  toolbar.hidden = checked.length === 0;
+  toolbar.style.display = checked.length === 0 ? "none" : "flex";
 }}
 
 function formatMoneyValue(value) {{
@@ -9242,7 +9242,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
             for employee in available_employees
         )
         month_remove_toolbar = f"""
-        <div class="payroll-month-edit-toolbar" id="payroll-month-edit-toolbar" hidden>
+        <div class="payroll-month-edit-toolbar" id="payroll-month-edit-toolbar" style="display:none;">
           <form method="post" action="/payroll/months/remove-employees?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}" onsubmit="return confirm('Убрать выделенных сотрудников из этого месяца?');">
             <input type="hidden" name="employee_ids" id="payroll-month-remove-input">
             <button class="secondary-btn danger" type="submit">Удалить выделенных</button>
