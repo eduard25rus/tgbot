@@ -4538,6 +4538,32 @@ def layout(
       flex-wrap: wrap;
       margin-top: 14px;
     }}
+    .payroll-controls {{
+      display: flex;
+      gap: 10px;
+      align-items: stretch;
+      flex-wrap: wrap;
+    }}
+    .payroll-controls > * {{
+      display: flex;
+    }}
+    .payroll-controls .secondary-btn {{
+      min-height: 48px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }}
+    .payroll-controls .status-menu {{
+      display: flex;
+    }}
+    .payroll-controls .status-menu summary {{
+      display: flex;
+    }}
+    .payroll-controls .status-menu summary > .secondary-btn {{
+      min-height: 48px;
+      display: inline-flex;
+      align-items: center;
+    }}
     .payroll-selection-summary {{
       display: none;
       align-items: center;
@@ -4548,9 +4574,8 @@ def layout(
       display: flex;
     }}
     .payroll-month-edit-toolbar {{
-      margin-top: 12px;
       display: flex;
-      justify-content: flex-end;
+      align-items: stretch;
     }}
     .payroll-month-index-cell {{
       display: inline-flex;
@@ -9322,14 +9347,14 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
           <h2 class="panel-title">Реестр зарплаты</h2>
           <div class="panel-sub">Начисления, выплаты и остатки по сотрудникам в разрезе месяцев.</div>
         </div>
-        <div class="action-row" style="gap:10px; align-items:center; flex-wrap:wrap;">
-          {clone_month_button}
-          {month_edit_button}
-          {add_employee_button}
-        </div>
+      </div>
+      <div class="payroll-controls" style="margin-top:14px;">
+        {clone_month_button}
+        {month_edit_button}
+        {month_remove_toolbar}
+        {add_employee_button}
       </div>
       <div class="tab-row">{month_tabs}</div>
-      {month_remove_toolbar}
       {selection_toolbar}
       {flash_html}
       <table class="table contract-table payroll-table" style="margin-top: 18px;">
