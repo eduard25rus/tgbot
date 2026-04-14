@@ -4538,6 +4538,18 @@ def layout(
       flex-wrap: wrap;
       margin-top: 14px;
     }}
+    .payroll-selection-toolbar .action-row {{
+      margin-left: auto;
+    }}
+    .payroll-selection-toolbar .secondary-btn {{
+      min-height: 42px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 15px;
+    }}
     .payroll-controls {{
       display: flex;
       gap: 10px;
@@ -9360,7 +9372,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         {month_remove_toolbar}
         {add_employee_button}
       </div>
-      <div class="tab-row">{month_tabs}</div>
+      <div class="tab-row" style="margin-top:18px;">{month_tabs}</div>
       {selection_toolbar}
       {flash_html}
       <table class="table contract-table payroll-table" style="margin-top: 18px;">
