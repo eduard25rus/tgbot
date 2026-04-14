@@ -8761,13 +8761,29 @@ def render_tasks_section(
     visible_tasks.sort(key=lambda item: (item["due_date"], item["task_kind"] != "manual", item["title"].lower()))
 
     filter_users = [user for user in storage.list_web_users(owner_chat_id) if user.get("is_active")]
-    assignee_options = sorted(
+    assignee_people = sorted(
         {
-            *((user.get("full_name") or "").strip() for user in filter_users if (user.get("full_name") or "").strip()),
-            *((user.get("role_name") or "").strip() for user in filter_users if (user.get("role_name") or "").strip()),
-            *(task_assignee_label(task) for task in (manual_tasks + auto_tasks + archived_auto_tasks) if task_assignee_label(task)),
+            (user.get("full_name") or "").strip()
+            for user in filter_users
+            if (user.get("full_name") or "").strip()
         }
     )
+    assignee_roles = sorted(
+        {
+            (user.get("role_name") or "").strip()
+            for user in filter_users
+            if (user.get("role_name") or "").strip()
+        }
+    )
+    for label in (task_assignee_label(task) for task in (manual_tasks + auto_tasks + archived_auto_tasks) if task_assignee_label(task)):
+        if label not in assignee_people and label not in assignee_roles:
+            assignee_roles.append(label)
+    assignee_roles = sorted(set(assignee_roles))
+    assignee_options_html = f'''
+              <option value="">Все</option>
+              {'<optgroup label="Сотрудники">' + "".join(f'<option value="{escape(name)}"{" selected" if assignee_filter == name else ""}>{escape(name)}</option>' for name in assignee_people) + '</optgroup>' if assignee_people else ""}
+              {'<optgroup label="Роли">' + "".join(f'<option value="{escape(name)}"{" selected" if assignee_filter == name else ""}>{escape(name)}</option>' for name in assignee_roles) + '</optgroup>' if assignee_roles else ""}
+    '''
     source_options = [
         ("", "Все источники"),
         ("manual", "Ручные задачи"),
@@ -8920,11 +8936,10 @@ def render_tasks_section(
         <input type="hidden" name="owner" value="{owner_chat_id}">
         <input type="hidden" name="tab" value="{active_tab}">
         <div class="action-row" style="gap:12px; align-items:end; flex-wrap: wrap;">
-          <div class="field" style="min-width: 220px; margin:0;">
+              <div class="field" style="min-width: 220px; margin:0;">
             <label>Ответственный</label>
             <select name="assignee">
-              <option value="">Все</option>
-              {"".join(f'<option value="{escape(name)}"{" selected" if assignee_filter == name else ""}>{escape(name)}</option>' for name in assignee_options)}
+              {assignee_options_html}
             </select>
           </div>
           <div class="field" style="min-width: 180px; margin:0;">
