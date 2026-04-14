@@ -4560,10 +4560,13 @@ def layout(
       white-space: nowrap;
     }}
     .payroll-month-remove-toggle {{
-      display: inline-flex;
+      display: none;
       align-items: center;
       justify-content: center;
       cursor: pointer;
+    }}
+    .payroll-month-edit-mode .payroll-month-remove-toggle {{
+      display: inline-flex;
     }}
     .payroll-month-remove-toggle input {{
       width: 16px;
@@ -5874,6 +5877,23 @@ function buildContractStageFields(form, count) {{
 }}
 
 document.addEventListener("click", (event) => {{
+  const payrollMonthEditToggle = event.target.closest('#payroll-month-edit-toggle');
+  if (payrollMonthEditToggle) {{
+    event.preventDefault();
+    const table = document.querySelector('.payroll-table');
+    if (!table) {{
+      return;
+    }}
+    const enabled = table.classList.toggle('payroll-month-edit-mode');
+    payrollMonthEditToggle.textContent = enabled ? 'Завершить редактирование' : 'Редактировать состав месяца';
+    if (!enabled) {{
+      document.querySelectorAll('.js-payroll-month-remove:checked').forEach((item) => {{
+        item.checked = false;
+      }});
+    }}
+    updatePayrollMonthRemoveToolbar();
+    return;
+  }}
   const payrollSelectionToggle = event.target.closest('#payroll-selection-toggle');
   if (payrollSelectionToggle) {{
     event.preventDefault();
@@ -6513,6 +6533,12 @@ function updatePayrollMonthRemoveToolbar() {{
   const toolbar = document.getElementById('payroll-month-edit-toolbar');
   const input = document.getElementById('payroll-month-remove-input');
   if (!toolbar || !input) {{
+    return;
+  }}
+  const table = document.querySelector('.payroll-table');
+  if (!table || !table.classList.contains('payroll-month-edit-mode')) {{
+    input.value = "";
+    toolbar.hidden = true;
     return;
   }}
   const checked = Array.from(document.querySelectorAll('.js-payroll-month-remove:checked'));
@@ -9149,7 +9175,11 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     add_employee_button = ""
     month_remove_toolbar = ""
     clone_month_button = ""
+    month_edit_button = ""
     if has_permission(current_user, "payroll", "edit"):
+        month_edit_button = """
+        <button class="secondary-btn" type="button" id="payroll-month-edit-toggle">Редактировать состав месяца</button>
+        """
         add_employee_button = f"""
         <details class="status-menu">
           <summary><span class="secondary-btn">Добавить сотрудника</span></summary>
@@ -9294,6 +9324,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         </div>
         <div class="action-row" style="gap:10px; align-items:center; flex-wrap:wrap;">
           {clone_month_button}
+          {month_edit_button}
           {add_employee_button}
         </div>
       </div>
