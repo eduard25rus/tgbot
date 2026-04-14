@@ -8675,9 +8675,9 @@ def render_task_status_control(owner_chat_id: int, task: dict, current_user: dic
 
     return f'''
     <div>
-      <details class="status-menu lot-menu">
+      <details class="status-menu">
         <summary><span class="{css}">{escape(label)}</span></summary>
-        <div class="status-popover lot-form">
+        <div class="status-popover compact">
           {action_html}
         </div>
       </details>
@@ -8760,11 +8760,14 @@ def render_tasks_section(
 
     visible_tasks.sort(key=lambda item: (item["due_date"], item["task_kind"] != "manual", item["title"].lower()))
 
-    assignee_options = sorted({
-        task_assignee_label(task)
-        for task in (manual_tasks + auto_tasks)
-        if task_assignee_label(task)
-    })
+    filter_users = [user for user in storage.list_web_users(owner_chat_id) if user.get("is_active")]
+    assignee_options = sorted(
+        {
+            *((user.get("full_name") or "").strip() for user in filter_users if (user.get("full_name") or "").strip()),
+            *((user.get("role_name") or "").strip() for user in filter_users if (user.get("role_name") or "").strip()),
+            *(task_assignee_label(task) for task in (manual_tasks + auto_tasks + archived_auto_tasks) if task_assignee_label(task)),
+        }
+    )
     source_options = [
         ("", "Все источники"),
         ("manual", "Ручные задачи"),
