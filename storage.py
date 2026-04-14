@@ -3711,6 +3711,20 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def remove_payroll_employees_from_month(self, owner_chat_id: int, employee_ids: list[int], payroll_month: date) -> int:
+        if not employee_ids:
+            return 0
+        placeholders = ",".join("?" for _ in employee_ids)
+        with self.connection() as conn:
+            cursor = conn.execute(
+                f"""
+                DELETE FROM payroll_entries
+                WHERE owner_chat_id = ? AND payroll_month = ? AND employee_id IN ({placeholders})
+                """,
+                [owner_chat_id, payroll_month.strftime(DATE_FMT), *employee_ids],
+            )
+            return int(cursor.rowcount or 0)
+
     def upsert_payroll_amount(
         self,
         owner_chat_id: int,

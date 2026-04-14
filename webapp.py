@@ -4545,6 +4545,30 @@ def layout(
     .payroll-selection-summary.is-visible {{
       display: flex;
     }}
+    .payroll-month-edit-toolbar {{
+      margin-top: 12px;
+      display: flex;
+      justify-content: flex-end;
+    }}
+    .payroll-month-index-cell {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      white-space: nowrap;
+    }}
+    .payroll-month-remove-toggle {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }}
+    .payroll-month-remove-toggle input {{
+      width: 16px;
+      height: 16px;
+      accent-color: var(--warn);
+      cursor: pointer;
+    }}
     .payroll-selectable {{
       border-radius: 18px;
       transition: background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease, outline-color 0.18s ease;
@@ -6483,6 +6507,17 @@ function updatePayrollSelectionSummary() {{
   summary.classList.toggle('is-visible', selected.length > 0);
 }}
 
+function updatePayrollMonthRemoveToolbar() {{
+  const toolbar = document.getElementById('payroll-month-edit-toolbar');
+  const input = document.getElementById('payroll-month-remove-input');
+  if (!toolbar || !input) {{
+    return;
+  }}
+  const checked = Array.from(document.querySelectorAll('.js-payroll-month-remove:checked'));
+  input.value = checked.map((item) => item.value).join(',');
+  toolbar.hidden = checked.length === 0;
+}}
+
 function formatMoneyValue(value) {{
   const fixed = (Math.round(value * 100) / 100).toFixed(2);
   const [whole, frac] = fixed.split(".");
@@ -6490,6 +6525,11 @@ function formatMoneyValue(value) {{
 }}
 
 document.addEventListener("change", (event) => {{
+  const payrollMonthRemove = event.target.closest('.js-payroll-month-remove');
+  if (payrollMonthRemove) {{
+    updatePayrollMonthRemoveToolbar();
+    return;
+  }}
   const skipCheckbox = event.target.closest('.estimate-form input[type="checkbox"][name^="skip_"]');
   if (!skipCheckbox) {{
     return;
@@ -6511,6 +6551,7 @@ window.addEventListener("load", () => {{
   document.querySelectorAll('.payroll-payment-form').forEach((form) => {{
     updatePaymentFormState(form);
   }});
+  updatePayrollMonthRemoveToolbar();
   const saved = window.sessionStorage.getItem("auctionScrollY");
   if (saved !== null) {{
     window.sessionStorage.removeItem("auctionScrollY");
@@ -9104,7 +9145,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     </section>
     """
     add_employee_button = ""
-    month_management_button = ""
+    month_remove_toolbar = ""
     clone_month_button = ""
     if has_permission(current_user, "payroll", "edit"):
         add_employee_button = f"""
@@ -9133,33 +9174,35 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
           <button class="secondary-btn" type="submit"{" disabled" if next_month_exists else ""}>Добавить новый месяц на основании предыдущего</button>
         </form>
         """
-        current_month_people = "".join(
-            f'''
-            <div class="timeline-item" style="margin:0; padding:10px 0;">
-              <div class="timeline-date">{escape(row.full_name)}</div>
-              <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; width:100%;">
-                <div class="contract-table-subtle">{escape(row.role_title or 'Без должности')}</div>
-                <form method="post" action="/payroll/months/remove-employee/{row.employee_id}?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}" onsubmit="return confirm('Убрать сотрудника из этого месяца?');">
-                  <button class="secondary-btn danger mini" type="submit">Убрать</button>
-                </form>
-              </div>
-            </div>
-            '''
-            for row in rows
-        ) or '<div class="empty">В этом месяце сотрудников пока нет.</div>'
         available_options = "".join(
             f'<option value="{employee.id}">{escape(employee.full_name)}{(" · " + escape(employee.role_title)) if employee.role_title else ""}</option>'
             for employee in available_employees
         )
-        month_management_button = f"""
+        month_remove_toolbar = f"""
+        <div class="payroll-month-edit-toolbar" id="payroll-month-edit-toolbar" hidden>
+          <form method="post" action="/payroll/months/remove-employees?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}" onsubmit="return confirm('Убрать выделенных сотрудников из этого месяца?');">
+            <input type="hidden" name="employee_ids" id="payroll-month-remove-input">
+            <button class="secondary-btn danger" type="submit">Удалить выделенных</button>
+          </form>
+        </div>
+        """
+        add_employee_button = f"""
         <details class="status-menu">
-          <summary><span class="secondary-btn">Редактировать состав месяца</span></summary>
-          <div class="status-popover" style="min-width:min(760px, 92vw);">
-            <div class="field" style="margin-bottom:14px;">
-              <label>Сотрудники месяца</label>
-              <div>{current_month_people}</div>
-            </div>
-            <form class="form-grid" method="post" action="/payroll/months/add-employee?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}">
+          <summary><span class="secondary-btn">Добавить сотрудника</span></summary>
+          <div class="status-popover" style="min-width:min(460px, 92vw);">
+            <form class="form-grid" method="post" action="/payroll/employees/new?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}">
+              <div class="field">
+                <label>ФИО сотрудника</label>
+                <input type="text" name="full_name" placeholder="Иван Иванов" required>
+              </div>
+              <div class="field">
+                <label>Должность</label>
+                <input type="text" name="role_title" placeholder="Снабженец" required>
+              </div>
+              <div class="contract-table-subtle" style="grid-column: 1 / -1;">Сотрудник будет добавлен в справочник и сразу попадет в текущий месяц.</div>
+              <button class="submit-btn" type="submit">Добавить в систему</button>
+            </form>
+            <form class="form-grid" method="post" action="/payroll/months/add-employee?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}" style="margin-top:12px;">
               <div class="field">
                 <label>Добавить из справочника</label>
                 <select name="employee_id" required>
@@ -9167,7 +9210,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
                   {available_options}
                 </select>
               </div>
-              <button class="submit-btn" type="submit"{" disabled" if not available_employees else ""}>Добавить в месяц</button>
+              <button class="secondary-btn" type="submit"{" disabled" if not available_employees else ""}>Добавить в месяц</button>
             </form>
           </div>
         </details>
@@ -9184,7 +9227,12 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         body_rows.append(
             f"""
             <tr>
-              <td class="nowrap" style="text-align:center;">{index}</td>
+              <td class="nowrap" style="text-align:center;">
+                <div class="payroll-month-index-cell">
+                  <span>{index}</span>
+                  {'<label class="payroll-month-remove-toggle"><input class="js-payroll-month-remove" type="checkbox" value="' + str(row.employee_id) + '"></label>' if has_permission(current_user, "payroll", "edit") else ''}
+                </div>
+              </td>
               <td>
                 <div class="timeline-title">{escape(row.full_name)}</div>
                 {role_html}
@@ -9244,11 +9292,11 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         </div>
         <div class="action-row" style="gap:10px; align-items:center; flex-wrap:wrap;">
           {clone_month_button}
-          {month_management_button}
           {add_employee_button}
         </div>
       </div>
       <div class="tab-row">{month_tabs}</div>
+      {month_remove_toolbar}
       {selection_toolbar}
       {flash_html}
       <table class="table contract-table payroll-table" style="margin-top: 18px;">
@@ -13041,6 +13089,25 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
+    if path == "/payroll/months/remove-employees" and method == "POST":
+        denied = guard("payroll", "edit")
+        if denied:
+            return denied
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
+        form = read_post_data(environ)
+        try:
+            raw_ids = [item.strip() for item in form.get("employee_ids", "").split(",") if item.strip()]
+            employee_ids = [int(item) for item in raw_ids]
+            removed_count = storage.remove_payroll_employees_from_month(current_owner, employee_ids, selected_month)
+            if removed_count <= 0:
+                raise ValueError("Никого не удалось удалить из месяца")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
+        except Exception as exc:
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить состав месяца: {exc}")
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
     if path.startswith("/payroll/entries/") and path.endswith("/amount") and method == "POST":
         denied = guard("payroll", "edit")
         if denied:
@@ -13106,6 +13173,7 @@ def app(environ, start_response):
         path == "/payroll/employees/new"
         or path == "/payroll/months/clone"
         or path == "/payroll/months/add-employee"
+        or path == "/payroll/months/remove-employees"
         or path.startswith("/payroll/months/remove-employee/")
         or path.startswith("/payroll/entries/")
     ):
