@@ -8636,37 +8636,54 @@ def resolve_task_assignment(assign_mode: str, assignee_user_id_raw: str, assigne
 
 def render_task_status_control(owner_chat_id: int, task: dict, current_user: dict | None, active_tab: str, assignee_filter: str, group_by: str, source_filter: str) -> str:
     due_is_overdue = task["status"] == "open" and task["due_date"] < datetime.now(VLADIVOSTOK_TZ).date()
-    action_html = ""
-    if can_archive_task(current_user, task):
-        if active_tab == "active" and task.get("status") == "open":
-            action_html = f'''
-            <form method="post" action="/tasks/archive{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" style="margin-top:6px;">
-              <input type="hidden" name="task_kind" value="{escape(task.get("task_kind", "manual"))}">
-              <input type="hidden" name="task_id" value="{escape(str(task.get("id", "")))}">
-              <button class="secondary-btn mini" type="submit">В архив</button>
-            </form>
-            '''
-        elif active_tab == "archive" and task.get("status") == "archived":
-            action_html = f'''
-            <form method="post" action="/tasks/archive/restore{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}" style="margin-top:6px;">
-              <input type="hidden" name="task_kind" value="{escape(task.get("task_kind", "manual"))}">
-              <input type="hidden" name="task_id" value="{escape(str(task.get("id", "")))}">
-              <button class="secondary-btn mini" type="submit">Вернуть</button>
-            </form>
-            '''
     if task.get("task_kind") == "auto":
         label = "Просрочена" if due_is_overdue else "Авто"
         css = "chip danger" if due_is_overdue else "chip"
         if task.get("status") == "archived":
             label, css = task_status_meta("archived")
-        return f'<div><span class="{css}">{label}</span>{action_html}</div>'
-    label, css = task_status_meta(task["status"])
-    if due_is_overdue:
-        css = "chip danger"
+    else:
+        label, css = task_status_meta(task["status"])
+        if due_is_overdue:
+            css = "chip danger"
+
     completion_note = ""
-    if task.get("completion_comment"):
+    if task.get("task_kind") != "auto" and task.get("completion_comment"):
         completion_note = f'<div class="contract-table-subtle">{escape(task["completion_comment"])}</div>'
-    return f'<div><span class="{css}">{escape(label)}</span>{completion_note}{action_html}</div>'
+
+    if not can_archive_task(current_user, task):
+        return f'<div><span class="{css}">{escape(label)}</span>{completion_note}</div>'
+
+    action_html = ""
+    if active_tab == "active" and task.get("status") == "open":
+        action_html = f'''
+        <form class="status-option-list" method="post" action="/tasks/archive{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">
+          <input type="hidden" name="task_kind" value="{escape(task.get("task_kind", "manual"))}">
+          <input type="hidden" name="task_id" value="{escape(str(task.get("id", "")))}">
+          <button class="chip status-option" type="submit">В архив</button>
+        </form>
+        '''
+    elif active_tab == "archive" and task.get("status") == "archived":
+        action_html = f'''
+        <form class="status-option-list" method="post" action="/tasks/archive/restore{task_query_suffix(owner_chat_id, active_tab, assignee_filter, group_by, source_filter)}">
+          <input type="hidden" name="task_kind" value="{escape(task.get("task_kind", "manual"))}">
+          <input type="hidden" name="task_id" value="{escape(str(task.get("id", "")))}">
+          <button class="chip status-option" type="submit">Вернуть в работу</button>
+        </form>
+        '''
+    if not action_html:
+        return f'<div><span class="{css}">{escape(label)}</span>{completion_note}</div>'
+
+    return f'''
+    <div>
+      <details class="status-menu lot-menu">
+        <summary><span class="{css}">{escape(label)}</span></summary>
+        <div class="status-popover lot-form">
+          {action_html}
+        </div>
+      </details>
+      {completion_note}
+    </div>
+    '''
 
 
 def render_tasks_section(
