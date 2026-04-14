@@ -3189,6 +3189,18 @@ class Storage:
             )
 
     @staticmethod
+    def _safe_date(value: str | None) -> Optional[date]:
+        if value is None:
+            return None
+        raw = str(value).strip()
+        if not raw:
+            return None
+        try:
+            return date.fromisoformat(raw)
+        except ValueError:
+            return None
+
+    @staticmethod
     def _contract_from_row(row: sqlite3.Row) -> Contract:
         return Contract(
             id=row["id"],
@@ -3201,7 +3213,7 @@ class Storage:
             nmck_amount=float(row["nmck_amount"]) if row["nmck_amount"] is not None else 0.0,
             reduction_percent=float(row["reduction_percent"]) if row["reduction_percent"] is not None else 0.0,
             description=row["description"],
-            signed_date=date.fromisoformat(row["signed_date"]) if row["signed_date"] is not None and row["signed_date"] != "" else None,
+            signed_date=Storage._safe_date(row["signed_date"]),
             end_date=date.fromisoformat(row["end_date"]),
             advance_percent=float(row["advance_percent"]) if row["advance_percent"] is not None else None,
             created_at=datetime.fromisoformat(row["created_at"]),
