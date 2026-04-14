@@ -8758,7 +8758,17 @@ def render_tasks_section(
     if source_filter:
         visible_tasks = [task for task in visible_tasks if task.get("source_section") == source_filter]
 
-    visible_tasks.sort(key=lambda item: (item["due_date"], item["task_kind"] != "manual", item["title"].lower()))
+    if group_by == "assignee":
+        visible_tasks.sort(
+            key=lambda item: (
+                task_assignee_label(item).lower(),
+                item["due_date"],
+                item["task_kind"] != "manual",
+                item["title"].lower(),
+            )
+        )
+    else:
+        visible_tasks.sort(key=lambda item: (item["due_date"], item["task_kind"] != "manual", item["title"].lower()))
 
     filter_users = [user for user in storage.list_web_users(owner_chat_id) if user.get("is_active")]
     assignee_people = sorted(
