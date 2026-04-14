@@ -4547,6 +4547,9 @@ def layout(
     .payroll-controls > * {{
       display: flex;
     }}
+    .payroll-controls > *[hidden] {{
+      display: none !important;
+    }}
     .payroll-controls .secondary-btn {{
       min-height: 48px;
       display: inline-flex;
@@ -4576,6 +4579,9 @@ def layout(
     .payroll-month-edit-toolbar {{
       display: flex;
       align-items: stretch;
+    }}
+    .payroll-month-edit-toolbar[hidden] {{
+      display: none !important;
     }}
     .payroll-month-index-cell {{
       display: inline-flex;
