@@ -2963,9 +2963,28 @@ class Storage:
 
     def list_contracts(self, chat_id: int) -> list[Contract]:
         with self.connection() as conn:
+            contract_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(contracts)").fetchall()
+            }
+            select_columns = [
+                "id",
+                "chat_id",
+                "title",
+                "object_name" if "object_name" in contract_columns else "title AS object_name",
+                "object_address" if "object_address" in contract_columns else "'' AS object_address",
+                "contract_number" if "contract_number" in contract_columns else "'' AS contract_number",
+                "eis_url" if "eis_url" in contract_columns else "'' AS eis_url",
+                "nmck_amount" if "nmck_amount" in contract_columns else "0 AS nmck_amount",
+                "reduction_percent" if "reduction_percent" in contract_columns else "0 AS reduction_percent",
+                "description",
+                "signed_date" if "signed_date" in contract_columns else "substr(created_at, 1, 10) AS signed_date",
+                "end_date",
+                "advance_percent" if "advance_percent" in contract_columns else "NULL AS advance_percent",
+                "created_at",
+            ]
             rows = conn.execute(
-                """
-                SELECT id, chat_id, title, object_name, object_address, contract_number, eis_url, nmck_amount, reduction_percent, description, signed_date, end_date, advance_percent, created_at
+                f"""
+                SELECT {", ".join(select_columns)}
                 FROM contracts
                 WHERE chat_id = ?
                 ORDER BY end_date ASC, id ASC
@@ -2976,9 +2995,28 @@ class Storage:
 
     def get_contract(self, chat_id: int, contract_id: int) -> Contract | None:
         with self.connection() as conn:
+            contract_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(contracts)").fetchall()
+            }
+            select_columns = [
+                "id",
+                "chat_id",
+                "title",
+                "object_name" if "object_name" in contract_columns else "title AS object_name",
+                "object_address" if "object_address" in contract_columns else "'' AS object_address",
+                "contract_number" if "contract_number" in contract_columns else "'' AS contract_number",
+                "eis_url" if "eis_url" in contract_columns else "'' AS eis_url",
+                "nmck_amount" if "nmck_amount" in contract_columns else "0 AS nmck_amount",
+                "reduction_percent" if "reduction_percent" in contract_columns else "0 AS reduction_percent",
+                "description",
+                "signed_date" if "signed_date" in contract_columns else "substr(created_at, 1, 10) AS signed_date",
+                "end_date",
+                "advance_percent" if "advance_percent" in contract_columns else "NULL AS advance_percent",
+                "created_at",
+            ]
             row = conn.execute(
-                """
-                SELECT id, chat_id, title, object_name, object_address, contract_number, eis_url, nmck_amount, reduction_percent, description, signed_date, end_date, advance_percent, created_at
+                f"""
+                SELECT {", ".join(select_columns)}
                 FROM contracts
                 WHERE chat_id = ? AND id = ?
                 """,
@@ -2988,14 +3026,37 @@ class Storage:
 
     def list_stages_for_contract(self, chat_id: int, contract_id: int) -> list[Stage]:
         with self.connection() as conn:
+            stage_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(stages)").fetchall()
+            }
+            select_columns = [
+                "s.id",
+                "s.contract_id",
+                "s.position" if "position" in stage_columns else "1 AS position",
+                "s.name",
+                "s.status",
+                "s.status_updated_at" if "status_updated_at" in stage_columns else "NULL AS status_updated_at",
+                "s.status_updated_by_name" if "status_updated_by_name" in stage_columns else "'' AS status_updated_by_name",
+                "s.payment_status" if "payment_status" in stage_columns else "'unpaid' AS payment_status",
+                "s.payment_status_updated_at" if "payment_status_updated_at" in stage_columns else "NULL AS payment_status_updated_at",
+                "s.payment_status_updated_by_name" if "payment_status_updated_by_name" in stage_columns else "'' AS payment_status_updated_by_name",
+                "s.advance_invoice_issued" if "advance_invoice_issued" in stage_columns else "0 AS advance_invoice_issued",
+                "s.advance_invoice_issued_at" if "advance_invoice_issued_at" in stage_columns else "NULL AS advance_invoice_issued_at",
+                "s.advance_invoice_issued_by_name" if "advance_invoice_issued_by_name" in stage_columns else "'' AS advance_invoice_issued_by_name",
+                "s.final_invoice_issued" if "final_invoice_issued" in stage_columns else "0 AS final_invoice_issued",
+                "s.final_invoice_issued_at" if "final_invoice_issued_at" in stage_columns else "NULL AS final_invoice_issued_at",
+                "s.final_invoice_issued_by_name" if "final_invoice_issued_by_name" in stage_columns else "'' AS final_invoice_issued_by_name",
+                "s.notes",
+                "s.start_date" if "start_date" in stage_columns else "NULL AS start_date",
+                "s.end_date",
+                "s.amount",
+                "s.created_at",
+                "c.title AS contract_title",
+                "c.chat_id AS chat_id",
+            ]
             rows = conn.execute(
-                """
-                SELECT s.id, s.contract_id, s.position, s.name, s.status, s.status_updated_at, s.status_updated_by_name,
-                       s.payment_status, s.payment_status_updated_at, s.payment_status_updated_by_name,
-                       s.advance_invoice_issued, s.advance_invoice_issued_at, s.advance_invoice_issued_by_name,
-                       s.final_invoice_issued, s.final_invoice_issued_at, s.final_invoice_issued_by_name,
-                       s.notes, s.start_date, s.end_date, s.amount, s.created_at,
-                       c.title AS contract_title, c.chat_id AS chat_id
+                f"""
+                SELECT {", ".join(select_columns)}
                 FROM stages s
                 JOIN contracts c ON c.id = s.contract_id
                 WHERE c.chat_id = ? AND c.id = ?
