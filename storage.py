@@ -3525,6 +3525,47 @@ class Storage:
         with self.connection() as conn:
             return self._ensure_payroll_employee(conn, owner_chat_id, full_name.strip(), role_title.strip())
 
+    def clone_payroll_month(self, owner_chat_id: int, source_month: date, target_month: date) -> bool:
+        if source_month == target_month:
+            return False
+        with self.connection() as conn:
+            source_rows = conn.execute(
+                """
+                SELECT employee_id, accrued_amount, advance_card_amount, advance_cash_amount, salary_amount, bonus_amount
+                FROM payroll_entries
+                WHERE owner_chat_id = ? AND payroll_month = ?
+                ORDER BY id ASC
+                """,
+                (owner_chat_id, source_month.strftime(DATE_FMT)),
+            ).fetchall()
+            if not source_rows:
+                return False
+            existing = conn.execute(
+                """
+                SELECT 1
+                FROM payroll_entries
+                WHERE owner_chat_id = ? AND payroll_month = ?
+                LIMIT 1
+                """,
+                (owner_chat_id, target_month.strftime(DATE_FMT)),
+            ).fetchone()
+            if existing is not None:
+                return False
+            for row in source_rows:
+                self._upsert_payroll_entry(
+                    conn,
+                    owner_chat_id,
+                    int(row["employee_id"]),
+                    target_month,
+                    float(row["accrued_amount"]),
+                    float(row["advance_card_amount"]),
+                    float(row["advance_cash_amount"]),
+                    float(row["salary_amount"]),
+                    float(row["bonus_amount"]),
+                    "",
+                )
+            return True
+
     def list_payroll_months(self, owner_chat_id: int) -> list[date]:
         with self.connection() as conn:
             rows = conn.execute(
@@ -3540,40 +3581,135 @@ class Storage:
 
     def list_payroll_rows(self, owner_chat_id: int, payroll_month: date) -> list[PayrollRow]:
         with self.connection() as conn:
+            has_month_rows = conn.execute(
+                """
+                SELECT 1
+                FROM payroll_entries
+                WHERE owner_chat_id = ? AND payroll_month = ?
+                LIMIT 1
+                """,
+                (owner_chat_id, payroll_month.strftime(DATE_FMT)),
+            ).fetchone()
+            if has_month_rows is not None:
+                rows = conn.execute(
+                    """
+                    SELECT
+                        e.id AS employee_id,
+                        e.owner_chat_id,
+                        e.full_name,
+                        e.role_title,
+                        e.is_active,
+                        p.payroll_month AS payroll_month,
+                        p.accrued_amount AS accrued_amount,
+                        p.advance_card_amount AS advance_card_amount,
+                        p.advance_card_paid_amount AS advance_card_paid_amount,
+                        p.advance_card_paid_date AS advance_card_paid_date,
+                        p.advance_cash_amount AS advance_cash_amount,
+                        p.advance_cash_paid_amount AS advance_cash_paid_amount,
+                        p.advance_cash_paid_date AS advance_cash_paid_date,
+                        p.salary_amount AS salary_amount,
+                        p.salary_paid_amount AS salary_paid_amount,
+                        p.salary_paid_date AS salary_paid_date,
+                        p.bonus_amount AS bonus_amount,
+                        p.bonus_paid_amount AS bonus_paid_amount,
+                        p.bonus_paid_date AS bonus_paid_date,
+                        COALESCE(p.note, '') AS note
+                    FROM payroll_entries p
+                    JOIN payroll_employees e
+                      ON e.id = p.employee_id
+                     AND e.owner_chat_id = p.owner_chat_id
+                    WHERE p.owner_chat_id = ? AND p.payroll_month = ?
+                    ORDER BY p.id ASC, e.id ASC
+                    """,
+                    (owner_chat_id, payroll_month.strftime(DATE_FMT)),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT
+                        e.id AS employee_id,
+                        e.owner_chat_id,
+                        e.full_name,
+                        e.role_title,
+                        e.is_active,
+                        COALESCE(p.payroll_month, ?) AS payroll_month,
+                        COALESCE(p.accrued_amount, 0) AS accrued_amount,
+                        COALESCE(p.advance_card_amount, 0) AS advance_card_amount,
+                        COALESCE(p.advance_card_paid_amount, 0) AS advance_card_paid_amount,
+                        p.advance_card_paid_date AS advance_card_paid_date,
+                        COALESCE(p.advance_cash_amount, 0) AS advance_cash_amount,
+                        COALESCE(p.advance_cash_paid_amount, 0) AS advance_cash_paid_amount,
+                        p.advance_cash_paid_date AS advance_cash_paid_date,
+                        COALESCE(p.salary_amount, 0) AS salary_amount,
+                        COALESCE(p.salary_paid_amount, 0) AS salary_paid_amount,
+                        p.salary_paid_date AS salary_paid_date,
+                        COALESCE(p.bonus_amount, 0) AS bonus_amount,
+                        COALESCE(p.bonus_paid_amount, 0) AS bonus_paid_amount,
+                        p.bonus_paid_date AS bonus_paid_date,
+                        COALESCE(p.note, '') AS note
+                    FROM payroll_employees e
+                    LEFT JOIN payroll_entries p
+                      ON p.employee_id = e.id
+                     AND p.owner_chat_id = e.owner_chat_id
+                     AND p.payroll_month = ?
+                    WHERE e.owner_chat_id = ? AND e.is_active = 1
+                    ORDER BY e.is_active DESC, e.id ASC
+                    """,
+                    (payroll_month.strftime(DATE_FMT), payroll_month.strftime(DATE_FMT), owner_chat_id),
+                ).fetchall()
+        return [self._payroll_row_from_row(row) for row in rows]
+
+    def list_payroll_available_employees_for_month(self, owner_chat_id: int, payroll_month: date) -> list[PayrollEmployee]:
+        with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT
-                    e.id AS employee_id,
-                    e.owner_chat_id,
-                    e.full_name,
-                    e.role_title,
-                    e.is_active,
-                    COALESCE(p.payroll_month, ?) AS payroll_month,
-                    COALESCE(p.accrued_amount, 0) AS accrued_amount,
-                    COALESCE(p.advance_card_amount, 0) AS advance_card_amount,
-                    COALESCE(p.advance_card_paid_amount, 0) AS advance_card_paid_amount,
-                    p.advance_card_paid_date AS advance_card_paid_date,
-                    COALESCE(p.advance_cash_amount, 0) AS advance_cash_amount,
-                    COALESCE(p.advance_cash_paid_amount, 0) AS advance_cash_paid_amount,
-                    p.advance_cash_paid_date AS advance_cash_paid_date,
-                    COALESCE(p.salary_amount, 0) AS salary_amount,
-                    COALESCE(p.salary_paid_amount, 0) AS salary_paid_amount,
-                    p.salary_paid_date AS salary_paid_date,
-                    COALESCE(p.bonus_amount, 0) AS bonus_amount,
-                    COALESCE(p.bonus_paid_amount, 0) AS bonus_paid_amount,
-                    p.bonus_paid_date AS bonus_paid_date,
-                    COALESCE(p.note, '') AS note
-                FROM payroll_employees e
-                LEFT JOIN payroll_entries p
-                  ON p.employee_id = e.id
-                 AND p.owner_chat_id = e.owner_chat_id
-                 AND p.payroll_month = ?
-                WHERE e.owner_chat_id = ?
-                ORDER BY e.is_active DESC, e.id ASC
+                SELECT id, owner_chat_id, full_name, role_title, is_active, created_at
+                FROM payroll_employees
+                WHERE owner_chat_id = ?
+                  AND is_active = 1
+                  AND id NOT IN (
+                    SELECT employee_id
+                    FROM payroll_entries
+                    WHERE owner_chat_id = ? AND payroll_month = ?
+                  )
+                ORDER BY id ASC
                 """,
-                (payroll_month.strftime(DATE_FMT), payroll_month.strftime(DATE_FMT), owner_chat_id),
+                (owner_chat_id, owner_chat_id, payroll_month.strftime(DATE_FMT)),
             ).fetchall()
-        return [self._payroll_row_from_row(row) for row in rows]
+        return [self._payroll_employee_from_row(row) for row in rows]
+
+    def add_payroll_employee_to_month(self, owner_chat_id: int, employee_id: int, payroll_month: date) -> bool:
+        with self.connection() as conn:
+            employee = conn.execute(
+                "SELECT id FROM payroll_employees WHERE id = ? AND owner_chat_id = ?",
+                (employee_id, owner_chat_id),
+            ).fetchone()
+            if employee is None:
+                return False
+            exists = conn.execute(
+                """
+                SELECT 1
+                FROM payroll_entries
+                WHERE owner_chat_id = ? AND employee_id = ? AND payroll_month = ?
+                LIMIT 1
+                """,
+                (owner_chat_id, employee_id, payroll_month.strftime(DATE_FMT)),
+            ).fetchone()
+            if exists is not None:
+                return False
+            self._upsert_payroll_entry(conn, owner_chat_id, employee_id, payroll_month, 0, 0, 0, 0, 0, "")
+            return True
+
+    def remove_payroll_employee_from_month(self, owner_chat_id: int, employee_id: int, payroll_month: date) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM payroll_entries
+                WHERE owner_chat_id = ? AND employee_id = ? AND payroll_month = ?
+                """,
+                (owner_chat_id, employee_id, payroll_month.strftime(DATE_FMT)),
+            )
+            return cursor.rowcount > 0
 
     def upsert_payroll_amount(
         self,

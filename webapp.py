@@ -7672,7 +7672,7 @@ def payroll_deadline_header(payroll_month: date, payment_kind: str, rows) -> str
         getattr(row, planned_field) > getattr(row, paid_field) + 0.009
         for row in rows
     )
-    deadline_class = "payroll-col-deadline danger" if has_open_items and days_left <= 2 else "payroll-col-deadline"
+    deadline_class = "payroll-col-deadline danger" if has_open_items and 0 <= days_left <= 2 else "payroll-col-deadline"
     return (
         f'<div class="payroll-col-head">{escape(labels[payment_kind])}</div>'
         f'<div class="{deadline_class}">{format_date(deadline)}</div>'
@@ -9067,6 +9067,9 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     if selected_month is None or selected_month not in months:
         selected_month = months[0]
     rows = storage.list_payroll_rows(owner_chat_id, selected_month)
+    next_month = month_add(selected_month, 1)
+    next_month_exists = next_month in months
+    available_employees = storage.list_payroll_available_employees_for_month(owner_chat_id, selected_month) if has_permission(current_user, "payroll", "edit") else []
     total_accrued = sum(row.accrued_amount for row in rows)
     total_paid = sum(payroll_row_metrics(row)["paid_total"] for row in rows)
     total_debt = sum(payroll_row_metrics(row)["debt_amount"] for row in rows)
@@ -9101,6 +9104,8 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     </section>
     """
     add_employee_button = ""
+    month_management_button = ""
+    clone_month_button = ""
     if has_permission(current_user, "payroll", "edit"):
         add_employee_button = f"""
         <details class="status-menu">
@@ -9115,7 +9120,54 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
                 <label>Должность</label>
                 <input type="text" name="role_title" placeholder="Снабженец" required>
               </div>
+              <div class="contract-table-subtle" style="grid-column: 1 / -1;">Сотрудник будет добавлен в справочник и сразу попадет в текущий месяц.</div>
               <button class="submit-btn" type="submit">Добавить в систему</button>
+            </form>
+          </div>
+        </details>
+        """
+        clone_month_button = f"""
+        <form method="post" action="/payroll/months/clone?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}">
+          <input type="hidden" name="source_month" value="{selected_month.strftime('%Y-%m')}">
+          <input type="hidden" name="target_month" value="{next_month.strftime('%Y-%m')}">
+          <button class="secondary-btn" type="submit"{" disabled" if next_month_exists else ""}>Добавить новый месяц на основании предыдущего</button>
+        </form>
+        """
+        current_month_people = "".join(
+            f'''
+            <div class="timeline-item" style="margin:0; padding:10px 0;">
+              <div class="timeline-date">{escape(row.full_name)}</div>
+              <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; width:100%;">
+                <div class="contract-table-subtle">{escape(row.role_title or 'Без должности')}</div>
+                <form method="post" action="/payroll/months/remove-employee/{row.employee_id}?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}" onsubmit="return confirm('Убрать сотрудника из этого месяца?');">
+                  <button class="secondary-btn danger mini" type="submit">Убрать</button>
+                </form>
+              </div>
+            </div>
+            '''
+            for row in rows
+        ) or '<div class="empty">В этом месяце сотрудников пока нет.</div>'
+        available_options = "".join(
+            f'<option value="{employee.id}">{escape(employee.full_name)}{(" · " + escape(employee.role_title)) if employee.role_title else ""}</option>'
+            for employee in available_employees
+        )
+        month_management_button = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Редактировать состав месяца</span></summary>
+          <div class="status-popover" style="min-width:min(760px, 92vw);">
+            <div class="field" style="margin-bottom:14px;">
+              <label>Сотрудники месяца</label>
+              <div>{current_month_people}</div>
+            </div>
+            <form class="form-grid" method="post" action="/payroll/months/add-employee?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}">
+              <div class="field">
+                <label>Добавить из справочника</label>
+                <select name="employee_id" required>
+                  <option value="">Выберите сотрудника</option>
+                  {available_options}
+                </select>
+              </div>
+              <button class="submit-btn" type="submit"{" disabled" if not available_employees else ""}>Добавить в месяц</button>
             </form>
           </div>
         </details>
@@ -9190,7 +9242,11 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
           <h2 class="panel-title">Реестр зарплаты</h2>
           <div class="panel-sub">Начисления, выплаты и остатки по сотрудникам в разрезе месяцев.</div>
         </div>
-        {add_employee_button}
+        <div class="action-row" style="gap:10px; align-items:center; flex-wrap:wrap;">
+          {clone_month_button}
+          {month_management_button}
+          {add_employee_button}
+        </div>
       </div>
       <div class="tab-row">{month_tabs}</div>
       {selection_toolbar}
@@ -12919,11 +12975,68 @@ def app(environ, start_response):
                 raise ValueError("Укажите ФИО сотрудника")
             if not role_title:
                 raise ValueError("Укажите должность сотрудника")
-            storage.add_payroll_employee(current_owner, full_name, role_title)
+            employee_id = storage.add_payroll_employee(current_owner, full_name, role_title)
+            if selected_month is not None:
+                storage.add_payroll_employee_to_month(current_owner, employee_id, selected_month)
             month_param = selected_month.strftime("%Y-%m") if selected_month is not None else ""
             return redirect(start_response, f"/payroll?owner={current_owner}&month={month_param}")
         except Exception as exc:
             body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось добавить сотрудника: {exc}")
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/payroll/months/clone" and method == "POST":
+        denied = guard("payroll", "edit")
+        if denied:
+            return denied
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
+        form = read_post_data(environ)
+        try:
+            source_month = parse_month_key(form.get("source_month", "")) or selected_month
+            target_month = parse_month_key(form.get("target_month", ""))
+            if target_month is None:
+                raise ValueError("Не удалось определить новый месяц")
+            if not storage.clone_payroll_month(current_owner, source_month, target_month):
+                raise ValueError("Не удалось создать новый месяц. Возможно, он уже существует.")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={target_month.strftime('%Y-%m')}")
+        except Exception as exc:
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось создать месяц: {exc}")
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/payroll/months/add-employee" and method == "POST":
+        denied = guard("payroll", "edit")
+        if denied:
+            return denied
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
+        form = read_post_data(environ)
+        try:
+            employee_id = int(form.get("employee_id", "0"))
+            if employee_id <= 0:
+                raise ValueError("Выберите сотрудника")
+            if not storage.add_payroll_employee_to_month(current_owner, employee_id, selected_month):
+                raise ValueError("Не удалось добавить сотрудника в месяц")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
+        except Exception as exc:
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось добавить сотрудника в месяц: {exc}")
+            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/payroll/months/remove-employee/") and method == "POST":
+        denied = guard("payroll", "edit")
+        if denied:
+            return denied
+        selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
+        try:
+            employee_id = int(path.split("/")[4])
+            if not storage.remove_payroll_employee_from_month(current_owner, employee_id, selected_month):
+                raise ValueError("Не удалось убрать сотрудника из месяца")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
+        except Exception as exc:
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить состав месяца: {exc}")
             html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -12989,7 +13102,13 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
-    if method == "GET" and (path == "/payroll/employees/new" or path.startswith("/payroll/entries/")):
+    if method == "GET" and (
+        path == "/payroll/employees/new"
+        or path == "/payroll/months/clone"
+        or path == "/payroll/months/add-employee"
+        or path.startswith("/payroll/months/remove-employee/")
+        or path.startswith("/payroll/entries/")
+    ):
         month_param = parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]
         month_query = f"&month={month_param}" if month_param else ""
         return redirect(start_response, f"/payroll?owner={current_owner}{month_query}")
