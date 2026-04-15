@@ -3953,6 +3953,71 @@ def layout(
       box-shadow: none;
       opacity: 1;
     }}
+    .expenses-day-carousel {{
+      display: flex;
+      align-items: stretch;
+      gap: 10px;
+      margin-top: 6px;
+    }}
+    .expenses-day-arrow {{
+      flex: 0 0 48px;
+      min-width: 48px;
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      padding: 0 10px;
+    }}
+    .expenses-day-arrow:disabled {{
+      pointer-events: none;
+      opacity: 0.42;
+    }}
+    .expenses-day-strip {{
+      display: flex;
+      gap: 10px;
+      flex: 1;
+      min-width: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scroll-behavior: smooth;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }}
+    .expenses-day-strip::-webkit-scrollbar {{
+      display: none;
+    }}
+    .expenses-day-card {{
+      flex: 0 0 calc((100% - 40px) / 5);
+      min-width: 0;
+      padding: 12px 14px;
+      border-radius: 18px;
+      text-decoration: none;
+      color: var(--ink);
+      display: grid;
+      gap: 6px;
+      min-height: 84px;
+    }}
+    .expenses-day-card.is-selected {{
+      border: 2px solid var(--brand);
+      background: rgba(255,255,255,0.98);
+      box-shadow: 0 10px 22px rgba(17,25,38,0.07);
+    }}
+    .expenses-day-card:not(.is-selected) {{
+      border: 2px solid transparent;
+      background: rgba(238,242,246,0.88);
+    }}
+    .expenses-day-card-top {{
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--muted);
+    }}
+    .expenses-day-card-bottom {{
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--ink);
+      line-height: 1.25;
+    }}
     .content {{
       min-width: 0;
     }}
@@ -5876,7 +5941,7 @@ def layout(
 </head>
 <body class="{body_theme_class.strip()}">
   <div class="shell">
-    <aside class="sidebar">
+    <aside class="sidebar" id="app-sidebar">
       <div>
         {brand_logo_html}
         <div class="brand-title">СИСТЕМА\nУПРАВЛЕНИЯ\nБИЗНЕСОМ</div>
@@ -6630,7 +6695,69 @@ function updatePayrollMonthRemoveToolbar() {{
 function formatMoneyValue(value) {{
   const fixed = (Math.round(value * 100) / 100).toFixed(2);
   const [whole, frac] = fixed.split(".");
-  return `${{whole.replace(/\\B(?=(\\d{3})+(?!\\d))/g, " ") }},${{frac}} ₽`;
+  return whole.replace(/\\B(?=(\\d{{3}})+(?!\\d))/g, " ") + "," + frac + " ₽";
+}}
+
+function restoreSidebarScroll() {{
+  const sidebar = document.getElementById("app-sidebar");
+  if (!sidebar) {{
+    return;
+  }}
+  const saved = window.sessionStorage.getItem("crmSidebarScrollTop");
+  if (saved !== null) {{
+    sidebar.scrollTop = Number(saved);
+  }}
+  const persistSidebarScroll = () => {{
+    window.sessionStorage.setItem("crmSidebarScrollTop", String(sidebar.scrollTop));
+  }};
+  sidebar.addEventListener("scroll", persistSidebarScroll, {{ passive: true }});
+  sidebar.querySelectorAll("a[href], button[type='submit']").forEach((item) => {{
+    item.addEventListener("click", persistSidebarScroll);
+  }});
+}}
+
+function initExpensesDayCarousel() {{
+  document.querySelectorAll('[data-expenses-day-carousel="1"]').forEach((carousel) => {{
+    const strip = carousel.querySelector('[data-expenses-day-strip="1"]');
+    const prev = carousel.querySelector('[data-expenses-day-prev="1"]');
+    const next = carousel.querySelector('[data-expenses-day-next="1"]');
+    if (!strip || !prev || !next) {{
+      return;
+    }}
+    const getStep = () => {{
+      const firstCard = strip.querySelector('[data-expenses-day-card="1"]');
+      if (!firstCard) {{
+        return 0;
+      }}
+      const cardRect = firstCard.getBoundingClientRect();
+      const styles = window.getComputedStyle(strip);
+      const gap = Number.parseFloat(styles.columnGap || styles.gap || "10") || 10;
+      return cardRect.width + gap;
+    }};
+    const updateButtons = () => {{
+      const maxScroll = Math.max(0, strip.scrollWidth - strip.clientWidth);
+      prev.disabled = strip.scrollLeft <= 2;
+      next.disabled = strip.scrollLeft >= maxScroll - 2;
+    }};
+    prev.addEventListener("click", () => {{
+      const step = getStep();
+      strip.scrollBy({{ left: -step, behavior: "smooth" }});
+    }});
+    next.addEventListener("click", () => {{
+      const step = getStep();
+      strip.scrollBy({{ left: step, behavior: "smooth" }});
+    }});
+    strip.addEventListener("scroll", updateButtons, {{ passive: true }});
+    window.setTimeout(() => {{
+      const step = getStep();
+      const initialIndex = Number(strip.dataset.initialDayIndex || "0");
+      if (step > 0 && Number.isFinite(initialIndex)) {{
+        strip.scrollLeft = Math.max(0, (initialIndex - 4) * step);
+      }}
+      updateButtons();
+    }}, 0);
+    window.addEventListener("resize", updateButtons);
+  }});
 }}
 
 document.addEventListener("change", (event) => {{
@@ -6650,6 +6777,8 @@ document.addEventListener("change", (event) => {{
 }});
 
 window.addEventListener("load", () => {{
+  restoreSidebarScroll();
+  initExpensesDayCarousel();
   document.querySelectorAll('.contract-create-form').forEach((form) => {{
     const stageCountInput = form.querySelector('[data-stage-count-input]');
     buildContractStageFields(form, stageCountInput ? stageCountInput.value : 1);
@@ -10904,10 +11033,10 @@ def render_expenses_section(
     today = datetime.now(VLADIVOSTOK_TZ).date()
     today_total = sum(entry.amount for entry in active_entries if entry.expense_date == today)
     anchor_day = min(day_anchor or today, today)
-    day_window = [anchor_day - timedelta(days=offset) for offset in range(4, -1, -1)]
+    day_window = [anchor_day - timedelta(days=offset) for offset in range(20, -1, -1)]
     daily_totals = {day: sum(entry.amount for entry in source_entries if entry.expense_date == day) for day in day_window}
-    prev_anchor = anchor_day - timedelta(days=7)
-    next_anchor = min(today, anchor_day + timedelta(days=7))
+    visible_day = selected_day if selected_day in day_window else anchor_day
+    initial_day_index = day_window.index(visible_day)
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     project_options = "".join(
         f'<option value="{code}"{" selected" if code == project_filter else ""}>{escape(label)}</option>'
@@ -10928,21 +11057,9 @@ def render_expenses_section(
         )
     day_cards_html = "".join(
         f"""
-        <a class="card" href="{build_expenses_href(day=day, anchor=anchor_day)}" style="
-            min-width: 0;
-            padding: 12px 14px;
-            border-radius: 18px;
-            text-decoration:none;
-            color: var(--ink);
-            border: 2px solid {'var(--brand)' if selected_day == day else 'transparent'};
-            background: {'rgba(255,255,255,0.98)' if selected_day == day else 'rgba(238,242,246,0.88)'};
-            box-shadow: {'0 10px 22px rgba(17,25,38,0.07)' if selected_day == day else 'none'};
-            display:grid;
-            gap:6px;
-            min-height: 84px;
-        ">
-          <div style="font-size:14px; font-weight:600; color:var(--muted);">{escape(format_short_russian_day(day))}</div>
-          <div style="font-size:15px; font-weight:600; color:var(--ink); line-height:1.25;">{escape(format_amount(daily_totals[day]) if daily_totals[day] > 0.009 else 'Расходов нет')}</div>
+        <a class="expenses-day-card{' is-selected' if selected_day == day else ''}" href="{build_expenses_href(day=day, anchor=anchor_day)}" data-expenses-day-card="1">
+          <div class="expenses-day-card-top">{escape(format_short_russian_day(day))}</div>
+          <div class="expenses-day-card-bottom">{escape(format_amount(daily_totals[day]) if daily_totals[day] > 0.009 else 'Расходов нет')}</div>
         </a>
         """
         for day in day_window
@@ -11052,12 +11169,12 @@ def render_expenses_section(
           <div class="panel-sub">Единый список всех трат по юрлицу с привязкой к объекту и группе расходов.</div>
         </div>
       </div>
-      <div class="action-row" style="gap:10px; align-items:stretch; margin-top:6px; flex-wrap:nowrap;">
-        <a class="secondary-btn mini" href="{build_expenses_href(day=selected_day, anchor=prev_anchor)}" style="flex:0 0 48px; min-width:48px; min-height:48px; display:flex; align-items:center; justify-content:center; font-size:24px; padding:0 10px;">←</a>
-        <div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:10px; flex:1; min-width:0;">
+      <div class="expenses-day-carousel" data-expenses-day-carousel="1">
+        <button class="secondary-btn mini expenses-day-arrow" type="button" data-expenses-day-prev="1" aria-label="Показать предыдущие дни">←</button>
+        <div class="expenses-day-strip" data-expenses-day-strip="1" data-initial-day-index="{initial_day_index}">
           {day_cards_html}
         </div>
-        <a class="secondary-btn mini{' disabled' if anchor_day >= today else ''}" href="{build_expenses_href(day=selected_day, anchor=next_anchor)}" style="flex:0 0 48px; min-width:48px; min-height:48px; display:flex; align-items:center; justify-content:center; font-size:24px; padding:0 10px; {'pointer-events:none; opacity:0.45;' if anchor_day >= today else ''}">→</a>
+        <button class="secondary-btn mini expenses-day-arrow" type="button" data-expenses-day-next="1" aria-label="Показать следующие дни">→</button>
       </div>
       <form class="action-row" method="get" action="/expenses" style="justify-content: space-between; align-items:end; margin-top:14px;">
         <input type="hidden" name="owner" value="{owner_chat_id}">
