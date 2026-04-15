@@ -2212,7 +2212,7 @@ def render_contract_timeline_page(storage: Storage, owner_chat_id: int, contract
     ) or '<div class="empty">По контракту еще нет зафиксированных событий.</div>'
 
     return f"""
-    <section class="card panel" style="margin-top:22px;">
+    <section class="card panel expenses-panel" style="margin-top:22px;">
       <div class="panel-head contract-detail-head">
         <div>
           <h2 class="panel-title">Хронология контракта</h2>
@@ -3961,6 +3961,7 @@ def layout(
       width: 100%;
       min-width: 0;
       overflow: hidden;
+      box-sizing: border-box;
     }}
     .expenses-day-arrow {{
       flex: 0 0 48px;
@@ -3982,6 +3983,7 @@ def layout(
       flex: 1;
       min-width: 0;
       width: 100%;
+      max-width: 100%;
       overflow-x: auto;
       overflow-y: hidden;
       scroll-behavior: smooth;
@@ -3995,6 +3997,7 @@ def layout(
     .expenses-day-card {{
       flex: 0 0 clamp(180px, 18vw, 220px);
       width: clamp(180px, 18vw, 220px);
+      max-width: 220px;
       padding: 12px 14px;
       border-radius: 18px;
       text-decoration: none;
@@ -4023,6 +4026,38 @@ def layout(
       font-weight: 600;
       color: var(--ink);
       line-height: 1.25;
+    }}
+    .expenses-panel {{
+      max-width: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
+    }}
+    .expenses-filters {{
+      justify-content: space-between;
+      align-items: end;
+      margin-top: 14px;
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }}
+    .expenses-filters-main {{
+      gap: 12px;
+      align-items: end;
+      flex-wrap: wrap;
+      min-width: 0;
+      flex: 1 1 auto;
+    }}
+    .expenses-filters-actions {{
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      flex: 0 0 auto;
+    }}
+    .expenses-table-wrap {{
+      margin-top: 18px;
+      max-width: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
     }}
     .content {{
       min-width: 0;
@@ -11182,12 +11217,12 @@ def render_expenses_section(
         </div>
         <button class="secondary-btn mini expenses-day-arrow" type="button" data-expenses-day-next="1" aria-label="Показать следующие дни">→</button>
       </div>
-      <form class="action-row" method="get" action="/expenses" style="justify-content: space-between; align-items:end; margin-top:14px;">
+      <form class="action-row expenses-filters" method="get" action="/expenses">
         <input type="hidden" name="owner" value="{owner_chat_id}">
         <input type="hidden" name="tab" value="{active_tab}">
         <input type="hidden" name="day" value="{selected_day.isoformat() if selected_day else ''}">
         <input type="hidden" name="anchor" value="{anchor_day.isoformat()}">
-        <div class="action-row" style="gap:12px; align-items:end; flex-wrap:wrap;">
+        <div class="action-row expenses-filters-main">
           <div class="field" style="min-width:220px; margin:0;">
             <label>Объект</label>
             <select name="project">
@@ -11203,25 +11238,27 @@ def render_expenses_section(
             </select>
           </div>
         </div>
-        <div class="action-row" style="gap:10px;">
+        <div class="action-row expenses-filters-actions">
           <button class="secondary-btn" type="submit">Показать</button>
           {f'<a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}&tab={active_tab}&anchor={anchor_day.isoformat()}">Показать весь реестр</a>' if project_filter or category_filter or selected_day else ""}
         </div>
       </form>
       {flash_html}
-      <table class="table contract-table" style="margin-top:18px;">
-        <thead>
-          <tr>
-            <th class="nowrap">Дата</th>
-            <th>Объект</th>
-            <th>Наименование</th>
-            <th class="nowrap">Сумма</th>
-            <th>Комментарий</th>
-            <th>Добавил</th>
-          </tr>
-        </thead>
-        <tbody>{rows_html or '<tr><td colspan="6">Пока нет расходов в этом срезе.</td></tr>'}</tbody>
-      </table>
+      <div class="expenses-table-wrap">
+        <table class="table contract-table">
+          <thead>
+            <tr>
+              <th class="nowrap">Дата</th>
+              <th>Объект</th>
+              <th>Наименование</th>
+              <th class="nowrap">Сумма</th>
+              <th>Комментарий</th>
+              <th>Добавил</th>
+            </tr>
+          </thead>
+          <tbody>{rows_html or '<tr><td colspan="6">Пока нет расходов в этом срезе.</td></tr>'}</tbody>
+        </table>
+      </div>
     </section>
     {add_section}
     """
