@@ -9522,6 +9522,31 @@ FINANCE_STATUS_META = {
     "closed": ("Закрыто", "chip ok"),
 }
 
+EXPENSE_PROJECT_META = {
+    "library": "Библиотека",
+    "football": "Футбольное поле",
+    "khor": "Хор",
+    "admin": "Админ",
+}
+
+EXPENSE_CATEGORY_META = {
+    "materials": "Материалы",
+    "equipment": "Услуги техники",
+    "labor": "Работы / подряд",
+    "transport": "Транспорт и логистика",
+    "fuel": "Топливо",
+    "rent": "Аренда",
+    "admin": "Административные",
+    "taxes": "Налоги и сборы",
+    "utilities": "Связь / коммунальные",
+    "other": "Прочее",
+}
+
+EXPENSE_STATUS_META = {
+    "active": ("В работе", "chip warn"),
+    "closed": ("В архиве", "chip ok"),
+}
+
 
 def finance_query_suffix(owner_chat_id: int, active_tab: str = "active", kind_filter: str = "") -> str:
     parts = [f"owner={owner_chat_id}"]
@@ -9559,6 +9584,85 @@ def finance_status_control(owner_chat_id: int, entry, current_user: dict | None,
             <select name="status">{options}</select>
           </div>
           <button class="submit-btn" type="submit">Сохранить статус</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def expense_project_label(code: str) -> str:
+    return EXPENSE_PROJECT_META.get(code, "Объект не указан")
+
+
+def expense_category_label(code: str) -> str:
+    return EXPENSE_CATEGORY_META.get(code, "Прочее")
+
+
+def expense_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", base_path: str = "/expenses") -> str:
+    label, css = EXPENSE_STATUS_META.get(entry.status, EXPENSE_STATUS_META["active"])
+    if not has_permission(current_user, "expenses", "edit"):
+        return f'<span class="{css}">{escape(label)}</span>'
+    options = "".join(
+        f'<option value="{code}"{" selected" if code == entry.status else ""}>{escape(option_label)}</option>'
+        for code, (option_label, _option_css) in EXPENSE_STATUS_META.items()
+    )
+    return f"""
+    <details class="status-menu">
+      <summary><span class="{css}">{escape(label)}</span></summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/status?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}">
+          <div class="field">
+            <label>Статус расхода</label>
+            <select name="status">{options}</select>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить статус</button>
+        </form>
+      </div>
+    </details>
+    """
+
+
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", base_path: str = "/expenses") -> str:
+    if not has_permission(current_user, "expenses", "edit"):
+        return f'<div class="timeline-title">{escape(entry.title)}</div>'
+    project_options = "".join(
+        f'<option value="{code}"{" selected" if code == entry.project_code else ""}>{escape(label)}</option>'
+        for code, label in EXPENSE_PROJECT_META.items()
+    )
+    category_options = "".join(
+        f'<option value="{code}"{" selected" if code == entry.category_code else ""}>{escape(label)}</option>'
+        for code, label in EXPENSE_CATEGORY_META.items()
+    )
+    return f"""
+    <details class="status-menu">
+      <summary><span class="timeline-title">{escape(entry.title)}</span></summary>
+      <div class="status-popover">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}">
+          <div class="field">
+            <label>Дата расхода</label>
+            <input type="date" name="expense_date" value="{entry.expense_date.isoformat()}" required>
+          </div>
+          <div class="field">
+            <label>Объект</label>
+            <select name="project_code">{project_options}</select>
+          </div>
+          <div class="field">
+            <label>Группа</label>
+            <select name="category_code">{category_options}</select>
+          </div>
+          <div class="field span-2">
+            <label>Наименование траты</label>
+            <input type="text" name="title" value="{escape(entry.title)}" required>
+          </div>
+          <div class="field">
+            <label>Сумма, ₽</label>
+            <input type="text" name="amount" data-money-input="1" value="{escape(format_amount_input(entry.amount))}" required>
+          </div>
+          <div class="field span-2">
+            <label>Комментарий</label>
+            <textarea name="comment">{escape(entry.comment)}</textarea>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить изменения</button>
         </form>
       </div>
     </details>
@@ -10745,6 +10849,195 @@ def render_access_section(
       </section>
       </aside>
     </section>
+    """
+
+
+def render_expenses_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    active_tab: str = "active",
+    flash_message: str = "",
+    success: bool = False,
+    project_filter: str = "",
+    category_filter: str = "",
+) -> str:
+    entries = storage.list_expense_entries(owner_chat_id)
+    active_entries = [entry for entry in entries if entry.status != "closed"]
+    archive_entries = [entry for entry in entries if entry.status == "closed"]
+    source_entries = archive_entries if active_tab == "archive" else active_entries
+    if project_filter and project_filter not in EXPENSE_PROJECT_META:
+        project_filter = ""
+    if category_filter and category_filter not in EXPENSE_CATEGORY_META:
+        category_filter = ""
+    filtered_entries = [
+        entry
+        for entry in source_entries
+        if (not project_filter or entry.project_code == project_filter) and (not category_filter or entry.category_code == category_filter)
+    ]
+    total_active = sum(entry.amount for entry in active_entries)
+    total_admin = sum(entry.amount for entry in active_entries if entry.project_code == "admin")
+    total_project = sum(entry.amount for entry in active_entries if entry.project_code != "admin")
+    today_total = sum(entry.amount for entry in active_entries if entry.expense_date == datetime.now(VLADIVOSTOK_TZ).date())
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    project_options = "".join(
+        f'<option value="{code}"{" selected" if code == project_filter else ""}>{escape(label)}</option>'
+        for code, label in EXPENSE_PROJECT_META.items()
+    )
+    category_options = "".join(
+        f'<option value="{code}"{" selected" if code == category_filter else ""}>{escape(label)}</option>'
+        for code, label in EXPENSE_CATEGORY_META.items()
+    )
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td class="nowrap">{format_date(entry.expense_date)}</td>
+          <td><span class="chip">{escape(expense_project_label(entry.project_code))}</span></td>
+          <td><span class="chip">{escape(expense_category_label(entry.category_code))}</span></td>
+          <td>{expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter)}</td>
+          <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+          <td>{escape(entry.comment) if entry.comment else "Без комментария"}</td>
+          <td class="nowrap">
+            <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
+              {escape(entry.created_by_name or "Автор неизвестен")}
+            </span>
+          </td>
+          <td>{expense_status_control(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter)}</td>
+        </tr>
+        """
+        for entry in filtered_entries
+    )
+    add_section = ""
+    if has_permission(current_user, "expenses", "edit") and active_tab != "archive":
+        add_section = f"""
+        <section class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Добавить расход</h2>
+              <div class="panel-sub">Ежедневный ручной реестр всех трат по юрлицу: объект, группа расхода, сумма и комментарий.</div>
+            </div>
+          </div>
+          <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}">
+            <div class="field">
+              <label>Дата расхода</label>
+              <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
+            </div>
+            <div class="field">
+              <label>Объект</label>
+              <select name="project_code" required>
+                <option value="library">Библиотека</option>
+                <option value="football">Футбольное поле</option>
+                <option value="khor">Хор</option>
+                <option value="admin">Админ</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Группа расхода</label>
+              <select name="category_code" required>
+                <option value="materials">Материалы</option>
+                <option value="equipment">Услуги техники</option>
+                <option value="labor">Работы / подряд</option>
+                <option value="transport">Транспорт и логистика</option>
+                <option value="fuel">Топливо</option>
+                <option value="rent">Аренда</option>
+                <option value="admin">Административные</option>
+                <option value="taxes">Налоги и сборы</option>
+                <option value="utilities">Связь / коммунальные</option>
+                <option value="other">Прочее</option>
+              </select>
+            </div>
+            <div class="field span-2">
+              <label>Наименование траты</label>
+              <input type="text" name="title" placeholder="Например, закупка кабеля / аренда манипулятора / канцелярия" required>
+            </div>
+            <div class="field">
+              <label>Сумма, ₽</label>
+              <input type="text" name="amount" data-money-input="1" placeholder="Например, 125000" required>
+            </div>
+            <div class="field span-2">
+              <label>Комментарий</label>
+              <textarea name="comment" placeholder="Коротко фиксируем, на что именно ушли деньги"></textarea>
+            </div>
+            <button class="submit-btn" type="submit">Добавить расход</button>
+          </form>
+        </section>
+        """
+    return f"""
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Всего расходов</div>
+        <div class="stat-value">{format_amount(total_active)}</div>
+        <div class="stat-note">Активные расходы по реестру</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">За сегодня</div>
+        <div class="stat-value">{format_amount(today_total)}</div>
+        <div class="stat-note">Траты текущего дня</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Проектные</div>
+        <div class="stat-value">{format_amount(total_project)}</div>
+        <div class="stat-note">Расходы по объектам</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Административные</div>
+        <div class="stat-value">{format_amount(total_admin)}</div>
+        <div class="stat-note">Общехозяйственные траты</div>
+      </article>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Реестр расходов</h2>
+          <div class="panel-sub">Единый список всех трат по юрлицу с привязкой к объекту и группе расходов.</div>
+        </div>
+      </div>
+      <div class="tab-row">
+        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/expenses?owner={owner_chat_id}&tab=active">В работе<span class="tab-count">{len(active_entries)}</span></a>
+        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/expenses?owner={owner_chat_id}&tab=archive">Архив<span class="tab-count">{len(archive_entries)}</span></a>
+      </div>
+      <form class="action-row" method="get" action="/expenses" style="justify-content: space-between; align-items:end; margin-top:14px;">
+        <input type="hidden" name="owner" value="{owner_chat_id}">
+        <input type="hidden" name="tab" value="{active_tab}">
+        <div class="action-row" style="gap:12px; align-items:end; flex-wrap:wrap;">
+          <div class="field" style="min-width:220px; margin:0;">
+            <label>Объект</label>
+            <select name="project">
+              <option value="">Все объекты</option>
+              {project_options}
+            </select>
+          </div>
+          <div class="field" style="min-width:240px; margin:0;">
+            <label>Группа</label>
+            <select name="category">
+              <option value="">Все группы</option>
+              {category_options}
+            </select>
+          </div>
+        </div>
+        <div class="action-row" style="gap:10px;">
+          <button class="secondary-btn" type="submit">Показать</button>
+          {f'<a class="secondary-btn" href="/expenses?owner={owner_chat_id}&tab={active_tab}">Сбросить фильтр</a>' if project_filter or category_filter else ""}
+        </div>
+      </form>
+      {flash_html}
+      <table class="table contract-table" style="margin-top:18px;">
+        <thead>
+          <tr>
+            <th class="nowrap">Дата</th>
+            <th>Объект</th>
+            <th>Группа</th>
+            <th>Наименование</th>
+            <th class="nowrap">Сумма</th>
+            <th>Комментарий</th>
+            <th>Добавил</th>
+            <th class="nowrap">Статус</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html or '<tr><td colspan="8">Пока нет расходов в этом срезе.</td></tr>'}</tbody>
+      </table>
+    </section>
+    {add_section}
     """
 
 
@@ -15037,28 +15330,114 @@ def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
-    placeholder_routes = {
-        "/expenses": (
-            "Расходы компании",
-            "Отдельный блок для операционных и проектных затрат, чтобы видеть чистую картину денег.",
-            [
-                "Постоянные расходы компании",
-                "Проектные расходы по объектам",
-                "Разбивка по категориям",
-                "План/факт по затратам",
-            ],
-            "expenses",
-        ),
-    }
-    if path in placeholder_routes:
-        title, subtitle, bullets, section_id = placeholder_routes[path]
-        denied = guard(section_id, "view")
+    if path == "/expenses" and method == "GET":
+        denied = guard("expenses", "view")
         if denied:
             return denied
-        body = render_placeholder_section(title, subtitle, bullets)
-        html = layout(title, body, owners, current_owner, section_id, current_user)
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        project_filter = query.get("project", [""])[0].strip()
+        category_filter = query.get("category", [""])[0].strip()
+        if active_tab not in {"active", "archive"}:
+            active_tab = "active"
+        body = render_expenses_section(storage, current_owner, current_user, active_tab, project_filter=project_filter, category_filter=category_filter)
+        html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
+
+    if path == "/expenses/new" and method == "POST":
+        denied = guard("expenses", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        project_filter = query.get("project", [""])[0].strip()
+        category_filter = query.get("category", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            expense_date_raw = form.get("expense_date", "").strip()
+            project_code = form.get("project_code", "").strip()
+            category_code = form.get("category_code", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            comment = form.get("comment", "").strip()
+            expense_date = parse_date(expense_date_raw) if expense_date_raw else None
+            if expense_date is None:
+                raise ValueError("Укажите дату расхода")
+            if project_code not in EXPENSE_PROJECT_META:
+                raise ValueError("Выберите объект")
+            if category_code not in EXPENSE_CATEGORY_META:
+                raise ValueError("Выберите группу расхода")
+            if not title:
+                raise ValueError("Укажите наименование траты")
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, (current_user or {}).get("id"), actor_name)
+        except ValueError as exc:
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter)
+            html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}")
+
+    if path.startswith("/expenses/") and path.endswith("/update") and method == "POST":
+        denied = guard("expenses", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        project_filter = query.get("project", [""])[0].strip()
+        category_filter = query.get("category", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            expense_date_raw = form.get("expense_date", "").strip()
+            project_code = form.get("project_code", "").strip()
+            category_code = form.get("category_code", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            comment = form.get("comment", "").strip()
+            expense_date = parse_date(expense_date_raw) if expense_date_raw else None
+            if expense_date is None:
+                raise ValueError("Укажите дату расхода")
+            if project_code not in EXPENSE_PROJECT_META:
+                raise ValueError("Выберите объект")
+            if category_code not in EXPENSE_CATEGORY_META:
+                raise ValueError("Выберите группу расхода")
+            if not title:
+                raise ValueError("Укажите наименование траты")
+            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment)
+        except ValueError as exc:
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter)
+            html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}")
+
+    if path.startswith("/expenses/") and path.endswith("/status") and method == "POST":
+        denied = guard("expenses", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        project_filter = query.get("project", [""])[0].strip()
+        category_filter = query.get("category", [""])[0].strip()
+        form = read_post_data(environ)
+        status = form.get("status", "").strip()
+        if status not in EXPENSE_STATUS_META:
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False, project_filter, category_filter)
+            html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        storage.update_expense_entry_status(current_owner, entry_id, status)
+        target_tab = "archive" if status == "closed" else "active"
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(target_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}")
 
     if path == "/payables":
         denied = guard("payables", "view")
