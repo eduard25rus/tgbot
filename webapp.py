@@ -1166,6 +1166,20 @@ def preview_role_code(label: str) -> str:
     return f"role_{hashlib.sha1(normalized.encode('utf-8')).hexdigest()[:10]}"
 
 
+def canonical_role_label(label: str) -> str:
+    normalized = (label or "").strip()
+    if not normalized:
+        return ""
+    role_code = preview_role_code(normalized)
+    if role_code == "procurement":
+        return "Отдел госзакупок"
+    if role_code == "supply":
+        return "Отдел снабжения"
+    if role_code == "management":
+        return "Руководство компании"
+    return normalized
+
+
 def preview_fallback_permissions(preview_role: str) -> dict[str, dict[str, bool]]:
     permissions = {
         section_id: {"can_view": False, "can_edit": False}
@@ -8550,7 +8564,8 @@ def can_archive_task(current_user: dict | None, task: dict) -> bool:
 
 def task_assignee_label(task: dict) -> str:
     if task.get("assignee_kind") == "role" or (not task.get("assignee_name") and task.get("assignee_role_name")):
-        return task.get("assignee_role_name") or "Роль не указана"
+        role_label = canonical_role_label(task.get("assignee_role_name") or "")
+        return role_label or "Роль не указана"
     return task.get("assignee_name") or "Без ответственного"
 
 
@@ -8782,9 +8797,9 @@ def render_tasks_section(
     )
     assignee_roles = sorted(
         {
-            (user.get("role_name") or "").strip()
+            canonical_role_label((user.get("role_name") or "").strip())
             for user in filter_users
-            if (user.get("role_name") or "").strip()
+            if canonical_role_label((user.get("role_name") or "").strip())
         }
     )
     for label in (task_assignee_label(task) for task in (manual_tasks + auto_tasks + archived_auto_tasks) if task_assignee_label(task)):
