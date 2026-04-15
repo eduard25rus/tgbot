@@ -3958,6 +3958,9 @@ def layout(
       align-items: stretch;
       gap: 10px;
       margin-top: 6px;
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
     }}
     .expenses-day-arrow {{
       flex: 0 0 48px;
@@ -3978,9 +3981,11 @@ def layout(
       gap: 10px;
       flex: 1;
       min-width: 0;
+      width: 100%;
       overflow-x: auto;
       overflow-y: hidden;
       scroll-behavior: smooth;
+      scroll-snap-type: x proximity;
       scrollbar-width: none;
       -ms-overflow-style: none;
     }}
@@ -3988,8 +3993,8 @@ def layout(
       display: none;
     }}
     .expenses-day-card {{
-      flex: 0 0 calc((100% - 40px) / 5);
-      min-width: 0;
+      flex: 0 0 clamp(180px, 18vw, 220px);
+      width: clamp(180px, 18vw, 220px);
       padding: 12px 14px;
       border-radius: 18px;
       text-decoration: none;
@@ -3997,6 +4002,7 @@ def layout(
       display: grid;
       gap: 6px;
       min-height: 84px;
+      scroll-snap-align: start;
     }}
     .expenses-day-card.is-selected {{
       border: 2px solid var(--brand);
