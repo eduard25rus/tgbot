@@ -9513,6 +9513,7 @@ FINANCE_KIND_META = {
     "loan": ("Займ", "chip danger"),
     "credit": ("Кредит", "chip danger"),
     "contribution": ("Взнос", "chip accent"),
+    "tax": ("Налог", "chip danger"),
     "liability": ("Прочие обязательства", "chip"),
 }
 
@@ -9643,11 +9644,11 @@ def render_finance_section(
         for entry in active_entries
         if entry.entry_kind in {"dispute", "receivable_court"}
     )
-    financing_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"financing", "loan", "credit", "contribution", "liability"})
+    financing_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"financing", "loan", "credit", "contribution", "liability", "tax"})
     loan_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "loan")
     credit_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "credit")
     contribution_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"contribution", "financing"})
-    other_liability_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "liability")
+    other_liability_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"liability", "tax"})
     contractor_receivable_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "receivable_contractor")
     customs_receivable_total = sum(entry.amount for entry in active_entries if entry.entry_kind == "receivable_customs")
     other_receivable_total = sum(entry.amount for entry in active_entries if entry.entry_kind in {"receivable_other", "receivable"})
@@ -9745,7 +9746,7 @@ def render_finance_section(
         </div>
         """
         for entry in active_entries
-        if entry.entry_kind == "liability"
+        if entry.entry_kind in {"liability", "tax"}
     )
     payable_items_html = "".join(
         f"""
@@ -9977,6 +9978,7 @@ def render_finance_section(
                 <option value="credit">Кредит</option>
                 <option value="contribution">Взнос</option>
                 <option value="liability">Прочие обязательства</option>
+                <option value="tax">Налог</option>
               </select>
             </div>
             <div class="field">
@@ -10419,7 +10421,7 @@ def render_finance_liabilities_section(
     flash_message: str = "",
     success: bool = False,
 ) -> str:
-    entries = [entry for entry in storage.list_finance_entries(owner_chat_id) if entry.entry_kind == "liability"]
+    entries = [entry for entry in storage.list_finance_entries(owner_chat_id) if entry.entry_kind in {"liability", "tax"}]
     active_entries = [entry for entry in entries if entry.status != "closed"]
     archive_entries = [entry for entry in entries if entry.status == "closed"]
     source_entries = archive_entries if active_tab == "archive" else active_entries
@@ -10432,7 +10434,7 @@ def render_finance_liabilities_section(
     rows_html = "".join(
         f"""
         <tr>
-          <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, "", "/finance-liabilities", ("liability",))}</td>
+          <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, "", "/finance-liabilities", ("tax", "liability"))}</td>
           <td class="nowrap">
             <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
               <div class="timeline-title">{escape(entry.counterparty)}</div>
@@ -10460,6 +10462,13 @@ def render_finance_liabilities_section(
             </div>
           </div>
           <form class="form-grid" method="post" action="/finance-liabilities/new{finance_query_suffix(owner_chat_id, active_tab)}">
+            <div class="field">
+              <label>Тип</label>
+              <select name="entry_kind" required>
+                <option value="tax">Налог</option>
+                <option value="liability">Прочие обязательства</option>
+              </select>
+            </div>
             <div class="field">
               <label>Контрагент / получатель</label>
               <input type="text" name="counterparty" placeholder="Например, ФНС России" required>
@@ -11626,12 +11635,15 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         form = read_post_data(environ)
         try:
+            entry_kind = form.get("entry_kind", "").strip()
             counterparty = form.get("counterparty", "").strip()
             title = form.get("title", "").strip()
             amount = parse_amount(form.get("amount", "").strip())
             due_date_raw = form.get("due_date", "").strip()
             comment = form.get("comment", "").strip()
             due_date = parse_date(due_date_raw) if due_date_raw else None
+            if entry_kind not in {"liability", "tax"}:
+                raise ValueError("Выберите тип обязательства")
             if not counterparty:
                 raise ValueError("Укажите контрагента")
             if not title:
@@ -11639,7 +11651,7 @@ def app(environ, start_response):
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             storage.add_finance_entry(
                 current_owner,
-                "liability",
+                entry_kind,
                 title,
                 counterparty,
                 amount,
@@ -11804,17 +11816,20 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         form = read_post_data(environ)
         try:
+            entry_kind = form.get("entry_kind", "").strip()
             counterparty = form.get("counterparty", "").strip()
             title = form.get("title", "").strip()
             amount = parse_amount(form.get("amount", "").strip())
             due_date_raw = form.get("due_date", "").strip()
             comment = form.get("comment", "").strip()
             due_date = parse_date(due_date_raw) if due_date_raw else None
+            if entry_kind not in {"liability", "tax"}:
+                raise ValueError("Выберите тип обязательства")
             if not counterparty:
                 raise ValueError("Укажите контрагента")
             if not title:
                 raise ValueError("Укажите основание")
-            storage.update_finance_entry(current_owner, entry_id, "liability", title, counterparty, amount, due_date, None, comment)
+            storage.update_finance_entry(current_owner, entry_id, entry_kind, title, counterparty, amount, due_date, None, comment)
         except ValueError as exc:
             body = render_finance_liabilities_section(storage, current_owner, current_user, active_tab, str(exc), False)
             html = layout(
