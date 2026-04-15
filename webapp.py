@@ -3499,6 +3499,7 @@ FINANCE_NAV_SECTIONS = [
     ("payables", "Кредиторка", "/payables"),
     ("finance_receivables", "Дебиторка", "/finance-receivables"),
     ("finance_loans", "Кредиты и займы", "/finance-loans"),
+    ("finance_liabilities", "Прочие обязательства", "/finance-liabilities"),
     ("expenses", "Расходы", "/expenses"),
 ]
 
@@ -9931,7 +9932,7 @@ def render_finance_section(
         {render_analysis_bucket("Займы", "Ручные заемные обязательства", loan_total, loan_items_html, "Активных займов сейчас нет.", f"/finance-loans?owner={owner_chat_id}&tab=active&kind=loan")}
         {render_analysis_bucket("Кредиты", "Банковские и иные кредитные обязательства", credit_total, credit_items_html, "Активных кредитов сейчас нет.", f"/finance-loans?owner={owner_chat_id}&tab=active&kind=credit")}
         {render_analysis_bucket("Взносы и финансирование", "Внутренние вливания и прочее финансирование", contribution_total, contribution_items_html, "Записей по взносам и финансированию сейчас нет.", f"/finance-loans?owner={owner_chat_id}&tab=active&kind=contribution")}
-        {render_analysis_bucket("Прочие обязательства", "Налоги и прочие ручные обязательства вне кредитов и займов", other_liability_total, liability_items_html, "Прочих обязательств сейчас нет.", f"/finance-analysis?owner={owner_chat_id}&tab=active&kind=liability")}
+        {render_analysis_bucket("Прочие обязательства", "Налоги и прочие ручные обязательства вне кредитов и займов", other_liability_total, liability_items_html, "Прочих обязательств сейчас нет.", f"/finance-liabilities?owner={owner_chat_id}&tab=active")}
         {render_analysis_bucket("Кредиторка подрядчикам", "Автоматически из рабочего раздела кредиторки", current_payables_total, payable_items_html, "Активной подрядной кредиторки сейчас нет.", f"/payables?owner={owner_chat_id}&tab=active")}
       </div>
     </section>
@@ -10404,6 +10405,122 @@ def render_finance_receivables_section(
           </tr>
         </thead>
         <tbody>{rows_html or '<tr><td colspan="6">Пока нет записей по дебиторке.</td></tr>'}</tbody>
+      </table>
+    </section>
+    {add_section}
+    """
+
+
+def render_finance_liabilities_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    active_tab: str = "active",
+    flash_message: str = "",
+    success: bool = False,
+) -> str:
+    entries = [entry for entry in storage.list_finance_entries(owner_chat_id) if entry.entry_kind == "liability"]
+    active_entries = [entry for entry in entries if entry.status != "closed"]
+    archive_entries = [entry for entry in entries if entry.status == "closed"]
+    source_entries = archive_entries if active_tab == "archive" else active_entries
+    total_active = sum(entry.amount for entry in active_entries)
+    overdue_entries = [
+        entry for entry in active_entries if entry.due_date is not None and entry.due_date < datetime.now(VLADIVOSTOK_TZ).date()
+    ]
+    overdue_total = sum(entry.amount for entry in overdue_entries)
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, "", "/finance-liabilities", ("liability",))}</td>
+          <td class="nowrap">
+            <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
+              <div class="timeline-title">{escape(entry.counterparty)}</div>
+            </span>
+          </td>
+          <td>
+            <div>{escape(entry.title)}</div>
+            <div class="contract-table-subtle">{escape(entry.comment) if entry.comment else "Без комментария"}</div>
+          </td>
+          <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+          <td class="nowrap" style="text-align:center;">{format_date(entry.due_date) if entry.due_date else "—"}</td>
+          <td>{finance_status_control(owner_chat_id, entry, current_user, active_tab, "", "/finance-liabilities")}</td>
+        </tr>
+        """
+        for entry in source_entries
+    )
+    add_section = ""
+    if has_permission(current_user, "finance", "edit") and active_tab != "archive":
+        add_section = f"""
+        <section class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Добавить обязательство</h2>
+              <div class="panel-sub">Отдельный ручной реестр налогов и прочих обязательств вне кредитов, займов и подрядной кредиторки. Сюда можно заносить задолженности по ФНС.</div>
+            </div>
+          </div>
+          <form class="form-grid" method="post" action="/finance-liabilities/new{finance_query_suffix(owner_chat_id, active_tab)}">
+            <div class="field">
+              <label>Контрагент / получатель</label>
+              <input type="text" name="counterparty" placeholder="Например, ФНС России" required>
+            </div>
+            <div class="field span-2">
+              <label>Основание</label>
+              <input type="text" name="title" placeholder="Например, НДС за март 2026" required>
+            </div>
+            <div class="field">
+              <label>Сумма, ₽</label>
+              <input type="text" name="amount" data-money-input="1" placeholder="Например, 350000" required>
+            </div>
+            <div class="field">
+              <label>Срок / дата оплаты</label>
+              <input type="date" name="due_date">
+            </div>
+            <div class="field span-2">
+              <label>Комментарий</label>
+              <textarea name="comment" placeholder="Например, налог, пени, обязательный платеж, этап погашения"></textarea>
+            </div>
+            <button class="submit-btn" type="submit">Добавить в реестр</button>
+          </form>
+        </section>
+        """
+    return f"""
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Все обязательства</div>
+        <div class="stat-value">{format_amount(total_active)}</div>
+        <div class="stat-note">Активные налоги и прочие ручные обязательства</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Просрочено</div>
+        <div class="stat-value">{format_amount(overdue_total)}</div>
+        <div class="stat-note">Позиции с прошедшим сроком: {len(overdue_entries)}</div>
+      </article>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Прочие обязательства</h2>
+          <div class="panel-sub">Отдельный реестр обязательств компании вне кредитов и займов: ФНС, налоги, сборы, обязательные платежи и иные ручные позиции.</div>
+        </div>
+      </div>
+      <div class="tab-row">
+        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/finance-liabilities{finance_query_suffix(owner_chat_id, 'active')}">В работе<span class="tab-count">{len(active_entries)}</span></a>
+        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/finance-liabilities{finance_query_suffix(owner_chat_id, 'archive')}">Архив<span class="tab-count">{len(archive_entries)}</span></a>
+      </div>
+      {flash_html}
+      <table class="table contract-table" style="margin-top:18px;">
+        <thead>
+          <tr>
+            <th>Тип</th>
+            <th>Контрагент</th>
+            <th>Основание / комментарий</th>
+            <th class="nowrap">Сумма</th>
+            <th class="nowrap">Срок</th>
+            <th class="nowrap">Статус</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html or '<tr><td colspan="6">Пока нет записей по прочим обязательствам.</td></tr>'}</tbody>
       </table>
     </section>
     {add_section}
@@ -11328,6 +11445,29 @@ def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
+    if path == "/finance-liabilities" and method == "GET":
+        denied = guard("finance", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        if active_tab not in {"active", "archive"}:
+            active_tab = "active"
+        body = render_finance_liabilities_section(storage, current_owner, current_user, active_tab)
+        html = layout(
+            "Прочие обязательства",
+            body,
+            owners,
+            current_owner,
+            "finance",
+            current_user,
+            hero_title_override="Прочие обязательства",
+            hero_copy_override="Отдельный реестр налогов, ФНС и других ручных обязательств компании вне кредитов, займов и подрядной кредиторки.",
+            active_subsection="finance_liabilities",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
     if path == "/finance-analysis/new" and method == "POST":
         denied = guard("finance", "edit")
         if denied:
@@ -11478,6 +11618,54 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
         return redirect(start_response, f"/finance-receivables{finance_query_suffix(current_owner, active_tab, kind_filter)}")
 
+    if path == "/finance-liabilities/new" and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        form = read_post_data(environ)
+        try:
+            counterparty = form.get("counterparty", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            due_date_raw = form.get("due_date", "").strip()
+            comment = form.get("comment", "").strip()
+            due_date = parse_date(due_date_raw) if due_date_raw else None
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not title:
+                raise ValueError("Укажите основание")
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            storage.add_finance_entry(
+                current_owner,
+                "liability",
+                title,
+                counterparty,
+                amount,
+                due_date,
+                None,
+                comment,
+                (current_user or {}).get("id"),
+                actor_name,
+            )
+        except ValueError as exc:
+            body = render_finance_liabilities_section(storage, current_owner, current_user, active_tab, str(exc), False)
+            html = layout(
+                "Прочие обязательства",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Прочие обязательства",
+                hero_copy_override="Отдельный реестр налогов, ФНС и других ручных обязательств компании вне кредитов, займов и подрядной кредиторки.",
+                active_subsection="finance_liabilities",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/finance-liabilities{finance_query_suffix(current_owner, active_tab)}")
+
     if path.startswith("/finance-analysis/") and path.endswith("/update") and method == "POST":
         denied = guard("finance", "edit")
         if denied:
@@ -11604,6 +11792,46 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
         return redirect(start_response, f"/finance-receivables{finance_query_suffix(current_owner, active_tab, kind_filter)}")
 
+    if path.startswith("/finance-liabilities/") and path.endswith("/update") and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        form = read_post_data(environ)
+        try:
+            counterparty = form.get("counterparty", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            due_date_raw = form.get("due_date", "").strip()
+            comment = form.get("comment", "").strip()
+            due_date = parse_date(due_date_raw) if due_date_raw else None
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not title:
+                raise ValueError("Укажите основание")
+            storage.update_finance_entry(current_owner, entry_id, "liability", title, counterparty, amount, due_date, None, comment)
+        except ValueError as exc:
+            body = render_finance_liabilities_section(storage, current_owner, current_user, active_tab, str(exc), False)
+            html = layout(
+                "Прочие обязательства",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Прочие обязательства",
+                hero_copy_override="Отдельный реестр налогов, ФНС и других ручных обязательств компании вне кредитов, займов и подрядной кредиторки.",
+                active_subsection="finance_liabilities",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/finance-liabilities{finance_query_suffix(current_owner, active_tab)}")
+
     if path.startswith("/finance-analysis/") and path.endswith("/status") and method == "POST":
         denied = guard("finance", "edit")
         if denied:
@@ -11689,6 +11917,37 @@ def app(environ, start_response):
         storage.update_finance_entry_status(current_owner, entry_id, status)
         target_tab = "archive" if status == "closed" else "active"
         return redirect(start_response, f"/finance-receivables{finance_query_suffix(current_owner, target_tab, kind_filter)}")
+
+    if path.startswith("/finance-liabilities/") and path.endswith("/status") and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        form = read_post_data(environ)
+        status = form.get("status", "").strip()
+        if status not in FINANCE_STATUS_META:
+            body = render_finance_liabilities_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False)
+            html = layout(
+                "Прочие обязательства",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Прочие обязательства",
+                hero_copy_override="Отдельный реестр налогов, ФНС и других ручных обязательств компании вне кредитов, займов и подрядной кредиторки.",
+                active_subsection="finance_liabilities",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        storage.update_finance_entry_status(current_owner, entry_id, status)
+        target_tab = "archive" if status == "closed" else "active"
+        return redirect(start_response, f"/finance-liabilities{finance_query_suffix(current_owner, target_tab)}")
 
     if path == "/tasks" and method == "GET":
         denied = guard("tasks", "view")
