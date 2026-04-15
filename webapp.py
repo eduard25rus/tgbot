@@ -10930,19 +10930,19 @@ def render_expenses_section(
         f"""
         <a class="card" href="{build_expenses_href(day=day, anchor=anchor_day)}" style="
             min-width: 0;
-            padding: 16px 18px;
-            border-radius: 22px;
+            padding: 12px 14px;
+            border-radius: 18px;
             text-decoration:none;
             color: var(--ink);
             border: 2px solid {'var(--brand)' if selected_day == day else 'transparent'};
             background: {'rgba(255,255,255,0.98)' if selected_day == day else 'rgba(238,242,246,0.88)'};
-            box-shadow: {'0 12px 26px rgba(17,25,38,0.08)' if selected_day == day else 'none'};
+            box-shadow: {'0 10px 22px rgba(17,25,38,0.07)' if selected_day == day else 'none'};
             display:grid;
-            gap:10px;
-            min-height: 118px;
+            gap:6px;
+            min-height: 84px;
         ">
-          <div style="font-size:16px; font-weight:600; color:var(--muted);">{escape(format_short_russian_day(day))}</div>
-          <div style="font-size:18px; font-weight:800; color:var(--ink);">{escape(format_amount(daily_totals[day]) if daily_totals[day] > 0.009 else 'Расходов нет')}</div>
+          <div style="font-size:14px; font-weight:600; color:var(--muted);">{escape(format_short_russian_day(day))}</div>
+          <div style="font-size:15px; font-weight:600; color:var(--ink); line-height:1.25;">{escape(format_amount(daily_totals[day]) if daily_totals[day] > 0.009 else 'Расходов нет')}</div>
         </a>
         """
         for day in day_window
@@ -11048,28 +11048,16 @@ def render_expenses_section(
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
-          <h2 class="panel-title">Фильтр по дням</h2>
-          <div class="panel-sub">Быстрый переход по расходам за конкретный день. В правой карточке самое позднее число окна, по умолчанию это сегодня.</div>
-        </div>
-      </div>
-      <div class="action-row" style="gap:12px; align-items:stretch; margin-top:6px; flex-wrap:nowrap;">
-        <a class="secondary-btn" href="{build_expenses_href(day=selected_day, anchor=prev_anchor)}" style="flex:0 0 56px; min-width:56px; min-height:56px; display:flex; align-items:center; justify-content:center; font-size:28px; padding:0 12px;">←</a>
-        <div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:12px; flex:1; min-width:0;">
-          {day_cards_html}
-        </div>
-        <a class="secondary-btn{' disabled' if anchor_day >= today else ''}" href="{build_expenses_href(day=selected_day, anchor=next_anchor)}" style="flex:0 0 56px; min-width:56px; min-height:56px; display:flex; align-items:center; justify-content:center; font-size:28px; padding:0 12px; {'pointer-events:none; opacity:0.45;' if anchor_day >= today else ''}">→</a>
-      </div>
-    </section>
-    <section class="card panel" style="margin-top:22px;">
-      <div class="panel-head">
-        <div>
           <h2 class="panel-title">Реестр расходов</h2>
           <div class="panel-sub">Единый список всех трат по юрлицу с привязкой к объекту и группе расходов.</div>
         </div>
       </div>
-      <div class="tab-row">
-        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="{build_expenses_href(tab='active', day=selected_day)}">В работе<span class="tab-count">{len(active_entries)}</span></a>
-        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="{build_expenses_href(tab='archive', day=selected_day)}">Архив<span class="tab-count">{len(archive_entries)}</span></a>
+      <div class="action-row" style="gap:10px; align-items:stretch; margin-top:6px; flex-wrap:nowrap;">
+        <a class="secondary-btn mini" href="{build_expenses_href(day=selected_day, anchor=prev_anchor)}" style="flex:0 0 48px; min-width:48px; min-height:48px; display:flex; align-items:center; justify-content:center; font-size:24px; padding:0 10px;">←</a>
+        <div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:10px; flex:1; min-width:0;">
+          {day_cards_html}
+        </div>
+        <a class="secondary-btn mini{' disabled' if anchor_day >= today else ''}" href="{build_expenses_href(day=selected_day, anchor=next_anchor)}" style="flex:0 0 48px; min-width:48px; min-height:48px; display:flex; align-items:center; justify-content:center; font-size:24px; padding:0 10px; {'pointer-events:none; opacity:0.45;' if anchor_day >= today else ''}">→</a>
       </div>
       <form class="action-row" method="get" action="/expenses" style="justify-content: space-between; align-items:end; margin-top:14px;">
         <input type="hidden" name="owner" value="{owner_chat_id}">
@@ -11094,7 +11082,7 @@ def render_expenses_section(
         </div>
         <div class="action-row" style="gap:10px;">
           <button class="secondary-btn" type="submit">Показать</button>
-          {f'<a class="secondary-btn" href="/expenses?owner={owner_chat_id}&tab={active_tab}&anchor={anchor_day.isoformat()}">Сбросить фильтр</a>' if project_filter or category_filter or selected_day else ""}
+          {f'<a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}&tab={active_tab}&anchor={anchor_day.isoformat()}">Показать весь реестр</a>' if project_filter or category_filter or selected_day else ""}
         </div>
       </form>
       {flash_html}
