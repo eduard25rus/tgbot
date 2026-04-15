@@ -10904,7 +10904,7 @@ def render_expenses_section(
     today = datetime.now(VLADIVOSTOK_TZ).date()
     today_total = sum(entry.amount for entry in active_entries if entry.expense_date == today)
     anchor_day = min(day_anchor or today, today)
-    day_window = [anchor_day - timedelta(days=offset) for offset in range(6, -1, -1)]
+    day_window = [anchor_day - timedelta(days=offset) for offset in range(4, -1, -1)]
     daily_totals = {day: sum(entry.amount for entry in source_entries if entry.expense_date == day) for day in day_window}
     prev_anchor = anchor_day - timedelta(days=7)
     next_anchor = min(today, anchor_day + timedelta(days=7))
@@ -10929,8 +10929,8 @@ def render_expenses_section(
     day_cards_html = "".join(
         f"""
         <a class="card" href="{build_expenses_href(day=day, anchor=anchor_day)}" style="
-            min-width: 174px;
-            padding: 18px 20px;
+            min-width: 0;
+            padding: 16px 18px;
             border-radius: 22px;
             text-decoration:none;
             color: var(--ink);
@@ -10939,6 +10939,7 @@ def render_expenses_section(
             box-shadow: {'0 12px 26px rgba(17,25,38,0.08)' if selected_day == day else 'none'};
             display:grid;
             gap:10px;
+            min-height: 118px;
         ">
           <div style="font-size:16px; font-weight:600; color:var(--muted);">{escape(format_short_russian_day(day))}</div>
           <div style="font-size:18px; font-weight:800; color:var(--ink);">{escape(format_amount(daily_totals[day]) if daily_totals[day] > 0.009 else 'Расходов нет')}</div>
@@ -11051,12 +11052,12 @@ def render_expenses_section(
           <div class="panel-sub">Быстрый переход по расходам за конкретный день. В правой карточке самое позднее число окна, по умолчанию это сегодня.</div>
         </div>
       </div>
-      <div class="action-row" style="gap:16px; align-items:stretch; margin-top:6px; flex-wrap:nowrap;">
-        <a class="secondary-btn" href="{build_expenses_href(day=selected_day, anchor=prev_anchor)}" style="min-width:56px; min-height:56px; display:flex; align-items:center; justify-content:center; font-size:28px; padding:0 12px;">←</a>
-        <div style="display:grid; grid-template-columns:repeat(7, minmax(174px, 1fr)); gap:16px; flex:1; overflow:auto;">
+      <div class="action-row" style="gap:12px; align-items:stretch; margin-top:6px; flex-wrap:nowrap;">
+        <a class="secondary-btn" href="{build_expenses_href(day=selected_day, anchor=prev_anchor)}" style="flex:0 0 56px; min-width:56px; min-height:56px; display:flex; align-items:center; justify-content:center; font-size:28px; padding:0 12px;">←</a>
+        <div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:12px; flex:1; min-width:0;">
           {day_cards_html}
         </div>
-        <a class="secondary-btn{' disabled' if anchor_day >= today else ''}" href="{build_expenses_href(day=selected_day, anchor=next_anchor)}" style="min-width:56px; min-height:56px; display:flex; align-items:center; justify-content:center; font-size:28px; padding:0 12px; {'pointer-events:none; opacity:0.45;' if anchor_day >= today else ''}">→</a>
+        <a class="secondary-btn{' disabled' if anchor_day >= today else ''}" href="{build_expenses_href(day=selected_day, anchor=next_anchor)}" style="flex:0 0 56px; min-width:56px; min-height:56px; display:flex; align-items:center; justify-content:center; font-size:28px; padding:0 12px; {'pointer-events:none; opacity:0.45;' if anchor_day >= today else ''}">→</a>
       </div>
     </section>
     <section class="card panel" style="margin-top:22px;">
