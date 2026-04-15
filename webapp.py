@@ -4373,10 +4373,18 @@ def layout(
       display: grid;
       gap: 22px;
     }}
+    .page > * {{
+      min-width: 0;
+    }}
     .stats {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
       gap: 14px;
+    }}
+    .expenses-stats {{
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      max-width: 100%;
+      overflow: hidden;
     }}
     .stats-contracts {{
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -7346,7 +7354,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         {f'<a class="secondary-btn" href="/contracts/{contract.id}/construction?owner={owner_chat_id}">Строительный раздел</a>' if can_view_construction_reports(current_user) else ''}
       </div>
     </section>
-    <section class="stats">
+    <section class="stats expenses-stats">
       <article class="card stat-card">
         <div class="stat-label">Общая сумма</div>
         <div class="stat-value">{format_amount(payload["total_amount"])}</div>
@@ -7365,7 +7373,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
       </article>
     </section>
     {flash_html}
-    <section class="card panel" style="margin-top:22px;">
+    <section class="card panel expenses-panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Этапы контракта</h2>
