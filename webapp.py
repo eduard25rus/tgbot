@@ -9632,7 +9632,6 @@ def render_finance_section(
     active_entries = [entry for entry in manual_entries if entry.status != "closed"]
     archive_entries = [entry for entry in manual_entries if entry.status == "closed"]
     source_entries = archive_entries if active_tab == "archive" else active_entries
-    entries = [entry for entry in source_entries if not kind_filter or entry.entry_kind == kind_filter]
 
     receivable_total = sum(
         entry.amount
@@ -9834,92 +9833,6 @@ def render_finance_section(
         for code, (label, _css) in FINANCE_KIND_META.items()
     )
 
-    rows_html = "".join(
-        f"""
-        <tr>
-          <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, kind_filter)}</td>
-          <td class="nowrap">
-            <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
-              <div class="timeline-title">{escape(entry.counterparty)}</div>
-            </span>
-          </td>
-          <td>
-            <div>{escape(entry.title)}</div>
-            <div class="contract-table-subtle">{escape(entry.comment) if entry.comment else "Без комментария"}</div>
-          </td>
-          <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
-          <td class="nowrap" style="text-align:center;">{format_date(entry.due_date) if entry.due_date else "—"}</td>
-          <td>{finance_status_control(owner_chat_id, entry, current_user, active_tab, kind_filter)}</td>
-        </tr>
-        """
-        for entry in entries
-    )
-
-    register_html = f"""
-    <section class="card panel" style="margin-top:18px;">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">{"Архив финансовых позиций" if active_tab == "archive" else "Ручной реестр финансовых позиций"}</h2>
-          <div class="panel-sub">{"Закрытые позиции для истории и сверки." if active_tab == "archive" else "Сюда заносим дебиторку прошлых периодов, суды, спорные суммы, займы и прочие обязательства."}</div>
-        </div>
-        <div class="chip">{"Закрыто позиций" if active_tab == "archive" else "В работе позиций"}: {len(entries)}</div>
-      </div>
-      <table class="table contract-table">
-        <thead>
-          <tr>
-            <th>Тип</th>
-            <th>Контрагент</th>
-            <th>Основание / комментарий</th>
-            <th class="nowrap">Сумма</th>
-            <th class="nowrap">Срок</th>
-            <th class="nowrap">Статус</th>
-          </tr>
-        </thead>
-        <tbody>{rows_html}</tbody>
-      </table>
-    </section>
-    """ if entries else f"""
-    <section class="card panel" style="margin-top:18px;">
-      <div class="panel-sub">{"В архиве финансовых позиций пока пусто." if active_tab == "archive" else "Пока нет ручных финансовых позиций. Ниже можно добавить первую запись."}</div>
-    </section>
-    """
-
-    payables_reference_rows = "".join(
-        f"""
-        <tr>
-          <td><div class="timeline-title">{escape(entry.counterparty)}</div></td>
-          <td>{escape(entry.object_name or '—')}</td>
-          <td>{escape(entry.comment) if entry.comment else "Без комментария"}</td>
-          <td class="nowrap" style="text-align:center;">{format_amount(payable_metrics(entry)["outstanding"])}</td>
-          <td class="nowrap" style="text-align:center;">{format_date(entry.due_date) if entry.due_date else "—"}</td>
-        </tr>
-        """
-        for entry in active_payables[:8]
-    )
-    payables_reference = f"""
-    <section class="card panel" style="margin-top:22px;">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">Подрядная кредиторка · справочно</h2>
-          <div class="panel-sub">Автоматически подтягиваем текущую кредиторку подрядчикам. Текущие контракты в работе в баланс намеренно не включаем, пока по ним не ясна итоговая маржа.</div>
-        </div>
-        <div class="chip">Итого подрядчикам: {format_amount(current_payables_total)}</div>
-      </div>
-      <table class="table contract-table">
-        <thead>
-          <tr>
-            <th>Контрагент</th>
-            <th>Объект</th>
-            <th>Комментарий</th>
-            <th class="nowrap">Остаток</th>
-            <th class="nowrap">Срок</th>
-          </tr>
-        </thead>
-        <tbody>{payables_reference_rows or '<tr><td colspan="5">Активной подрядной кредиторки сейчас нет.</td></tr>'}</tbody>
-      </table>
-    </section>
-    """
-
     analysis_groups = f"""
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
@@ -9954,6 +9867,108 @@ def render_finance_section(
     </section>
     """
 
+    return f"""
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Подрядная кредиторка</div>
+        <div class="stat-value">{format_amount(current_payables_total)}</div>
+        <div class="stat-note">Автоматически из раздела кредиторки подрядчикам</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Ручная дебиторка</div>
+        <div class="stat-value">{format_amount(receivable_total)}</div>
+        <div class="stat-note">Прошлые периоды, переплаты, возвраты</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Суды / споры</div>
+        <div class="stat-value">{format_amount(dispute_total)}</div>
+        <div class="stat-note">Отдельно от обычной дебиторки</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Займы / обязательства</div>
+        <div class="stat-value">{format_amount(financing_total)}</div>
+        <div class="stat-note">Ручные финансовые обязательства</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Чистая позиция</div>
+        <div class="stat-value">{format_amount(net_position)}</div>
+        <div class="stat-note">Без текущих контрактов в работе · просрочено позиций {overdue_count}</div>
+      </article>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Финансовый анализ</h2>
+          <div class="panel-sub">Сводный экран для финдиректора: ручная дебиторка, суды, займы и автоматическая подрядная кредиторка. Текущие контракты в работе сюда сознательно не подтягиваем в баланс.</div>
+        </div>
+      </div>
+      <div class="tab-row" style="justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+        <div class="tab-row" style="margin:0;">
+        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/finance-analysis{finance_query_suffix(owner_chat_id, 'active', kind_filter)}">В работе<span class="tab-count">{len(active_entries)}</span></a>
+        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/finance-analysis{finance_query_suffix(owner_chat_id, 'archive', kind_filter)}">Архив<span class="tab-count">{len(archive_entries)}</span></a>
+        </div>
+        <a class="secondary-btn mini" href="/finance-register?owner={owner_chat_id}&tab={active_tab}">Ручной реестр</a>
+      </div>
+      <form class="action-row" method="get" action="/finance-analysis" style="justify-content: space-between; align-items:end; margin-top: 14px;">
+        <input type="hidden" name="owner" value="{owner_chat_id}">
+        <input type="hidden" name="tab" value="{active_tab}">
+        <div class="field" style="min-width: 280px; margin:0;">
+          <label>Показать тип</label>
+          <select name="kind">
+            <option value="">Все позиции</option>
+            {kind_options}
+          </select>
+        </div>
+        <div class="action-row" style="gap:10px;">
+          <button class="secondary-btn" type="submit">Показать</button>
+          {f'<a class="secondary-btn" href="/finance-analysis{finance_query_suffix(owner_chat_id, active_tab, "")}">Сбросить фильтр</a>' if kind_filter else ""}
+        </div>
+      </form>
+      {flash_html}
+    </section>
+    {analysis_groups}
+    """
+
+
+def render_finance_register_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    active_tab: str = "active",
+    flash_message: str = "",
+    success: bool = False,
+    kind_filter: str = "",
+) -> str:
+    manual_entries = storage.list_finance_entries(owner_chat_id)
+    active_entries = [entry for entry in manual_entries if entry.status != "closed"]
+    archive_entries = [entry for entry in manual_entries if entry.status == "closed"]
+    source_entries = archive_entries if active_tab == "archive" else active_entries
+    entries = [entry for entry in source_entries if not kind_filter or entry.entry_kind == kind_filter]
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    kind_options = "".join(
+        f'<option value="{escape(code)}"{" selected" if code == kind_filter else ""}>{escape(label)}</option>'
+        for code, (label, _css) in FINANCE_KIND_META.items()
+    )
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td>{finance_entry_editor(owner_chat_id, entry, current_user, active_tab, kind_filter, "/finance-register")}</td>
+          <td class="nowrap">
+            <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
+              <div class="timeline-title">{escape(entry.counterparty)}</div>
+            </span>
+          </td>
+          <td>
+            <div>{escape(entry.title)}</div>
+            <div class="contract-table-subtle">{escape(entry.comment) if entry.comment else "Без комментария"}</div>
+          </td>
+          <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+          <td class="nowrap" style="text-align:center;">{format_date(entry.due_date) if entry.due_date else "—"}</td>
+          <td>{finance_status_control(owner_chat_id, entry, current_user, active_tab, kind_filter, "/finance-register")}</td>
+        </tr>
+        """
+        for entry in entries
+    )
     add_section = ""
     if has_permission(current_user, "finance", "edit") and active_tab != "archive":
         add_section = f"""
@@ -9964,7 +9979,7 @@ def render_finance_section(
               <div class="panel-sub">Ручные позиции для финдиректора: дебиторка прошлых периодов, споры, займы, обязательства и прочие суммы вне операционной кредиторки.</div>
             </div>
           </div>
-          <form class="form-grid" method="post" action="/finance-analysis/new{finance_query_suffix(owner_chat_id, active_tab, kind_filter)}">
+          <form class="form-grid" method="post" action="/finance-register/new{finance_query_suffix(owner_chat_id, active_tab, kind_filter)}">
             <div class="field">
               <label>Тип позиции</label>
               <select name="entry_kind" required>
@@ -10005,47 +10020,22 @@ def render_finance_section(
           </form>
         </section>
         """
-
     return f"""
-    <section class="stats">
-      <article class="card stat-card">
-        <div class="stat-label">Подрядная кредиторка</div>
-        <div class="stat-value">{format_amount(current_payables_total)}</div>
-        <div class="stat-note">Автоматически из раздела кредиторки подрядчикам</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Ручная дебиторка</div>
-        <div class="stat-value">{format_amount(receivable_total)}</div>
-        <div class="stat-note">Прошлые периоды, переплаты, возвраты</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Суды / споры</div>
-        <div class="stat-value">{format_amount(dispute_total)}</div>
-        <div class="stat-note">Отдельно от обычной дебиторки</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Займы / обязательства</div>
-        <div class="stat-value">{format_amount(financing_total)}</div>
-        <div class="stat-note">Ручные финансовые обязательства</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Чистая позиция</div>
-        <div class="stat-value">{format_amount(net_position)}</div>
-        <div class="stat-note">Без текущих контрактов в работе · просрочено позиций {overdue_count}</div>
-      </article>
-    </section>
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
-          <h2 class="panel-title">Финансовый анализ</h2>
-          <div class="panel-sub">Сводный экран для финдиректора: ручная дебиторка, суды, займы и автоматическая подрядная кредиторка. Текущие контракты в работе сюда сознательно не подтягиваем в баланс.</div>
+          <h2 class="panel-title">Ручной реестр финансовых позиций</h2>
+          <div class="panel-sub">Полный реестр ручных финансовых операций для просмотра, редактирования и добавления новых позиций.</div>
         </div>
       </div>
-      <div class="tab-row">
-        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/finance-analysis{finance_query_suffix(owner_chat_id, 'active', kind_filter)}">В работе<span class="tab-count">{len(active_entries)}</span></a>
-        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/finance-analysis{finance_query_suffix(owner_chat_id, 'archive', kind_filter)}">Архив<span class="tab-count">{len(archive_entries)}</span></a>
+      <div class="tab-row" style="justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+        <div class="tab-row" style="margin:0;">
+          <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/finance-register{finance_query_suffix(owner_chat_id, 'active', kind_filter)}">В работе<span class="tab-count">{len(active_entries)}</span></a>
+          <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/finance-register{finance_query_suffix(owner_chat_id, 'archive', kind_filter)}">Архив<span class="tab-count">{len(archive_entries)}</span></a>
+        </div>
+        <a class="secondary-btn mini" href="/finance-analysis?owner={owner_chat_id}&tab={active_tab}">К сводке</a>
       </div>
-      <form class="action-row" method="get" action="/finance-analysis" style="justify-content: space-between; align-items:end; margin-top: 14px;">
+      <form class="action-row" method="get" action="/finance-register" style="justify-content: space-between; align-items:end; margin-top: 14px;">
         <input type="hidden" name="owner" value="{owner_chat_id}">
         <input type="hidden" name="tab" value="{active_tab}">
         <div class="field" style="min-width: 280px; margin:0;">
@@ -10057,14 +10047,24 @@ def render_finance_section(
         </div>
         <div class="action-row" style="gap:10px;">
           <button class="secondary-btn" type="submit">Показать</button>
-          {f'<a class="secondary-btn" href="/finance-analysis{finance_query_suffix(owner_chat_id, active_tab, "")}">Сбросить фильтр</a>' if kind_filter else ""}
+          {f'<a class="secondary-btn" href="/finance-register{finance_query_suffix(owner_chat_id, active_tab, "")}">Сбросить фильтр</a>' if kind_filter else ""}
         </div>
       </form>
       {flash_html}
+      <table class="table contract-table" style="margin-top:18px;">
+        <thead>
+          <tr>
+            <th>Тип</th>
+            <th>Контрагент</th>
+            <th>Основание / комментарий</th>
+            <th class="nowrap">Сумма</th>
+            <th class="nowrap">Срок</th>
+            <th class="nowrap">Статус</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html or '<tr><td colspan="6">Пока нет ручных финансовых позиций.</td></tr>'}</tbody>
+      </table>
     </section>
-    {analysis_groups}
-    {register_html}
-    {payables_reference}
     {add_section}
     """
 
@@ -11406,6 +11406,31 @@ def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
+    if path == "/finance-register" and method == "GET":
+        denied = guard("finance", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        if active_tab not in {"active", "archive"}:
+            active_tab = "active"
+        if kind_filter not in FINANCE_KIND_META:
+            kind_filter = ""
+        body = render_finance_register_section(storage, current_owner, current_user, active_tab, kind_filter=kind_filter)
+        html = layout(
+            "Ручной реестр финансовых позиций",
+            body,
+            owners,
+            current_owner,
+            "finance",
+            current_user,
+            hero_title_override="Ручной реестр финансовых позиций",
+            hero_copy_override="Полный реестр ручных финансовых операций для просмотра, корректировок и добавления новых позиций.",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
     if path == "/finance-loans" and method == "GET":
         denied = guard("finance", "view")
         if denied:
@@ -11518,6 +11543,57 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         return redirect(start_response, f"/finance-analysis{finance_query_suffix(current_owner, active_tab, kind_filter)}")
+
+    if path == "/finance-register/new" and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            entry_kind = form.get("entry_kind", "").strip()
+            counterparty = form.get("counterparty", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            due_date_raw = form.get("due_date", "").strip()
+            comment = form.get("comment", "").strip()
+            due_date = parse_date(due_date_raw) if due_date_raw else None
+            if entry_kind not in FINANCE_KIND_META:
+                raise ValueError("Выберите тип финансовой позиции")
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not title:
+                raise ValueError("Укажите основание")
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            storage.add_finance_entry(
+                current_owner,
+                entry_kind,
+                title,
+                counterparty,
+                amount,
+                due_date,
+                None,
+                comment,
+                (current_user or {}).get("id"),
+                actor_name,
+            )
+        except ValueError as exc:
+            body = render_finance_register_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
+            html = layout(
+                "Ручной реестр финансовых позиций",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Ручной реестр финансовых позиций",
+                hero_copy_override="Полный реестр ручных финансовых операций для просмотра, корректировок и добавления новых позиций.",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/finance-register{finance_query_suffix(current_owner, active_tab, kind_filter)}")
 
     if path == "/finance-loans/new" and method == "POST":
         denied = guard("finance", "edit")
@@ -11712,6 +11788,49 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
         return redirect(start_response, f"/finance-analysis{finance_query_suffix(current_owner, active_tab, kind_filter)}")
 
+    if path.startswith("/finance-register/") and path.endswith("/update") and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        try:
+            entry_kind = form.get("entry_kind", "").strip()
+            counterparty = form.get("counterparty", "").strip()
+            title = form.get("title", "").strip()
+            amount = parse_amount(form.get("amount", "").strip())
+            due_date_raw = form.get("due_date", "").strip()
+            comment = form.get("comment", "").strip()
+            due_date = parse_date(due_date_raw) if due_date_raw else None
+            if entry_kind not in FINANCE_KIND_META:
+                raise ValueError("Выберите тип финансовой позиции")
+            if not counterparty:
+                raise ValueError("Укажите контрагента")
+            if not title:
+                raise ValueError("Укажите основание")
+            storage.update_finance_entry(current_owner, entry_id, entry_kind, title, counterparty, amount, due_date, None, comment)
+        except ValueError as exc:
+            body = render_finance_register_section(storage, current_owner, current_user, active_tab, str(exc), False, kind_filter)
+            html = layout(
+                "Ручной реестр финансовых позиций",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Ручной реестр финансовых позиций",
+                hero_copy_override="Полный реестр ручных финансовых операций для просмотра, корректировок и добавления новых позиций.",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/finance-register{finance_query_suffix(current_owner, active_tab, kind_filter)}")
+
     if path.startswith("/finance-loans/") and path.endswith("/update") and method == "POST":
         denied = guard("finance", "edit")
         if denied:
@@ -11868,6 +11987,37 @@ def app(environ, start_response):
         storage.update_finance_entry_status(current_owner, entry_id, status)
         target_tab = "archive" if status == "closed" else "active"
         return redirect(start_response, f"/finance-analysis{finance_query_suffix(current_owner, target_tab, kind_filter)}")
+
+    if path.startswith("/finance-register/") and path.endswith("/status") and method == "POST":
+        denied = guard("finance", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        kind_filter = query.get("kind", [""])[0].strip()
+        form = read_post_data(environ)
+        status = form.get("status", "").strip()
+        if status not in FINANCE_STATUS_META:
+            body = render_finance_register_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False, kind_filter)
+            html = layout(
+                "Ручной реестр финансовых позиций",
+                body,
+                owners,
+                current_owner,
+                "finance",
+                current_user,
+                hero_title_override="Ручной реестр финансовых позиций",
+                hero_copy_override="Полный реестр ручных финансовых операций для просмотра, корректировок и добавления новых позиций.",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        storage.update_finance_entry_status(current_owner, entry_id, status)
+        target_tab = "archive" if status == "closed" else "active"
+        return redirect(start_response, f"/finance-register{finance_query_suffix(current_owner, target_tab, kind_filter)}")
 
     if path.startswith("/finance-loans/") and path.endswith("/status") and method == "POST":
         denied = guard("finance", "edit")
