@@ -5846,9 +5846,6 @@ def layout(
       <div>
         {brand_logo_html}
         <div class="brand-title">СИСТЕМА\nУПРАВЛЕНИЯ\nБИЗНЕСОМ</div>
-        <div class="brand-sub">
-          Начинаем с раздела контрактов и постепенно собираем полноценную строительную CRM.
-        </div>
       </div>
       <nav class="nav">{nav_links}</nav>
       {sidebar_notes}
@@ -5858,7 +5855,7 @@ def layout(
         {hero_logo_html}
         <div class="hero-top">
         <div>
-          <div class="eyebrow">CRM Draft</div>
+          <div class="eyebrow">CRM</div>
           <h1>{escape(hero_title)}</h1>
           <div class="hero-copy">{escape(hero_copy)}</div>
         </div>
