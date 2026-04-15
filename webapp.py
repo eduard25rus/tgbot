@@ -10893,8 +10893,10 @@ def render_expenses_section(
         <tr>
           <td class="nowrap">{format_date(entry.expense_date)}</td>
           <td><span class="chip">{escape(expense_project_label(entry.project_code))}</span></td>
-          <td><span class="chip">{escape(expense_category_label(entry.category_code))}</span></td>
-          <td>{expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter)}</td>
+          <td>
+            {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter)}
+            <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_category_label(entry.category_code))}</div>
+          </td>
           <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
           <td>{escape(entry.comment) if entry.comment else "Без комментария"}</td>
           <td class="nowrap">
@@ -10902,7 +10904,6 @@ def render_expenses_section(
               {escape(entry.created_by_name or "Автор неизвестен")}
             </span>
           </td>
-          <td>{expense_status_control(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter)}</td>
         </tr>
         """
         for entry in filtered_entries
@@ -11026,15 +11027,13 @@ def render_expenses_section(
           <tr>
             <th class="nowrap">Дата</th>
             <th>Объект</th>
-            <th>Группа</th>
             <th>Наименование</th>
             <th class="nowrap">Сумма</th>
             <th>Комментарий</th>
             <th>Добавил</th>
-            <th class="nowrap">Статус</th>
           </tr>
         </thead>
-        <tbody>{rows_html or '<tr><td colspan="8">Пока нет расходов в этом срезе.</td></tr>'}</tbody>
+        <tbody>{rows_html or '<tr><td colspan="6">Пока нет расходов в этом срезе.</td></tr>'}</tbody>
       </table>
     </section>
     {add_section}
