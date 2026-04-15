@@ -481,6 +481,25 @@ def format_datetime(value: datetime) -> str:
     return localized.strftime("%d-%m-%Y %H:%M")
 
 
+def format_short_russian_day(value: date) -> str:
+    month_labels = {
+        1: "янв",
+        2: "фев",
+        3: "мар",
+        4: "апр",
+        5: "мая",
+        6: "июн",
+        7: "июл",
+        8: "авг",
+        9: "сен",
+        10: "окт",
+        11: "ноя",
+        12: "дек",
+    }
+    weekday_labels = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+    return f"{value.day} {month_labels[value.month]}, {weekday_labels[value.weekday()]}"
+
+
 def parse_date(raw: str) -> date:
     raw = raw.strip()
     for fmt in ("%d-%m-%Y", "%Y-%m-%d"):
@@ -9598,7 +9617,7 @@ def expense_category_label(code: str) -> str:
     return EXPENSE_CATEGORY_META.get(code, "Прочее")
 
 
-def expense_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", base_path: str = "/expenses") -> str:
+def expense_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses") -> str:
     label, css = EXPENSE_STATUS_META.get(entry.status, EXPENSE_STATUS_META["active"])
     if not has_permission(current_user, "expenses", "edit"):
         return f'<span class="{css}">{escape(label)}</span>'
@@ -9610,7 +9629,7 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     <details class="status-menu">
       <summary><span class="{css}">{escape(label)}</span></summary>
       <div class="status-popover">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/status?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/status?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&anchor={quote_plus(day_anchor.isoformat() if day_anchor else '')}">
           <div class="field">
             <label>Статус расхода</label>
             <select name="status">{options}</select>
@@ -9622,7 +9641,7 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", base_path: str = "/expenses") -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses") -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return f'<div class="timeline-title">{escape(entry.title)}</div>'
     project_options = "".join(
@@ -9637,7 +9656,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     <details class="status-menu">
       <summary><span class="timeline-title">{escape(entry.title)}</span></summary>
       <div class="status-popover">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&anchor={quote_plus(day_anchor.isoformat() if day_anchor else '')}">
           <div class="field">
             <label>Дата расхода</label>
             <input type="date" name="expense_date" value="{entry.expense_date.isoformat()}" required>
@@ -10861,6 +10880,8 @@ def render_expenses_section(
     success: bool = False,
     project_filter: str = "",
     category_filter: str = "",
+    selected_day: date | None = None,
+    day_anchor: date | None = None,
 ) -> str:
     entries = storage.list_expense_entries(owner_chat_id)
     active_entries = [entry for entry in entries if entry.status != "closed"]
@@ -10875,10 +10896,18 @@ def render_expenses_section(
         for entry in source_entries
         if (not project_filter or entry.project_code == project_filter) and (not category_filter or entry.category_code == category_filter)
     ]
+    if selected_day is not None:
+        filtered_entries = [entry for entry in filtered_entries if entry.expense_date == selected_day]
     total_active = sum(entry.amount for entry in active_entries)
     total_admin = sum(entry.amount for entry in active_entries if entry.project_code == "admin")
     total_project = sum(entry.amount for entry in active_entries if entry.project_code != "admin")
-    today_total = sum(entry.amount for entry in active_entries if entry.expense_date == datetime.now(VLADIVOSTOK_TZ).date())
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    today_total = sum(entry.amount for entry in active_entries if entry.expense_date == today)
+    anchor_day = min(day_anchor or today, today)
+    day_window = [anchor_day - timedelta(days=offset) for offset in range(6, -1, -1)]
+    daily_totals = {day: sum(entry.amount for entry in source_entries if entry.expense_date == day) for day in day_window}
+    prev_anchor = anchor_day - timedelta(days=7)
+    next_anchor = min(today, anchor_day + timedelta(days=7))
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     project_options = "".join(
         f'<option value="{code}"{" selected" if code == project_filter else ""}>{escape(label)}</option>'
@@ -10888,13 +10917,42 @@ def render_expenses_section(
         f'<option value="{code}"{" selected" if code == category_filter else ""}>{escape(label)}</option>'
         for code, label in EXPENSE_CATEGORY_META.items()
     )
+    def build_expenses_href(*, tab: str | None = None, project: str | None = None, category: str | None = None, day: date | None = None, anchor: date | None = None) -> str:
+        return (
+            f"/expenses?owner={owner_chat_id}"
+            f"&tab={quote_plus(tab or active_tab)}"
+            f"&project={quote_plus(project if project is not None else project_filter)}"
+            f"&category={quote_plus(category if category is not None else category_filter)}"
+            f"&day={quote_plus(day.isoformat() if day else '')}"
+            f"&anchor={quote_plus((anchor or anchor_day).isoformat())}"
+        )
+    day_cards_html = "".join(
+        f"""
+        <a class="card" href="{build_expenses_href(day=day, anchor=anchor_day)}" style="
+            min-width: 174px;
+            padding: 18px 20px;
+            border-radius: 22px;
+            text-decoration:none;
+            color: var(--ink);
+            border: 2px solid {'var(--brand)' if selected_day == day else 'transparent'};
+            background: {'rgba(255,255,255,0.98)' if selected_day == day else 'rgba(238,242,246,0.88)'};
+            box-shadow: {'0 12px 26px rgba(17,25,38,0.08)' if selected_day == day else 'none'};
+            display:grid;
+            gap:10px;
+        ">
+          <div style="font-size:16px; font-weight:600; color:var(--muted);">{escape(format_short_russian_day(day))}</div>
+          <div style="font-size:18px; font-weight:800; color:var(--ink);">{escape(format_amount(daily_totals[day]) if daily_totals[day] > 0.009 else 'Расходов нет')}</div>
+        </a>
+        """
+        for day in day_window
+    )
     rows_html = "".join(
         f"""
         <tr>
           <td class="nowrap">{format_date(entry.expense_date)}</td>
           <td><span class="chip">{escape(expense_project_label(entry.project_code))}</span></td>
           <td>
-            {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter)}
+            {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter, selected_day, anchor_day)}
             <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_category_label(entry.category_code))}</div>
           </td>
           <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
@@ -10989,17 +11047,34 @@ def render_expenses_section(
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
+          <h2 class="panel-title">Фильтр по дням</h2>
+          <div class="panel-sub">Быстрый переход по расходам за конкретный день. В правой карточке самое позднее число окна, по умолчанию это сегодня.</div>
+        </div>
+      </div>
+      <div class="action-row" style="gap:16px; align-items:stretch; margin-top:6px; flex-wrap:nowrap;">
+        <a class="secondary-btn" href="{build_expenses_href(day=selected_day, anchor=prev_anchor)}" style="min-width:56px; min-height:56px; display:flex; align-items:center; justify-content:center; font-size:28px; padding:0 12px;">←</a>
+        <div style="display:grid; grid-template-columns:repeat(7, minmax(174px, 1fr)); gap:16px; flex:1; overflow:auto;">
+          {day_cards_html}
+        </div>
+        <a class="secondary-btn{' disabled' if anchor_day >= today else ''}" href="{build_expenses_href(day=selected_day, anchor=next_anchor)}" style="min-width:56px; min-height:56px; display:flex; align-items:center; justify-content:center; font-size:28px; padding:0 12px; {'pointer-events:none; opacity:0.45;' if anchor_day >= today else ''}">→</a>
+      </div>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
           <h2 class="panel-title">Реестр расходов</h2>
           <div class="panel-sub">Единый список всех трат по юрлицу с привязкой к объекту и группе расходов.</div>
         </div>
       </div>
       <div class="tab-row">
-        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="/expenses?owner={owner_chat_id}&tab=active">В работе<span class="tab-count">{len(active_entries)}</span></a>
-        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="/expenses?owner={owner_chat_id}&tab=archive">Архив<span class="tab-count">{len(archive_entries)}</span></a>
+        <a class="tab-btn{" active" if active_tab == "active" else ""}" href="{build_expenses_href(tab='active', day=selected_day)}">В работе<span class="tab-count">{len(active_entries)}</span></a>
+        <a class="tab-btn{" active" if active_tab == "archive" else ""}" href="{build_expenses_href(tab='archive', day=selected_day)}">Архив<span class="tab-count">{len(archive_entries)}</span></a>
       </div>
       <form class="action-row" method="get" action="/expenses" style="justify-content: space-between; align-items:end; margin-top:14px;">
         <input type="hidden" name="owner" value="{owner_chat_id}">
         <input type="hidden" name="tab" value="{active_tab}">
+        <input type="hidden" name="day" value="{selected_day.isoformat() if selected_day else ''}">
+        <input type="hidden" name="anchor" value="{anchor_day.isoformat()}">
         <div class="action-row" style="gap:12px; align-items:end; flex-wrap:wrap;">
           <div class="field" style="min-width:220px; margin:0;">
             <label>Объект</label>
@@ -11018,7 +11093,7 @@ def render_expenses_section(
         </div>
         <div class="action-row" style="gap:10px;">
           <button class="secondary-btn" type="submit">Показать</button>
-          {f'<a class="secondary-btn" href="/expenses?owner={owner_chat_id}&tab={active_tab}">Сбросить фильтр</a>' if project_filter or category_filter else ""}
+          {f'<a class="secondary-btn" href="/expenses?owner={owner_chat_id}&tab={active_tab}&anchor={anchor_day.isoformat()}">Сбросить фильтр</a>' if project_filter or category_filter or selected_day else ""}
         </div>
       </form>
       {flash_html}
@@ -15337,9 +15412,13 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        anchor_raw = query.get("anchor", [""])[0].strip()
         if active_tab not in {"active", "archive"}:
             active_tab = "active"
-        body = render_expenses_section(storage, current_owner, current_user, active_tab, project_filter=project_filter, category_filter=category_filter)
+        selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        day_anchor = parse_date(anchor_raw) if anchor_raw else None
+        body = render_expenses_section(storage, current_owner, current_user, active_tab, project_filter=project_filter, category_filter=category_filter, selected_day=selected_day, day_anchor=day_anchor)
         html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -15352,6 +15431,10 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        anchor_raw = query.get("anchor", [""])[0].strip()
+        selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        day_anchor = parse_date(anchor_raw) if anchor_raw else None
         form = read_post_data(environ)
         try:
             expense_date_raw = form.get("expense_date", "").strip()
@@ -15372,11 +15455,11 @@ def app(environ, start_response):
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, (current_user or {}).get("id"), actor_name)
         except ValueError as exc:
-            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter)
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, selected_day, day_anchor)
             html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
-        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}")
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&anchor={quote_plus(day_anchor.isoformat() if day_anchor else '')}")
 
     if path.startswith("/expenses/") and path.endswith("/update") and method == "POST":
         denied = guard("expenses", "edit")
@@ -15390,6 +15473,10 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        anchor_raw = query.get("anchor", [""])[0].strip()
+        selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        day_anchor = parse_date(anchor_raw) if anchor_raw else None
         form = read_post_data(environ)
         try:
             expense_date_raw = form.get("expense_date", "").strip()
@@ -15409,11 +15496,11 @@ def app(environ, start_response):
                 raise ValueError("Укажите наименование траты")
             storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment)
         except ValueError as exc:
-            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter)
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, selected_day, day_anchor)
             html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
-        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}")
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&anchor={quote_plus(day_anchor.isoformat() if day_anchor else '')}")
 
     if path.startswith("/expenses/") and path.endswith("/status") and method == "POST":
         denied = guard("expenses", "edit")
@@ -15427,16 +15514,20 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        anchor_raw = query.get("anchor", [""])[0].strip()
+        selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        day_anchor = parse_date(anchor_raw) if anchor_raw else None
         form = read_post_data(environ)
         status = form.get("status", "").strip()
         if status not in EXPENSE_STATUS_META:
-            body = render_expenses_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False, project_filter, category_filter)
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False, project_filter, category_filter, selected_day, day_anchor)
             html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         storage.update_expense_entry_status(current_owner, entry_id, status)
         target_tab = "archive" if status == "closed" else "active"
-        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(target_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}")
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(target_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&anchor={quote_plus(day_anchor.isoformat() if day_anchor else '')}")
 
     if path == "/payables":
         denied = guard("payables", "view")
