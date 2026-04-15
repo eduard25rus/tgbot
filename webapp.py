@@ -3869,6 +3869,8 @@ def layout(
     .sidebar-preview-card {{
       display: grid;
       gap: 10px;
+      padding: 18px;
+      border-radius: 22px;
     }}
     .sidebar-preview-title {{
       font-size: 13px;
@@ -3883,6 +3885,39 @@ def layout(
       border-color: rgba(255,255,255,0.16);
       background: rgba(255,255,255,0.06);
       border-radius: 12px;
+      color: rgba(255,255,255,0.92);
+      min-height: 42px;
+      width: 100%;
+    }}
+    .sidebar-preview-form select {{
+      appearance: none;
+      -webkit-appearance: none;
+      box-shadow: none;
+    }}
+    .sidebar-preview-form select:focus,
+    .sidebar-preview-form .preview-btn:focus {{
+      outline: none;
+      border-color: rgba(216, 142, 63, 0.55);
+      box-shadow: 0 0 0 3px rgba(216, 142, 63, 0.18);
+    }}
+    .sidebar-preview-form .preview-btn {{
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+    }}
+    .sidebar-preview-form .preview-btn:hover {{
+      background: rgba(255,255,255,0.12);
+      border-color: rgba(216, 142, 63, 0.42);
+      transform: translateY(-1px);
+    }}
+    .sidebar-preview-form .preview-btn:disabled {{
+      background: rgba(255,255,255,0.05);
+      border-color: rgba(255,255,255,0.10);
+      color: rgba(255,255,255,0.42);
+      cursor: default;
+      transform: none;
+      box-shadow: none;
+      opacity: 1;
     }}
     .content {{
       min-width: 0;
