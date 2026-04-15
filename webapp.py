@@ -3562,13 +3562,22 @@ def layout(
         else ""
     )
     sidebar_notes = ""
-    if has_active_admin_mode(current_user):
-        sidebar_notes = """
-      <div class="sidebar-note">
-        Контракты уже рабочие. Доступы тоже начинаем собирать всерьез, чтобы дальше не городить роли поверх хаоса.
-      </div>
-      <div class="sidebar-note">
-        Локальный прототип. Дальше можно вынести это в общий backend и подключить вместе с Telegram.
+    if current_user and current_user.get("is_super_admin"):
+        sidebar_notes = f"""
+      <div class="sidebar-note sidebar-preview-card">
+        <div class="sidebar-preview-title">Режим просмотра роли</div>
+        <form class="preview-form sidebar-preview-form" method="post" action="/role-preview">
+          <input type="hidden" name="next_path" value="">
+          <select name="preview_role">
+            {
+              ''.join(
+                  f'<option value="{escape(value)}" {"selected" if current_user.get("preview_role_name", "") == value else ""}>{escape(label)}</option>'
+                  for value, label in current_preview_options
+              )
+            }
+          </select>
+          <button class="preview-btn" type="submit">Применить режим</button>
+        </form>
       </div>
         """
     finance_nav_ids = {item[0] for item in FINANCE_NAV_SECTIONS}
@@ -3663,58 +3672,6 @@ def layout(
             {notification_panel}
           </div>
           <div class="current-user-email">{escape(current_user["login"])}</div>
-          {
-            f'''
-          <div class="preview-note">Тестовый режим роли: {escape(current_user["preview_role_label"])}</div>
-          '''
-            if current_user.get("preview_role_name")
-            else ""
-          }
-          {
-            f'''
-          <div class="preview-note">Предпросмотр темы: {escape(current_theme_label)}</div>
-          '''
-            if preview_theme
-            else ""
-          }
-          {
-            f'''
-          <form class="preview-form" method="post" action="/role-preview">
-            <input type="hidden" name="next_path" value="">
-            <label class="current-user-email">Режим просмотра роли</label>
-            <select name="preview_role">
-              {
-                ''.join(
-                    f'<option value="{escape(value)}" {"selected" if current_user.get("preview_role_name", "") == value else ""}>{escape(label)}</option>'
-                    for value, label in current_preview_options
-                )
-              }
-            </select>
-            <button class="preview-btn" type="submit">Применить режим</button>
-          </form>
-          '''
-            if current_user.get("is_super_admin")
-            else ""
-          }
-          {
-            f'''
-          <form class="preview-form" method="post" action="/theme-preview">
-            <input type="hidden" name="next_path" value="">
-            <label class="current-user-email">Предпросмотр темы</label>
-            <select name="preview_theme">
-              {
-                ''.join(
-                    f'<option value="{escape(value)}" {"selected" if current_theme == value else ""}>{escape(label)}</option>'
-                    for value, label in current_theme_options
-                )
-              }
-            </select>
-            <button class="preview-btn" type="submit">Применить тему</button>
-          </form>
-          '''
-            if current_user.get("is_super_admin")
-            else ""
-          }
           <a class="logout-link" href="/logout">Выйти</a>
         </div>
         """
@@ -3909,6 +3866,24 @@ def layout(
       font-size: 13px;
       line-height: 1.5;
     }}
+    .sidebar-preview-card {{
+      display: grid;
+      gap: 10px;
+    }}
+    .sidebar-preview-title {{
+      font-size: 13px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.92);
+    }}
+    .sidebar-preview-form {{
+      margin-top: 0;
+    }}
+    .sidebar-preview-form select,
+    .sidebar-preview-form .preview-btn {{
+      border-color: rgba(255,255,255,0.16);
+      background: rgba(255,255,255,0.06);
+      border-radius: 12px;
+    }}
     .content {{
       min-width: 0;
     }}
@@ -3978,11 +3953,6 @@ def layout(
       margin-top: 4px;
       font-size: 12px;
       color: rgba(255,255,255,0.82);
-    }}
-    .preview-note {{
-      margin-top: 6px;
-      font-size: 12px;
-      color: #fff3c4;
     }}
     .preview-form {{
       margin-top: 10px;
