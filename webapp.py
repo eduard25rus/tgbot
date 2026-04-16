@@ -11084,8 +11084,8 @@ def render_expenses_section(
     anchor_day = min(day_anchor or today, today)
     day_window = [anchor_day - timedelta(days=offset) for offset in range(20, -1, -1)]
     daily_totals = {day: sum(entry.amount for entry in source_entries if entry.expense_date == day) for day in day_window}
-    visible_day = selected_day if selected_day in day_window else anchor_day
-    initial_day_index = day_window.index(visible_day)
+    active_selected_day = selected_day if selected_day in day_window else anchor_day
+    initial_day_index = day_window.index(active_selected_day)
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     project_options = "".join(
         f'<option value="{code}"{" selected" if code == project_filter else ""}>{escape(label)}</option>'
@@ -11106,7 +11106,7 @@ def render_expenses_section(
         )
     day_cards_html = "".join(
         f"""
-        <a class="expenses-day-card{' is-selected' if selected_day == day else ''}" href="{build_expenses_href(day=day, anchor=anchor_day)}" data-expenses-day-card="1">
+        <a class="expenses-day-card{' is-selected' if active_selected_day == day else ''}" href="{build_expenses_href(day=day, anchor=anchor_day)}" data-expenses-day-card="1">
           <div class="expenses-day-card-top">{escape(format_short_russian_day(day))}</div>
           <div class="expenses-day-card-bottom">{escape(format_amount(daily_totals[day]) if daily_totals[day] > 0.009 else 'Расходов нет')}</div>
         </a>
@@ -11248,7 +11248,7 @@ def render_expenses_section(
         </div>
         <div class="action-row expenses-filters-actions">
           <button class="secondary-btn" type="submit">Показать</button>
-          {f'<a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}&tab={active_tab}&anchor={anchor_day.isoformat()}">Показать весь реестр</a>' if project_filter or category_filter or selected_day else ""}
+          {f'<a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}&tab={active_tab}">Показать весь реестр</a>' if project_filter or category_filter or selected_day else ""}
         </div>
       </form>
       {flash_html}
