@@ -4029,7 +4029,7 @@ def layout(
     }}
     .expenses-panel {{
       max-width: 100%;
-      overflow: hidden;
+      overflow: visible;
       box-sizing: border-box;
     }}
     .expenses-filters {{
@@ -4057,7 +4057,16 @@ def layout(
       margin-top: 18px;
       max-width: 100%;
       overflow-x: auto;
-      overflow-y: hidden;
+      overflow-y: visible;
+      position: relative;
+      padding-bottom: 12px;
+    }}
+    .expenses-table-wrap .status-popover {{
+      z-index: 120;
+    }}
+    .expenses-adjustment-chip {{
+      margin-top: 8px;
+      display: inline-flex;
     }}
     .content {{
       min-width: 0;
@@ -9819,7 +9828,7 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses") -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "") -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return f'<div class="timeline-title">{escape(entry.title)}</div>'
     project_options = "".join(
@@ -9834,7 +9843,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     <details class="status-menu">
       <summary><span class="timeline-title">{escape(entry.title)}</span></summary>
       <div class="status-popover">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&anchor={quote_plus(day_anchor.isoformat() if day_anchor else '')}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}">
           <div class="field">
             <label>Дата расхода</label>
             <input type="date" name="expense_date" value="{entry.expense_date.isoformat()}" required>
@@ -9859,6 +9868,9 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <label>Комментарий</label>
             <textarea name="comment">{escape(entry.comment)}</textarea>
           </div>
+          <label class="advance-toggle span-2">
+            <input class="toggle-checkbox" type="checkbox" name="needs_adjustment" value="1" {"checked" if entry.needs_adjustment else ""}> Откорректировать
+          </label>
           <button class="submit-btn" type="submit">Сохранить изменения</button>
         </form>
       </div>
@@ -11058,6 +11070,7 @@ def render_expenses_section(
     success: bool = False,
     project_filter: str = "",
     category_filter: str = "",
+    adjustment_filter: str = "",
     selected_day: date | None = None,
     day_anchor: date | None = None,
 ) -> str:
@@ -11069,10 +11082,14 @@ def render_expenses_section(
         project_filter = ""
     if category_filter and category_filter not in EXPENSE_CATEGORY_META:
         category_filter = ""
+    if adjustment_filter not in {"", "needs"}:
+        adjustment_filter = ""
     filtered_entries = [
         entry
         for entry in source_entries
-        if (not project_filter or entry.project_code == project_filter) and (not category_filter or entry.category_code == category_filter)
+        if (not project_filter or entry.project_code == project_filter)
+        and (not category_filter or entry.category_code == category_filter)
+        and (adjustment_filter != "needs" or entry.needs_adjustment)
     ]
     if selected_day is not None:
         filtered_entries = [entry for entry in filtered_entries if entry.expense_date == selected_day]
@@ -11095,12 +11112,13 @@ def render_expenses_section(
         f'<option value="{code}"{" selected" if code == category_filter else ""}>{escape(label)}</option>'
         for code, label in EXPENSE_CATEGORY_META.items()
     )
-    def build_expenses_href(*, tab: str | None = None, project: str | None = None, category: str | None = None, day: date | None = None) -> str:
+    def build_expenses_href(*, tab: str | None = None, project: str | None = None, category: str | None = None, adjustment: str | None = None, day: date | None = None) -> str:
         return (
             f"/expenses?owner={owner_chat_id}"
             f"&tab={quote_plus(tab or active_tab)}"
             f"&project={quote_plus(project if project is not None else project_filter)}"
             f"&category={quote_plus(category if category is not None else category_filter)}"
+            f"&adjustment={quote_plus(adjustment if adjustment is not None else adjustment_filter)}"
             f"&day={quote_plus(day.isoformat() if day else '')}"
         )
     day_cards_html = "".join(
@@ -11118,8 +11136,9 @@ def render_expenses_section(
           <td class="nowrap">{format_date(entry.expense_date)}</td>
           <td><span class="chip">{escape(expense_project_label(entry.project_code))}</span></td>
           <td>
-            {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter, selected_day, None)}
+            {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter)}
             <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_category_label(entry.category_code))}</div>
+            {f'<div class="chip warn expenses-adjustment-chip">Требует корректировки</div>' if entry.needs_adjustment else ''}
           </td>
           <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
           <td>{escape(entry.comment) if entry.comment else "Без комментария"}</td>
@@ -11142,7 +11161,7 @@ def render_expenses_section(
               <div class="panel-sub">Ежедневный ручной реестр всех трат по юрлицу: объект, группа расхода, сумма и комментарий.</div>
             </div>
           </div>
-          <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}">
+          <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}">
             <div class="field">
               <label>Дата расхода</label>
               <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
@@ -11183,6 +11202,9 @@ def render_expenses_section(
               <label>Комментарий</label>
               <textarea name="comment" placeholder="Коротко фиксируем, на что именно ушли деньги"></textarea>
             </div>
+            <label class="advance-toggle span-2">
+              <input class="toggle-checkbox" type="checkbox" name="needs_adjustment" value="1"> Откорректировать
+            </label>
             <button class="submit-btn" type="submit">Добавить расход</button>
           </form>
         </section>
@@ -11236,17 +11258,24 @@ def render_expenses_section(
               {project_options}
             </select>
           </div>
+            <div class="field" style="min-width:240px; margin:0;">
+              <label>Группа</label>
+              <select name="category">
+                <option value="">Все группы</option>
+                {category_options}
+              </select>
+            </div>
           <div class="field" style="min-width:240px; margin:0;">
-            <label>Группа</label>
-            <select name="category">
-              <option value="">Все группы</option>
-              {category_options}
+            <label>Корректировка</label>
+            <select name="adjustment">
+              <option value=""{" selected" if adjustment_filter == "" else ""}>Все расходы</option>
+              <option value="needs"{" selected" if adjustment_filter == "needs" else ""}>Требуют корректировки</option>
             </select>
           </div>
         </div>
         <div class="action-row expenses-filters-actions">
           <button class="secondary-btn" type="submit">Показать</button>
-          {f'<a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}&tab={active_tab}">Показать весь реестр</a>' if project_filter or category_filter or selected_day else ""}
+          {f'<a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}&tab={active_tab}">Показать весь реестр</a>' if project_filter or category_filter or adjustment_filter or selected_day else ""}
         </div>
       </form>
       {flash_html}
@@ -15567,11 +15596,12 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
+        adjustment_filter = query.get("adjustment", [""])[0].strip()
         selected_day_raw = query.get("day", [""])[0].strip()
         if active_tab not in {"active", "archive"}:
             active_tab = "active"
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
-        body = render_expenses_section(storage, current_owner, current_user, active_tab, project_filter=project_filter, category_filter=category_filter, selected_day=selected_day)
+        body = render_expenses_section(storage, current_owner, current_user, active_tab, project_filter=project_filter, category_filter=category_filter, adjustment_filter=adjustment_filter, selected_day=selected_day)
         html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -15584,6 +15614,7 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
+        adjustment_filter = query.get("adjustment", [""])[0].strip()
         selected_day_raw = query.get("day", [""])[0].strip()
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
         form = read_post_data(environ)
@@ -15594,6 +15625,7 @@ def app(environ, start_response):
             title = form.get("title", "").strip()
             amount = parse_amount(form.get("amount", "").strip())
             comment = form.get("comment", "").strip()
+            needs_adjustment = form.get("needs_adjustment", "").strip() == "1"
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
                 raise ValueError("Укажите дату расхода")
@@ -15604,13 +15636,13 @@ def app(environ, start_response):
             if not title:
                 raise ValueError("Укажите наименование траты")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
-            storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, (current_user or {}).get("id"), actor_name)
+            storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, needs_adjustment, (current_user or {}).get("id"), actor_name)
         except ValueError as exc:
-            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, selected_day)
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day)
             html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
-        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}")
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}")
 
     if path.startswith("/expenses/") and path.endswith("/update") and method == "POST":
         denied = guard("expenses", "edit")
@@ -15624,6 +15656,7 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
+        adjustment_filter = query.get("adjustment", [""])[0].strip()
         selected_day_raw = query.get("day", [""])[0].strip()
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
         form = read_post_data(environ)
@@ -15634,6 +15667,7 @@ def app(environ, start_response):
             title = form.get("title", "").strip()
             amount = parse_amount(form.get("amount", "").strip())
             comment = form.get("comment", "").strip()
+            needs_adjustment = form.get("needs_adjustment", "").strip() == "1"
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
                 raise ValueError("Укажите дату расхода")
@@ -15643,13 +15677,13 @@ def app(environ, start_response):
                 raise ValueError("Выберите группу расхода")
             if not title:
                 raise ValueError("Укажите наименование траты")
-            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment)
+            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, needs_adjustment)
         except ValueError as exc:
-            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, selected_day)
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day)
             html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
-        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}")
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}")
 
     if path.startswith("/expenses/") and path.endswith("/status") and method == "POST":
         denied = guard("expenses", "edit")
@@ -15663,18 +15697,19 @@ def app(environ, start_response):
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
+        adjustment_filter = query.get("adjustment", [""])[0].strip()
         selected_day_raw = query.get("day", [""])[0].strip()
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
         form = read_post_data(environ)
         status = form.get("status", "").strip()
         if status not in EXPENSE_STATUS_META:
-            body = render_expenses_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False, project_filter, category_filter, selected_day)
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False, project_filter, category_filter, adjustment_filter, selected_day)
             html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         storage.update_expense_entry_status(current_owner, entry_id, status)
         target_tab = "archive" if status == "closed" else "active"
-        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(target_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}")
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(target_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}")
 
     if path == "/payables":
         denied = guard("payables", "view")

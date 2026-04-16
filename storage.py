@@ -296,6 +296,7 @@ class ExpenseEntry:
     title: str
     amount: float
     comment: str
+    needs_adjustment: bool
     status: str
     created_by_user_id: Optional[int]
     created_by_name: str
@@ -769,6 +770,7 @@ class Storage:
                     title TEXT NOT NULL DEFAULT '',
                     amount REAL NOT NULL DEFAULT 0,
                     comment TEXT NOT NULL DEFAULT '',
+                    needs_adjustment INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'active',
                     created_by_user_id INTEGER,
                     created_by_name TEXT NOT NULL DEFAULT '',
@@ -796,6 +798,8 @@ class Storage:
             expense_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(expense_entries)").fetchall()
             }
+            if "needs_adjustment" not in expense_columns:
+                conn.execute("ALTER TABLE expense_entries ADD COLUMN needs_adjustment INTEGER NOT NULL DEFAULT 0")
             legal_letter_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(legal_letters)").fetchall()
             }
@@ -4306,10 +4310,11 @@ class Storage:
                 """
                 SELECT
                     id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
+                    needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
                 FROM expense_entries
                 WHERE owner_chat_id = ? AND (? = 1 OR deleted_at IS NULL)
-                ORDER BY deleted_at IS NOT NULL, status = 'closed', expense_date DESC, created_at DESC, id DESC
+                ORDER BY deleted_at IS NOT NULL, needs_adjustment DESC, status = 'closed', expense_date DESC, created_at DESC, id DESC
                 """,
                 (owner_chat_id, 1 if include_deleted else 0),
             ).fetchall()
@@ -4324,6 +4329,7 @@ class Storage:
         title: str,
         amount: float,
         comment: str,
+        needs_adjustment: bool,
         created_by_user_id: int | None,
         created_by_name: str,
     ) -> int:
@@ -4333,9 +4339,10 @@ class Storage:
                 """
                 INSERT INTO expense_entries (
                     owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
+                    needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -4345,6 +4352,7 @@ class Storage:
                     title.strip(),
                     amount,
                     comment.strip(),
+                    1 if needs_adjustment else 0,
                     created_by_user_id,
                     created_by_name.strip(),
                     now,
@@ -4375,6 +4383,7 @@ class Storage:
         title: str,
         amount: float,
         comment: str,
+        needs_adjustment: bool,
     ) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
@@ -4387,6 +4396,7 @@ class Storage:
                     title = ?,
                     amount = ?,
                     comment = ?,
+                    needs_adjustment = ?,
                     updated_at = ?
                 WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
                 """,
@@ -4397,6 +4407,7 @@ class Storage:
                     title.strip(),
                     amount,
                     comment.strip(),
+                    1 if needs_adjustment else 0,
                     datetime.utcnow().isoformat(),
                     entry_id,
                     owner_chat_id,
@@ -4842,6 +4853,7 @@ class Storage:
             title=row["title"] or "",
             amount=float(row["amount"]) if row["amount"] is not None else 0.0,
             comment=row["comment"] or "",
+            needs_adjustment=bool(row["needs_adjustment"]) if "needs_adjustment" in row.keys() else False,
             status=row["status"] or "active",
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
             created_by_name=row["created_by_name"] or "",
