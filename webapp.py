@@ -4061,8 +4061,24 @@ def layout(
       position: relative;
       padding-bottom: 12px;
     }}
+    .expenses-table-wrap table,
+    .expenses-table-wrap tbody,
+    .expenses-table-wrap tr,
+    .expenses-table-wrap td {{
+      overflow: visible;
+    }}
+    .expenses-table-wrap td {{
+      position: relative;
+    }}
+    .expenses-table-wrap .status-menu {{
+      position: relative;
+      z-index: 1;
+    }}
     .expenses-table-wrap .status-popover {{
       z-index: 120;
+    }}
+    .expenses-table-wrap .status-menu[open] {{
+      z-index: 160;
     }}
     .expenses-adjustment-chip {{
       margin-top: 8px;
