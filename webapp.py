@@ -5685,6 +5685,35 @@ def layout(
       display: grid;
       gap: 8px;
     }}
+    .expense-editor-menu[open]::before {{
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: rgba(18, 26, 33, 0.16);
+      z-index: 210;
+    }}
+    .expense-editor-menu[open] summary {{
+      position: relative;
+      z-index: 221;
+    }}
+    .expense-editor-popover {{
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 220;
+      width: min(760px, calc(100vw - 48px));
+      min-width: min(760px, calc(100vw - 48px));
+      max-height: calc(100vh - 72px);
+      overflow-y: auto;
+      padding: 18px;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: rgba(255, 250, 242, 0.99);
+      box-shadow: 0 24px 60px rgba(17, 25, 38, 0.22);
+      display: grid;
+      gap: 12px;
+    }}
     .status-popover.compact {{
       min-width: 150px;
       width: max-content;
@@ -9856,9 +9885,9 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         for code, label in EXPENSE_CATEGORY_META.items()
     )
     return f"""
-    <details class="status-menu">
+    <details class="status-menu expense-editor-menu">
       <summary><span class="timeline-title">{escape(entry.title)}</span></summary>
-      <div class="status-popover">
+      <div class="status-popover expense-editor-popover">
         <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}">
           <div class="field">
             <label>Дата расхода</label>
