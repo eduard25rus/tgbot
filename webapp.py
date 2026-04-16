@@ -650,9 +650,10 @@ def render_legal_file_preview_page(file_url: str, download_url: str, safe_filena
 </html>"""
 
 
-def save_legal_letter_uploads(storage: Storage, owner_chat_id: int, contract_id: int, letter_id: int, uploads: list[UploadedFile]) -> None:
+def save_legal_letter_uploads(storage: Storage, owner_chat_id: int, contract_id: int | None, letter_id: int, uploads: list[UploadedFile]) -> None:
     upload_root = contract_upload_root(storage)
-    letters_dir = upload_root / "legal_letters" / str(owner_chat_id) / str(contract_id)
+    target_scope = f"contract_{contract_id}" if contract_id else "general"
+    letters_dir = upload_root / "legal_letters" / str(owner_chat_id) / target_scope
     letters_dir.mkdir(parents=True, exist_ok=True)
     for upload in uploads:
         original_name = upload.filename.strip()
@@ -888,6 +889,22 @@ def can_view_legal_correspondence(current_user: dict | None) -> bool:
 
 def can_edit_legal_correspondence(current_user: dict | None) -> bool:
     return has_permission(current_user, "contracts", "edit")
+
+
+def can_view_jurisprudence(current_user: dict | None) -> bool:
+    return has_permission(current_user, "jurisprudence", "view")
+
+
+def can_edit_jurisprudence(current_user: dict | None) -> bool:
+    return has_permission(current_user, "jurisprudence", "edit")
+
+
+def can_view_any_legal_registry(current_user: dict | None) -> bool:
+    return can_view_legal_correspondence(current_user) or can_view_jurisprudence(current_user)
+
+
+def can_edit_any_legal_registry(current_user: dict | None) -> bool:
+    return can_edit_legal_correspondence(current_user) or can_edit_jurisprudence(current_user)
 
 
 def can_view_contract_meetings(current_user: dict | None) -> bool:
@@ -1732,7 +1749,60 @@ def render_stage_amount_form(owner_chat_id: int, contract_id: int, stage, curren
     """
 
 
-def render_legal_letter_editor(owner_chat_id: int, contract_id: int, letter, attachments: list, current_user: dict | None) -> str:
+def jurisprudence_contract_options(storage: Storage, owner_chat_id: int) -> list[tuple[str, str]]:
+    options: list[tuple[str, str]] = []
+    for contract in storage.list_contracts(owner_chat_id):
+        object_name = contract.object_name.strip() or contract.title
+        object_address = contract.object_address.strip()
+        label = f"{object_name}, {object_address}" if object_address else object_name
+        options.append((str(contract.id), label))
+    return options
+
+
+def jurisprudence_object_options(storage: Storage, owner_chat_id: int) -> list[str]:
+    labels = set()
+    for _, label in jurisprudence_contract_options(storage, owner_chat_id):
+        if label.strip():
+            labels.add(label.strip())
+    for letter in storage.list_legal_letters(owner_chat_id):
+        if letter.object_label.strip():
+            labels.add(letter.object_label.strip())
+    return sorted(labels, key=lambda value: value.lower())
+
+
+def render_legal_letter_object_fields(
+    storage: Storage,
+    owner_chat_id: int,
+    selected_contract_id: int | None,
+    object_label: str,
+) -> str:
+    contract_options = "".join(
+        f'<option value="{escape(contract_id)}"{" selected" if selected_contract_id is not None and str(selected_contract_id) == contract_id else ""}>{escape(label)}</option>'
+        for contract_id, label in jurisprudence_contract_options(storage, owner_chat_id)
+    )
+    return f"""
+      <div class="field">
+        <label>Текущий контракт</label>
+        <select name="contract_id">
+          <option value="">Вне текущих контрактов</option>
+          {contract_options}
+        </select>
+      </div>
+      <div class="field">
+        <label>Объект</label>
+        <input type="text" name="object_label" value="{escape(object_label)}" placeholder="Например, Библиотека №13 / старый объект" required>
+      </div>
+    """
+
+
+def render_legal_letter_editor(
+    storage: Storage,
+    owner_chat_id: int,
+    contract_id: int,
+    letter,
+    attachments: list,
+    current_user: dict | None,
+) -> str:
     subject_html = f'<div class="legal-letter-topic">{escape(letter.subject or "Без темы")}</div>'
     comment_html = f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''
     if not can_edit_legal_correspondence(current_user):
@@ -1756,6 +1826,74 @@ def render_legal_letter_editor(owner_chat_id: int, contract_id: int, letter, att
       </summary>
       <div class="status-popover" style="min-width:420px;">
         <form class="form-grid" method="post" action="/contracts/letters/{letter.id}/update?owner={owner_chat_id}&contract_id={contract_id}" enctype="multipart/form-data">
+          <input type="hidden" name="contract_id" value="{letter.contract_id or contract_id}">
+          <input type="hidden" name="object_label" value="{escape(letter.object_label)}">
+          <div class="field">
+            <label>Тип письма</label>
+            <select name="direction" required>
+              <option value="outgoing"{" selected" if letter.direction == "outgoing" else ""}>Исходящее</option>
+              <option value="incoming"{" selected" if letter.direction == "incoming" else ""}>Входящее</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Канал</label>
+            <select name="source_channel" required>
+              <option value="mail"{" selected" if (letter.source_channel or "mail") == "mail" else ""}>Почта</option>
+              <option value="eis"{" selected" if letter.source_channel == "eis" else ""}>ЕИС</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Дата письма</label>
+            <input type="date" name="letter_date" value="{letter.letter_date.isoformat()}" required>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>О чем письмо</label>
+            <input type="text" name="subject" value="{escape(letter.subject)}" required>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Комментарий</label>
+            <textarea name="comment">{escape(letter.comment)}</textarea>
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Догрузить файлы</label>
+            <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" multiple>
+          </div>
+          <button class="submit-btn" type="submit">Сохранить письмо</button>
+        </form>
+        <div style="margin-top:14px;">
+          <div class="contract-table-subtle" style="margin-top:0;">Вложения</div>
+          {attachment_html}
+        </div>
+      </div>
+    </details>
+    """
+
+
+def render_jurisprudence_letter_editor(storage: Storage, owner_chat_id: int, letter, attachments: list, current_user: dict | None) -> str:
+    subject_html = f'<div class="legal-letter-topic">{escape(letter.subject or "Без темы")}</div>'
+    comment_html = f'<div class="contract-table-subtle">{escape(letter.comment)}</div>' if letter.comment else ''
+    if not can_edit_jurisprudence(current_user):
+        return f"{subject_html}{comment_html}"
+    attachment_html = "".join(
+        f"""
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-top:1px solid var(--line);">
+          <a class="legal-letter-file" href="/contracts/letter-files/{attachment.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(attachment.file_name or 'Файл')}</a>
+          <form method="post" action="/contracts/letter-files/{attachment.id}/delete?owner={owner_chat_id}&next_path=/jurisprudence/letters">
+            <button class="chip danger" type="submit">Удалить</button>
+          </form>
+        </div>
+        """
+        for attachment in attachments
+    ) or '<div class="contract-table-subtle" style="padding-top:8px;">Файлов пока нет</div>'
+    return f"""
+    <details class="status-menu">
+      <summary>
+        {subject_html}
+        {comment_html}
+      </summary>
+      <div class="status-popover" style="min-width:520px;">
+        <form class="form-grid" method="post" action="/jurisprudence/letters/{letter.id}/update?owner={owner_chat_id}" enctype="multipart/form-data">
+          {render_legal_letter_object_fields(storage, owner_chat_id, letter.contract_id, letter.object_label)}
           <div class="field">
             <label>Тип письма</label>
             <select name="direction" required>
@@ -3510,6 +3648,7 @@ SECTIONS = [
     ("expenses", "Расходы компании", "/expenses"),
     ("payroll", "Зарплата", "/payroll"),
     ("finance", "Финансовый анализ", "/finance-analysis"),
+    ("jurisprudence", "Юриспруденция", "/jurisprudence/letters"),
     ("access", "Доступы", "/access"),
 ]
 
@@ -3520,6 +3659,11 @@ FINANCE_NAV_SECTIONS = [
     ("finance_loans", "Кредиты и займы", "/finance-loans"),
     ("finance_liabilities", "Прочие обязательства", "/finance-liabilities"),
     ("expenses", "Расходы", "/expenses"),
+]
+
+JURISPRUDENCE_NAV_SECTIONS = [
+    ("jurisprudence_letters", "Переписки", "/jurisprudence/letters"),
+    ("jurisprudence_courts", "Суды", "/jurisprudence/courts"),
 ]
 
 SECTION_LABELS = {section_id: label for section_id, label, _ in SECTIONS}
@@ -3561,6 +3705,10 @@ SECTION_HERO = {
     "access": (
         "Доступы",
         "Здесь администратор управляет web-пользователями, их ролями и правами по каждому разделу будущей CRM.",
+    ),
+    "jurisprudence": (
+        "Юриспруденция",
+        "Общий юридический контур компании: переписки, суды и связанная история по текущим и прошлым объектам.",
     ),
 }
 
@@ -3615,12 +3763,16 @@ def layout(
       </div>
         """
     finance_nav_ids = {item[0] for item in FINANCE_NAV_SECTIONS}
+    jurisprudence_nav_ids = {item[0] for item in JURISPRUDENCE_NAV_SECTIONS}
     show_finance_group = bool(current_user and current_user.get("is_super_admin"))
+    show_jurisprudence_group = bool(current_user and has_permission(current_user, "jurisprudence", "view"))
     visible_sections = []
     for section_id, label, href in SECTIONS:
         if current_user is not None and not has_permission(current_user, section_id, "view"):
             continue
         if show_finance_group and section_id in {"finance", "payables", "expenses"}:
+            continue
+        if show_jurisprudence_group and section_id == "jurisprudence":
             continue
         visible_sections.append((section_id, label, href))
     nav_links = "".join(
@@ -3637,6 +3789,18 @@ def layout(
         <details class="nav-group"{" open" if active_finance_key else ""}>
           <summary class="nav-link nav-group-link{' active' if active_finance_key else ''}">Финансы</summary>
           <div class="nav-subnav">{finance_links}</div>
+        </details>
+        """
+    if show_jurisprudence_group:
+        active_jurisprudence_key = active_subsection or (active_section if active_section in jurisprudence_nav_ids else "")
+        jurisprudence_links = "".join(
+            f'<a class="nav-sublink{" active" if code == active_jurisprudence_key else ""}" href="{href}">{label}</a>'
+            for code, label, href in JURISPRUDENCE_NAV_SECTIONS
+        )
+        nav_links += f"""
+        <details class="nav-group"{" open" if active_jurisprudence_key else ""}>
+          <summary class="nav-link nav-group-link{' active' if active_jurisprudence_key else ''}">Юриспруденция</summary>
+          <div class="nav-subnav">{jurisprudence_links}</div>
         </details>
         """
     hero_title, hero_copy = SECTION_HERO.get(active_section, SECTION_HERO["contracts"])
@@ -7123,6 +7287,167 @@ def render_contract_create_form(owner_chat_id: int, flash_message: str = "") -> 
     """
 
 
+def render_jurisprudence_letters_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    flash_message: str = "",
+    object_filter: str = "",
+    date_from_raw: str = "",
+    date_to_raw: str = "",
+) -> str:
+    flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
+    date_from = parse_date(date_from_raw) if date_from_raw else None
+    date_to = parse_date(date_to_raw) if date_to_raw else None
+    letters = storage.list_legal_letters(owner_chat_id, object_filter=object_filter, date_from=date_from, date_to=date_to)
+    attachments = storage.list_legal_letter_attachments(owner_chat_id)
+    attachment_map: dict[int, list] = {}
+    for attachment in attachments:
+        attachment_map.setdefault(attachment.letter_id, []).append(attachment)
+    object_options_html = "".join(
+        f'<option value="{escape(label)}"{" selected" if object_filter == label else ""}>{escape(label)}</option>'
+        for label in jurisprudence_object_options(storage, owner_chat_id)
+    )
+    letters_rows_html = "".join(
+        f"""
+        <tr>
+          <td>
+            <div class="timeline-title">{escape(letter.object_label or 'Без объекта')}</div>
+            {f'<div class="contract-table-subtle">{escape(letter.contract_title)}</div>' if letter.contract_title else '<div class="contract-table-subtle">Вне текущих контрактов</div>'}
+          </td>
+          <td style="text-align:center;">
+            <span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span>
+            <div class="contract-table-subtle">{escape(LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта"))}</div>
+          </td>
+          <td class="nowrap">{format_date(letter.letter_date)}</td>
+          <td>{render_jurisprudence_letter_editor(storage, owner_chat_id, letter, attachment_map.get(letter.id, []), current_user)}</td>
+          <td>
+            {"".join(
+              f'''<div class="legal-letter-file-stack">
+                    <a class="legal-letter-file" href="/contracts/letter-files/{attachment.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(attachment.file_name or 'Файл')}</a>
+                    <a class="legal-letter-download" href="/contracts/letter-files/{attachment.id}/download?owner={owner_chat_id}">Скачать</a>
+                  </div>'''
+              for attachment in attachment_map.get(letter.id, [])
+            ) or (
+              f'''<div class="legal-letter-file-stack">
+                    <a class="legal-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(letter.file_name or 'Файл')}</a>
+                    <a class="legal-letter-download" href="/contracts/letters/{letter.id}/download?owner={owner_chat_id}">Скачать</a>
+                  </div>''' if letter.file_path else '<span class="contract-table-subtle">Файл не прикреплен</span>'
+            )}
+          </td>
+          <td>
+            <div class="contract-table-subtle">{escape(letter.created_by_name.strip() or 'Автор неизвестен')}</div>
+            <div class="contract-table-subtle">{format_date(letter.created_at.astimezone(VLADIVOSTOK_TZ).date() if letter.created_at.tzinfo else letter.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
+          </td>
+        </tr>
+        """
+        for letter in letters
+    ) or '<tr><td colspan="6">Писем пока нет.</td></tr>'
+    add_letter_button = ""
+    if can_edit_jurisprudence(current_user):
+        add_letter_button = f"""
+          <details class="status-menu">
+            <summary><span class="secondary-btn">Добавить письмо</span></summary>
+            <div class="status-popover" style="min-width:560px;">
+              <form class="form-grid" method="post" action="/jurisprudence/letters/new?owner={owner_chat_id}" enctype="multipart/form-data">
+                {render_legal_letter_object_fields(storage, owner_chat_id, None, object_filter)}
+                <div class="field">
+                  <label>Тип письма</label>
+                  <select name="direction" required>
+                    <option value="outgoing">Исходящее</option>
+                    <option value="incoming">Входящее</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Канал</label>
+                  <select name="source_channel" required>
+                    <option value="mail">Почта</option>
+                    <option value="eis">ЕИС</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Дата письма</label>
+                  <input type="date" name="letter_date" required>
+                </div>
+                <div class="field" style="grid-column: 1 / -1;">
+                  <label>О чем письмо</label>
+                  <input type="text" name="subject" placeholder="Например, претензия / ответ / запрос" required>
+                </div>
+                <div class="field" style="grid-column: 1 / -1;">
+                  <label>Комментарий</label>
+                  <textarea name="comment" placeholder="Коротко зафиксируйте суть переписки"></textarea>
+                </div>
+                <div class="field" style="grid-column: 1 / -1;">
+                  <label>Файлы письма</label>
+                  <input type="file" name="pdf_file" accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx" multiple required>
+                </div>
+                <button class="submit-btn" type="submit">Добавить письмо</button>
+              </form>
+            </div>
+          </details>
+        """
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Общий реестр переписки</h2>
+          <div class="panel-sub">Все юридические письма компании в одном месте: и по текущим контрактам, и по прошлым объектам.</div>
+        </div>
+        {add_letter_button}
+      </div>
+      {flash_html}
+      <form class="form-grid" method="get" action="/jurisprudence/letters?owner={owner_chat_id}" style="margin-bottom:18px;">
+        <div class="field">
+          <label>Объект</label>
+          <select name="object">
+            <option value="">Все объекты</option>
+            {object_options_html}
+          </select>
+        </div>
+        <div class="field">
+          <label>Дата с</label>
+          <input type="date" name="date_from" value="{escape(date_from_raw)}">
+        </div>
+        <div class="field">
+          <label>Дата по</label>
+          <input type="date" name="date_to" value="{escape(date_to_raw)}">
+        </div>
+        <div class="action-row" style="align-items:flex-end;">
+          <button class="secondary-btn" type="submit">Показать</button>
+          <a class="chip" href="/jurisprudence/letters?owner={owner_chat_id}">Сбросить</a>
+        </div>
+      </form>
+      <table class="table contract-table">
+        <thead>
+          <tr>
+            <th>Объект</th>
+            <th class="nowrap">Тип</th>
+            <th class="nowrap">Дата</th>
+            <th>О чем письмо</th>
+            <th class="nowrap">Файлы</th>
+            <th class="nowrap">Добавил</th>
+          </tr>
+        </thead>
+        <tbody>{letters_rows_html}</tbody>
+      </table>
+    </section>
+    """
+
+
+def render_jurisprudence_courts_section(owner_chat_id: int) -> str:
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Суды</h2>
+          <div class="panel-sub">Каркас раздела уже создан. Следующим шагом сюда перенесем судебные дела, статусы, суммы и ключевые даты.</div>
+        </div>
+      </div>
+      <div class="empty">Раздел судов пока пуст. Переписку уже можно вести в общем юр-реестре.</div>
+    </section>
+    """
+
+
 def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: int, current_user: dict | None = None, flash_message: str = "") -> str:
     payload = next((item for item in contract_payload(storage, owner_chat_id) if item["contract"].id == contract_id), None)
     if payload is None:
@@ -7206,7 +7531,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
           </td>
           <td class="nowrap">{format_date(letter.letter_date)}</td>
           <td>
-            {render_legal_letter_editor(owner_chat_id, contract.id, letter, attachment_map.get(letter.id, []), current_user)}
+            {render_legal_letter_editor(storage, owner_chat_id, contract.id, letter, attachment_map.get(letter.id, []), current_user)}
           </td>
           <td>
             {"".join(
@@ -7240,6 +7565,8 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
                 <summary><span class="secondary-btn">Добавить письмо</span></summary>
                 <div class="status-popover" style="min-width:520px;">
                   <form class="form-grid" method="post" action="/contracts/{contract.id}/letters/new?owner={owner_chat_id}" enctype="multipart/form-data">
+                    <input type="hidden" name="contract_id" value="{contract.id}">
+                    <input type="hidden" name="object_label" value="{escape((contract.object_name.strip() or contract.title) + (', ' + contract.object_address.strip() if contract.object_address.strip() else ''))}">
                     <div class="field">
                       <label>Тип письма</label>
                       <select name="direction" required>
@@ -12690,6 +13017,57 @@ def app(environ, start_response):
         target_tab = "archive" if status == "closed" else "active"
         return redirect(start_response, f"/finance-liabilities{finance_query_suffix(current_owner, target_tab)}")
 
+    if path == "/jurisprudence":
+        denied = guard("jurisprudence", "view")
+        if denied:
+            return denied
+        return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
+
+    if path == "/jurisprudence/letters" and method == "GET":
+        denied = guard("jurisprudence", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        object_filter = query.get("object", [""])[0].strip()
+        date_from_raw = query.get("date_from", [""])[0].strip()
+        date_to_raw = query.get("date_to", [""])[0].strip()
+        body = render_jurisprudence_letters_section(
+            storage,
+            current_owner,
+            current_user,
+            object_filter=object_filter,
+            date_from_raw=date_from_raw,
+            date_to_raw=date_to_raw,
+        )
+        html = layout(
+            "Юриспруденция",
+            body,
+            owners,
+            current_owner,
+            "jurisprudence",
+            current_user,
+            active_subsection="jurisprudence_letters",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/jurisprudence/courts" and method == "GET":
+        denied = guard("jurisprudence", "view")
+        if denied:
+            return denied
+        body = render_jurisprudence_courts_section(current_owner)
+        html = layout(
+            "Юриспруденция",
+            body,
+            owners,
+            current_owner,
+            "jurisprudence",
+            current_user,
+            active_subsection="jurisprudence_courts",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
     if path == "/tasks" and method == "GET":
         denied = guard("tasks", "view")
         if denied:
@@ -14743,6 +15121,7 @@ def app(environ, start_response):
             letter_date_raw = form.get("letter_date", "").strip()
             if not letter_date_raw:
                 raise ValueError("Укажите дату письма")
+            object_label = form.get("object_label", "").strip()
             subject = form.get("subject", "").strip()
             if not subject:
                 raise ValueError("Укажите, о чем письмо")
@@ -14752,6 +15131,7 @@ def app(environ, start_response):
             created = storage.add_legal_letter(
                 current_owner,
                 contract_id,
+                object_label,
                 direction,
                 source_channel,
                 parse_date(letter_date_raw),
@@ -14798,22 +15178,23 @@ def app(environ, start_response):
             return [html.encode("utf-8")]
 
     if path.startswith("/contracts/letters/") and path.endswith("/update") and method == "POST":
-        denied = guard("contracts", "edit")
-        if denied:
-            return denied
-        if not can_edit_legal_correspondence(current_user):
-            body = render_forbidden_body("Контракты")
-            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+        if not can_edit_any_legal_registry(current_user):
+            body = render_forbidden_body("Юриспруденция")
+            html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         contract_id = -1
         try:
             letter_id = int(path.split("/")[3])
-            contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0])
+            query = parse_qs(environ.get("QUERY_STRING", ""))
+            contract_id = int(query.get("contract_id", ["0"])[0] or "0")
+            next_path = query.get("next_path", [""])[0].strip()
             letter = storage.get_legal_letter(current_owner, letter_id)
             if letter is None:
                 raise ValueError("Письмо не найдено")
             form, files = read_multipart_form_data(environ)
+            contract_id_raw = form.get("contract_id", "").strip()
+            selected_contract_id = int(contract_id_raw) if contract_id_raw else None
             direction = form.get("direction", "outgoing").strip()
             if direction not in LEGAL_LETTER_META:
                 raise ValueError("Некорректный тип письма")
@@ -14823,29 +15204,159 @@ def app(environ, start_response):
             letter_date_raw = form.get("letter_date", "").strip()
             if not letter_date_raw:
                 raise ValueError("Укажите дату письма")
+            object_label = form.get("object_label", "").strip()
             subject = form.get("subject", "").strip()
             if not subject:
                 raise ValueError("Укажите, о чем письмо")
-            if not storage.update_legal_letter(current_owner, letter_id, direction, source_channel, parse_date(letter_date_raw), subject, form.get("comment", "")):
+            if not storage.update_legal_letter(current_owner, letter_id, selected_contract_id, object_label, direction, source_channel, parse_date(letter_date_raw), subject, form.get("comment", "")):
+                raise ValueError("Не удалось обновить письмо")
+            uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
+            if uploads:
+                save_legal_letter_uploads(storage, current_owner, selected_contract_id, letter_id, uploads)
+            if selected_contract_id is not None:
+                storage.add_contract_event(
+                    current_owner,
+                    selected_contract_id,
+                    parse_date(letter_date_raw),
+                    "letter_update",
+                    f"Обновлено письмо: {subject}",
+                    description=form.get("comment", ""),
+                    actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                    source_kind="legal_letter_update",
+                    source_ref=f"{letter_id}:{parse_date(letter_date_raw).isoformat()}",
+                )
+            if next_path:
+                return redirect(start_response, f"{next_path}?owner={current_owner}")
+            target_contract_id = selected_contract_id or contract_id or letter.contract_id
+            return redirect(start_response, f"/contracts/{target_contract_id}?owner={current_owner}")
+        except Exception as exc:
+            if next_path:
+                body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось обновить письмо: {exc}")
+                html = layout("Юриспруденция", body, owners, current_owner, "jurisprudence", current_user, active_subsection="jurisprudence_letters")
+            else:
+                body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить письмо: {exc}")
+                html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/jurisprudence/letters/new" and method == "POST":
+        denied = guard("jurisprudence", "edit")
+        if denied:
+            return denied
+        try:
+            form, files = read_multipart_form_data(environ)
+            contract_id_raw = form.get("contract_id", "").strip()
+            contract_id = int(contract_id_raw) if contract_id_raw else None
+            direction = form.get("direction", "outgoing").strip()
+            if direction not in LEGAL_LETTER_META:
+                raise ValueError("Некорректный тип письма")
+            source_channel = form.get("source_channel", "mail").strip()
+            if source_channel not in LEGAL_CHANNEL_META:
+                raise ValueError("Некорректный канал письма")
+            letter_date_raw = form.get("letter_date", "").strip()
+            if not letter_date_raw:
+                raise ValueError("Укажите дату письма")
+            object_label = form.get("object_label", "").strip()
+            subject = form.get("subject", "").strip()
+            if not subject:
+                raise ValueError("Укажите, о чем письмо")
+            uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
+            if not uploads:
+                raise ValueError("Прикрепите хотя бы один файл")
+            created = storage.add_legal_letter(
+                current_owner,
+                contract_id,
+                object_label,
+                direction,
+                source_channel,
+                parse_date(letter_date_raw),
+                subject,
+                form.get("comment", ""),
+                uploads[0].filename.strip(),
+                "",
+                current_user.get("id") if current_user else None,
+                current_user.get("full_name", "").strip() if current_user else "",
+            )
+            if created is None:
+                raise ValueError("Не удалось сохранить письмо")
+            save_legal_letter_uploads(storage, current_owner, contract_id, created, uploads)
+            all_attachments = storage.list_legal_letter_attachments(current_owner)
+            first_relative_path = next((item.file_path for item in all_attachments if item.letter_id == created), "")
+            if first_relative_path:
+                with storage.connection() as conn:
+                    conn.execute(
+                        """
+                        UPDATE legal_letters
+                        SET file_path = ?
+                        WHERE id = ? AND owner_chat_id = ?
+                        """,
+                        (first_relative_path, created, current_owner),
+                    )
+            if contract_id is not None:
+                storage.add_contract_event(
+                    current_owner,
+                    contract_id,
+                    parse_date(letter_date_raw),
+                    "legal_incoming" if direction == "incoming" else "legal_outgoing",
+                    subject,
+                    description=form.get("comment", ""),
+                    actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                    source_kind="legal_letter_create",
+                    source_ref=str(created),
+                )
+            return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
+        except Exception as exc:
+            body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось добавить письмо: {exc}")
+            html = layout("Юриспруденция", body, owners, current_owner, "jurisprudence", current_user, active_subsection="jurisprudence_letters")
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/jurisprudence/letters/") and path.endswith("/update") and method == "POST":
+        denied = guard("jurisprudence", "edit")
+        if denied:
+            return denied
+        try:
+            letter_id = int(path.split("/")[3])
+            letter = storage.get_legal_letter(current_owner, letter_id)
+            if letter is None:
+                raise ValueError("Письмо не найдено")
+            form, files = read_multipart_form_data(environ)
+            contract_id_raw = form.get("contract_id", "").strip()
+            contract_id = int(contract_id_raw) if contract_id_raw else None
+            direction = form.get("direction", "outgoing").strip()
+            if direction not in LEGAL_LETTER_META:
+                raise ValueError("Некорректный тип письма")
+            source_channel = form.get("source_channel", "mail").strip()
+            if source_channel not in LEGAL_CHANNEL_META:
+                raise ValueError("Некорректный канал письма")
+            letter_date_raw = form.get("letter_date", "").strip()
+            if not letter_date_raw:
+                raise ValueError("Укажите дату письма")
+            object_label = form.get("object_label", "").strip()
+            subject = form.get("subject", "").strip()
+            if not subject:
+                raise ValueError("Укажите, о чем письмо")
+            if not storage.update_legal_letter(current_owner, letter_id, contract_id, object_label, direction, source_channel, parse_date(letter_date_raw), subject, form.get("comment", "")):
                 raise ValueError("Не удалось обновить письмо")
             uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
             if uploads:
                 save_legal_letter_uploads(storage, current_owner, contract_id, letter_id, uploads)
-            storage.add_contract_event(
-                current_owner,
-                contract_id,
-                parse_date(letter_date_raw),
-                "letter_update",
-                f"Обновлено письмо: {subject}",
-                description=form.get("comment", ""),
-                actor_name=current_user.get("full_name", "").strip() if current_user else "",
-                source_kind="legal_letter_update",
-                source_ref=f"{letter_id}:{parse_date(letter_date_raw).isoformat()}",
-            )
-            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+            if contract_id is not None:
+                storage.add_contract_event(
+                    current_owner,
+                    contract_id,
+                    parse_date(letter_date_raw),
+                    "letter_update",
+                    f"Обновлено письмо: {subject}",
+                    description=form.get("comment", ""),
+                    actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                    source_kind="legal_letter_update",
+                    source_ref=f"{letter_id}:{parse_date(letter_date_raw).isoformat()}",
+                )
+            return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
         except Exception as exc:
-            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось обновить письмо: {exc}")
-            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось обновить письмо: {exc}")
+            html = layout("Юриспруденция", body, owners, current_owner, "jurisprudence", current_user, active_subsection="jurisprudence_letters")
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
@@ -15234,15 +15745,14 @@ def app(environ, start_response):
             return [b"Not found"]
 
     if path.startswith("/contracts/letter-files/") and path.endswith("/delete") and method == "POST":
-        denied = guard("contracts", "edit")
-        if denied:
-            return denied
-        if not can_edit_legal_correspondence(current_user):
-            body = render_forbidden_body("Контракты")
-            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+        if not can_edit_any_legal_registry(current_user):
+            body = render_forbidden_body("Юриспруденция")
+            html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
-        contract_id = int(parse_qs(environ.get("QUERY_STRING", "")).get("contract_id", ["0"])[0] or "0")
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        contract_id = int(query.get("contract_id", ["0"])[0] or "0")
+        next_path = query.get("next_path", [""])[0].strip()
         try:
             attachment_id = int(path.split("/")[3])
             attachment = storage.get_legal_letter_attachment(current_owner, attachment_id)
@@ -15259,33 +15769,36 @@ def app(environ, start_response):
                     absolute_path.unlink()
                 except OSError:
                     pass
-            remaining = [item for item in storage.list_legal_letter_attachments_for_contract(current_owner, attachment.contract_id) if item.letter_id == attachment.letter_id]
+            remaining = [
+                item for item in storage.list_legal_letter_attachments(current_owner) if item.letter_id == attachment.letter_id
+            ]
             next_file_path = remaining[0].file_path if remaining else ""
             with storage.connection() as conn:
                 conn.execute(
                     """
                     UPDATE legal_letters
                     SET file_path = ?, file_name = ?
-                    WHERE id = ? AND contract_id IN (
-                        SELECT id FROM contracts WHERE chat_id = ?
-                    )
+                    WHERE id = ? AND owner_chat_id = ?
                     """,
                     (next_file_path, remaining[0].file_name if remaining else "", attachment.letter_id, current_owner),
                 )
+            if next_path:
+                return redirect(start_response, f"{next_path}?owner={current_owner}")
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
-            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось удалить вложение: {exc}")
-            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            if next_path:
+                body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось удалить вложение: {exc}")
+                html = layout("Юриспруденция", body, owners, current_owner, "jurisprudence", current_user, active_subsection="jurisprudence_letters")
+            else:
+                body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось удалить вложение: {exc}")
+                html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
     if path.startswith("/contracts/letters/") and path.endswith("/file") and method == "GET":
-        denied = guard("contracts", "view")
-        if denied:
-            return denied
-        if not can_view_legal_correspondence(current_user):
-            body = render_forbidden_body("Контракты")
-            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+        if not can_view_any_legal_registry(current_user):
+            body = render_forbidden_body("Юриспруденция")
+            html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         try:
@@ -15308,12 +15821,9 @@ def app(environ, start_response):
             return [b"Not found"]
 
     if path.startswith("/contracts/letter-files/") and path.endswith("/file") and method == "GET":
-        denied = guard("contracts", "view")
-        if denied:
-            return denied
-        if not can_view_legal_correspondence(current_user):
-            body = render_forbidden_body("Контракты")
-            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+        if not can_view_any_legal_registry(current_user):
+            body = render_forbidden_body("Юриспруденция")
+            html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         try:
@@ -15333,12 +15843,9 @@ def app(environ, start_response):
             return [b"Not found"]
 
     if path.startswith("/contracts/letter-files/") and path.endswith("/download") and method == "GET":
-        denied = guard("contracts", "view")
-        if denied:
-            return denied
-        if not can_view_legal_correspondence(current_user):
-            body = render_forbidden_body("Контракты")
-            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+        if not can_view_any_legal_registry(current_user):
+            body = render_forbidden_body("Юриспруденция")
+            html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         try:
@@ -15362,12 +15869,9 @@ def app(environ, start_response):
             return [b"Not found"]
 
     if path.startswith("/contracts/letter-files/") and path.endswith("/preview") and method == "GET":
-        denied = guard("contracts", "view")
-        if denied:
-            return denied
-        if not can_view_legal_correspondence(current_user):
-            body = render_forbidden_body("Контракты")
-            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+        if not can_view_any_legal_registry(current_user):
+            body = render_forbidden_body("Юриспруденция")
+            html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         try:
@@ -15390,12 +15894,9 @@ def app(environ, start_response):
             return [b"Not found"]
 
     if path.startswith("/contracts/letters/") and path.endswith("/download") and method == "GET":
-        denied = guard("contracts", "view")
-        if denied:
-            return denied
-        if not can_view_legal_correspondence(current_user):
-            body = render_forbidden_body("Контракты")
-            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+        if not can_view_any_legal_registry(current_user):
+            body = render_forbidden_body("Юриспруденция")
+            html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         try:
@@ -15419,12 +15920,9 @@ def app(environ, start_response):
             return [b"Not found"]
 
     if path.startswith("/contracts/letters/") and path.endswith("/preview") and method == "GET":
-        denied = guard("contracts", "view")
-        if denied:
-            return denied
-        if not can_view_legal_correspondence(current_user):
-            body = render_forbidden_body("Контракты")
-            html = layout("Доступ запрещен", body, owners, current_owner, "contracts", current_user)
+        if not can_view_any_legal_registry(current_user):
+            body = render_forbidden_body("Юриспруденция")
+            html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         try:

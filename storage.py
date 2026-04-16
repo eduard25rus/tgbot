@@ -9,7 +9,7 @@ from typing import Optional
 
 
 DATE_FMT = "%Y-%m-%d"
-WEB_SECTION_IDS = ("contracts", "auctions", "events", "tasks", "payables", "expenses", "payroll", "finance", "access")
+WEB_SECTION_IDS = ("contracts", "auctions", "events", "tasks", "payables", "expenses", "payroll", "finance", "jurisprudence", "access")
 
 
 @dataclass
@@ -71,7 +71,9 @@ class Payment:
 @dataclass
 class LegalLetter:
     id: int
-    contract_id: int
+    owner_chat_id: int
+    contract_id: Optional[int]
+    object_label: str
     direction: str
     source_channel: str
     letter_date: date
@@ -90,7 +92,7 @@ class LegalLetter:
 class LegalLetterAttachment:
     id: int
     letter_id: int
-    contract_id: int
+    contract_id: Optional[int]
     file_name: str
     file_path: str
     created_at: datetime
@@ -454,7 +456,9 @@ class Storage:
 
                 CREATE TABLE IF NOT EXISTS legal_letters (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    contract_id INTEGER NOT NULL,
+                    owner_chat_id INTEGER NOT NULL DEFAULT 0,
+                    contract_id INTEGER,
+                    object_label TEXT NOT NULL DEFAULT '',
                     direction TEXT NOT NULL DEFAULT 'outgoing',
                     source_channel TEXT NOT NULL DEFAULT 'mail',
                     letter_date TEXT NOT NULL,
@@ -803,6 +807,7 @@ class Storage:
             legal_letter_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(legal_letters)").fetchall()
             }
+            legal_letter_info = conn.execute("PRAGMA table_info(legal_letters)").fetchall()
             meeting_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(contract_meetings)").fetchall()
             }
@@ -943,6 +948,67 @@ class Storage:
             for column_name, column_def in expense_alters:
                 if column_name not in expense_columns:
                     conn.execute(f"ALTER TABLE expense_entries ADD COLUMN {column_name} {column_def}")
+            legal_letter_contract_notnull = any(
+                row["name"] == "contract_id" and int(row["notnull"] or 0) == 1 for row in legal_letter_info
+            )
+            if (
+                "owner_chat_id" not in legal_letter_columns
+                or "object_label" not in legal_letter_columns
+                or legal_letter_contract_notnull
+            ):
+                conn.execute("PRAGMA foreign_keys = OFF")
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS legal_letters__new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        owner_chat_id INTEGER NOT NULL DEFAULT 0,
+                        contract_id INTEGER,
+                        object_label TEXT NOT NULL DEFAULT '',
+                        direction TEXT NOT NULL DEFAULT 'outgoing',
+                        source_channel TEXT NOT NULL DEFAULT 'mail',
+                        letter_date TEXT NOT NULL,
+                        subject TEXT NOT NULL DEFAULT '',
+                        comment TEXT NOT NULL DEFAULT '',
+                        file_name TEXT NOT NULL DEFAULT '',
+                        file_path TEXT NOT NULL DEFAULT '',
+                        created_by_user_id INTEGER,
+                        created_by_name TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                conn.execute(
+                    f"""
+                    INSERT INTO legal_letters__new (
+                        id, owner_chat_id, contract_id, object_label, direction, source_channel, letter_date,
+                        subject, comment, file_name, file_path, created_by_user_id, created_by_name, created_at
+                    )
+                    SELECT
+                        l.id,
+                        {"COALESCE(NULLIF(l.owner_chat_id, 0), c.chat_id, 0)" if "owner_chat_id" in legal_letter_columns else "COALESCE(c.chat_id, 0)"},
+                        l.contract_id,
+                        {"COALESCE(NULLIF(l.object_label, ''), CASE WHEN COALESCE(c.object_name, '') != '' THEN CASE WHEN COALESCE(c.object_address, '') != '' THEN c.object_name || ', ' || c.object_address ELSE c.object_name END ELSE COALESCE(c.title, '') END, '')" if "object_label" in legal_letter_columns else "COALESCE(CASE WHEN COALESCE(c.object_name, '') != '' THEN CASE WHEN COALESCE(c.object_address, '') != '' THEN c.object_name || ', ' || c.object_address ELSE c.object_name END ELSE COALESCE(c.title, '') END, '')"},
+                        l.direction,
+                        {"l.source_channel" if "source_channel" in legal_letter_columns else "'mail'"},
+                        l.letter_date,
+                        l.subject,
+                        l.comment,
+                        l.file_name,
+                        l.file_path,
+                        l.created_by_user_id,
+                        l.created_by_name,
+                        l.created_at
+                    FROM legal_letters l
+                    LEFT JOIN contracts c ON c.id = l.contract_id
+                    """
+                )
+                conn.execute("DROP TABLE legal_letters")
+                conn.execute("ALTER TABLE legal_letters__new RENAME TO legal_letters")
+                conn.execute("PRAGMA foreign_keys = ON")
+                legal_letter_columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(legal_letters)").fetchall()
+                }
             if "source_channel" not in legal_letter_columns:
                 conn.execute("ALTER TABLE legal_letters ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'mail'")
             meeting_alters = [
@@ -2501,7 +2567,8 @@ class Storage:
     def add_legal_letter(
         self,
         chat_id: int,
-        contract_id: int,
+        contract_id: int | None,
+        object_label: str,
         direction: str,
         source_channel: str,
         letter_date: date,
@@ -2513,26 +2580,37 @@ class Storage:
         created_by_name: str,
     ) -> int | None:
         with self.connection() as conn:
-            contract = conn.execute(
-                """
-                SELECT id
-                FROM contracts
-                WHERE id = ? AND chat_id = ?
-                """,
-                (contract_id, chat_id),
-            ).fetchone()
-            if contract is None:
+            resolved_object_label = object_label.strip()
+            resolved_contract_id = int(contract_id) if contract_id else None
+            if resolved_contract_id is not None:
+                contract = conn.execute(
+                    """
+                    SELECT id, object_name, object_address, title
+                    FROM contracts
+                    WHERE id = ? AND chat_id = ?
+                    """,
+                    (resolved_contract_id, chat_id),
+                ).fetchone()
+                if contract is None:
+                    return None
+                if not resolved_object_label:
+                    contract_object = (contract["object_name"] or contract["title"] or "").strip()
+                    contract_address = (contract["object_address"] or "").strip()
+                    resolved_object_label = f"{contract_object}, {contract_address}" if contract_address else contract_object
+            if not resolved_object_label:
                 return None
             cursor = conn.execute(
                 """
                 INSERT INTO legal_letters (
-                    contract_id, direction, source_channel, letter_date, subject, comment,
+                    owner_chat_id, contract_id, object_label, direction, source_channel, letter_date, subject, comment,
                     file_name, file_path, created_by_user_id, created_by_name, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    contract_id,
+                    chat_id,
+                    resolved_contract_id,
+                    resolved_object_label,
                     direction,
                     source_channel,
                     letter_date.strftime(DATE_FMT),
@@ -2553,8 +2631,7 @@ class Storage:
                 """
                 SELECT l.id
                 FROM legal_letters l
-                JOIN contracts c ON c.id = l.contract_id
-                WHERE l.id = ? AND c.chat_id = ?
+                WHERE l.id = ? AND l.owner_chat_id = ?
                 """,
                 (letter_id, chat_id),
             ).fetchone()
@@ -2573,6 +2650,8 @@ class Storage:
         self,
         chat_id: int,
         letter_id: int,
+        contract_id: int | None,
+        object_label: str,
         direction: str,
         source_channel: str,
         letter_date: date,
@@ -2580,16 +2659,35 @@ class Storage:
         comment: str,
     ) -> bool:
         with self.connection() as conn:
+            resolved_object_label = object_label.strip()
+            resolved_contract_id = int(contract_id) if contract_id else None
+            if resolved_contract_id is not None:
+                contract = conn.execute(
+                    """
+                    SELECT id, object_name, object_address, title
+                    FROM contracts
+                    WHERE id = ? AND chat_id = ?
+                    """,
+                    (resolved_contract_id, chat_id),
+                ).fetchone()
+                if contract is None:
+                    return False
+                if not resolved_object_label:
+                    contract_object = (contract["object_name"] or contract["title"] or "").strip()
+                    contract_address = (contract["object_address"] or "").strip()
+                    resolved_object_label = f"{contract_object}, {contract_address}" if contract_address else contract_object
+            if not resolved_object_label:
+                return False
             cursor = conn.execute(
                 """
                 UPDATE legal_letters
-                SET direction = ?, source_channel = ?, letter_date = ?, subject = ?, comment = ?
+                SET contract_id = ?, object_label = ?, direction = ?, source_channel = ?, letter_date = ?, subject = ?, comment = ?
                 WHERE id = ?
-                  AND contract_id IN (
-                      SELECT id FROM contracts WHERE chat_id = ?
-                  )
+                  AND owner_chat_id = ?
                 """,
                 (
+                    resolved_contract_id,
+                    resolved_object_label,
                     direction,
                     source_channel,
                     letter_date.strftime(DATE_FMT),
@@ -2801,12 +2899,12 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT l.id, l.contract_id, l.direction, l.source_channel, l.letter_date, l.subject, l.comment,
+                SELECT l.id, l.owner_chat_id, l.contract_id, l.object_label, l.direction, l.source_channel, l.letter_date, l.subject, l.comment,
                        l.file_name, l.file_path, l.created_by_user_id, l.created_by_name, l.created_at,
-                       c.title AS contract_title, c.chat_id AS chat_id
+                       COALESCE(c.title, '') AS contract_title, l.owner_chat_id AS chat_id
                 FROM legal_letters l
-                JOIN contracts c ON c.id = l.contract_id
-                WHERE c.chat_id = ? AND l.id = ?
+                LEFT JOIN contracts c ON c.id = l.contract_id
+                WHERE l.owner_chat_id = ? AND l.id = ?
                 """,
                 (chat_id, letter_id),
             ).fetchone()
@@ -2847,11 +2945,11 @@ class Storage:
             row = conn.execute(
                 """
                 SELECT a.id, a.letter_id, l.contract_id, a.file_name, a.file_path, a.created_at,
-                       c.title AS contract_title, c.chat_id AS chat_id
+                       COALESCE(c.title, '') AS contract_title, l.owner_chat_id AS chat_id
                 FROM legal_letter_attachments a
                 JOIN legal_letters l ON l.id = a.letter_id
-                JOIN contracts c ON c.id = l.contract_id
-                WHERE a.id = ? AND c.chat_id = ?
+                LEFT JOIN contracts c ON c.id = l.contract_id
+                WHERE a.id = ? AND l.owner_chat_id = ?
                 """,
                 (attachment_id, chat_id),
             ).fetchone()
@@ -2881,8 +2979,7 @@ class Storage:
                   AND letter_id IN (
                       SELECT l.id
                       FROM legal_letters l
-                      JOIN contracts c ON c.id = l.contract_id
-                      WHERE c.chat_id = ?
+                      WHERE l.owner_chat_id = ?
                   )
                 """,
                 (attachment_id, chat_id),
@@ -2937,15 +3034,50 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT l.id, l.contract_id, l.direction, l.source_channel, l.letter_date, l.subject, l.comment,
+                SELECT l.id, l.owner_chat_id, l.contract_id, l.object_label, l.direction, l.source_channel, l.letter_date, l.subject, l.comment,
                        l.file_name, l.file_path, l.created_by_user_id, l.created_by_name, l.created_at,
-                       c.title AS contract_title, c.chat_id AS chat_id
+                       COALESCE(c.title, '') AS contract_title, l.owner_chat_id AS chat_id
                 FROM legal_letters l
-                JOIN contracts c ON c.id = l.contract_id
-                WHERE c.chat_id = ? AND c.id = ?
+                LEFT JOIN contracts c ON c.id = l.contract_id
+                WHERE l.owner_chat_id = ? AND l.contract_id = ?
                 ORDER BY l.letter_date DESC, l.id DESC
                 """,
                 (chat_id, contract_id),
+            ).fetchall()
+        return [self._legal_letter_from_row(row) for row in rows]
+
+    def list_legal_letters(
+        self,
+        chat_id: int,
+        object_filter: str = "",
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[LegalLetter]:
+        with self.connection() as conn:
+            clauses = ["l.owner_chat_id = ?"]
+            params: list[object] = [chat_id]
+            if object_filter.strip():
+                clauses.append("LOWER(COALESCE(NULLIF(l.object_label, ''), c.object_name, c.title, '')) = ?")
+                params.append(object_filter.strip().lower())
+            if date_from is not None:
+                clauses.append("l.letter_date >= ?")
+                params.append(date_from.strftime(DATE_FMT))
+            if date_to is not None:
+                clauses.append("l.letter_date <= ?")
+                params.append(date_to.strftime(DATE_FMT))
+            rows = conn.execute(
+                f"""
+                SELECT l.id, l.owner_chat_id, l.contract_id,
+                       COALESCE(NULLIF(l.object_label, ''), CASE WHEN COALESCE(c.object_name, '') != '' THEN CASE WHEN COALESCE(c.object_address, '') != '' THEN c.object_name || ', ' || c.object_address ELSE c.object_name END ELSE COALESCE(c.title, '') END, '') AS object_label,
+                       l.direction, l.source_channel, l.letter_date, l.subject, l.comment,
+                       l.file_name, l.file_path, l.created_by_user_id, l.created_by_name, l.created_at,
+                       COALESCE(c.title, '') AS contract_title, l.owner_chat_id AS chat_id
+                FROM legal_letters l
+                LEFT JOIN contracts c ON c.id = l.contract_id
+                WHERE {' AND '.join(clauses)}
+                ORDER BY l.letter_date DESC, l.id DESC
+                """,
+                params,
             ).fetchall()
         return [self._legal_letter_from_row(row) for row in rows]
 
@@ -2986,14 +3118,30 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT a.id, a.letter_id, l.contract_id, a.file_name, a.file_path, a.created_at,
-                       c.title AS contract_title, c.chat_id AS chat_id
+                       COALESCE(c.title, '') AS contract_title, l.owner_chat_id AS chat_id
                 FROM legal_letter_attachments a
                 JOIN legal_letters l ON l.id = a.letter_id
-                JOIN contracts c ON c.id = l.contract_id
-                WHERE c.chat_id = ? AND c.id = ?
+                LEFT JOIN contracts c ON c.id = l.contract_id
+                WHERE l.owner_chat_id = ? AND l.contract_id = ?
                 ORDER BY a.id ASC
                 """,
                 (chat_id, contract_id),
+            ).fetchall()
+        return [self._legal_letter_attachment_from_row(row) for row in rows]
+
+    def list_legal_letter_attachments(self, chat_id: int) -> list[LegalLetterAttachment]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT a.id, a.letter_id, l.contract_id, a.file_name, a.file_path, a.created_at,
+                       COALESCE(c.title, '') AS contract_title, l.owner_chat_id AS chat_id
+                FROM legal_letter_attachments a
+                JOIN legal_letters l ON l.id = a.letter_id
+                LEFT JOIN contracts c ON c.id = l.contract_id
+                WHERE l.owner_chat_id = ?
+                ORDER BY a.id ASC
+                """,
+                (chat_id,),
             ).fetchall()
         return [self._legal_letter_attachment_from_row(row) for row in rows]
 
@@ -3342,7 +3490,9 @@ class Storage:
     def _legal_letter_from_row(row: sqlite3.Row) -> LegalLetter:
         return LegalLetter(
             id=row["id"],
-            contract_id=row["contract_id"],
+            owner_chat_id=int(row["owner_chat_id"] or row["chat_id"] or 0),
+            contract_id=int(row["contract_id"]) if row["contract_id"] is not None else None,
+            object_label=row["object_label"] or "",
             direction=row["direction"] or "outgoing",
             source_channel=row["source_channel"] or "mail",
             letter_date=date.fromisoformat(row["letter_date"]),
@@ -3411,7 +3561,7 @@ class Storage:
         return LegalLetterAttachment(
             id=row["id"],
             letter_id=row["letter_id"],
-            contract_id=row["contract_id"],
+            contract_id=int(row["contract_id"]) if row["contract_id"] is not None else None,
             file_name=row["file_name"] or "",
             file_path=row["file_path"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
