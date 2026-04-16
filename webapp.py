@@ -4056,7 +4056,7 @@ def layout(
     .expenses-table-wrap {{
       margin-top: 18px;
       max-width: 100%;
-      overflow-x: auto;
+      overflow: visible;
       overflow-y: visible;
       position: relative;
       padding-bottom: 12px;
