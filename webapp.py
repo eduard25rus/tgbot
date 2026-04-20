@@ -1764,16 +1764,25 @@ def jurisprudence_contract_options(storage: Storage, owner_chat_id: int) -> list
 
 
 def jurisprudence_object_options(storage: Storage, owner_chat_id: int) -> list[str]:
+    def clean_label(value: str) -> str:
+        normalized = value.strip()
+        if normalized.startswith("label:"):
+            normalized = normalized.split(":", 1)[1].strip()
+        return normalized
+
     labels = set()
     for _, label in jurisprudence_contract_options(storage, owner_chat_id):
-        if label.strip():
-            labels.add(label.strip())
+        cleaned = clean_label(label)
+        if cleaned:
+            labels.add(cleaned)
     for label in storage.list_jurisprudence_objects(owner_chat_id):
-        if label.strip():
-            labels.add(label.strip())
+        cleaned = clean_label(label)
+        if cleaned:
+            labels.add(cleaned)
     for letter in storage.list_legal_letters(owner_chat_id):
-        if letter.object_label.strip():
-            labels.add(letter.object_label.strip())
+        cleaned = clean_label(letter.object_label)
+        if cleaned:
+            labels.add(cleaned)
     return sorted(labels, key=lambda value: value.lower())
 
 
@@ -1815,16 +1824,31 @@ def resolve_jurisprudence_filter_label(storage: Storage, owner_chat_id: int, obj
     return raw_filter
 
 
+def normalize_legal_letter_object_label(object_label: str) -> str:
+    normalized = object_label.strip()
+    if normalized.startswith("label:"):
+        normalized = normalized.split(":", 1)[1].strip()
+    return normalized
+
+
+def resolve_contract_id_by_object_label(storage: Storage, owner_chat_id: int, object_label: str) -> int | None:
+    normalized_label = normalize_legal_letter_object_label(object_label).lower()
+    if not normalized_label:
+        return None
+    for contract_id_raw, label in jurisprudence_contract_options(storage, owner_chat_id):
+        if label.strip().lower() == normalized_label:
+            try:
+                return int(contract_id_raw)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def render_legal_letter_object_fields(
     storage: Storage,
     owner_chat_id: int,
-    selected_contract_id: int | None,
     object_label: str,
 ) -> str:
-    contract_options = "".join(
-        f'<option value="{escape(contract_id)}"{" selected" if selected_contract_id is not None and str(selected_contract_id) == contract_id else ""}>{escape(label)}</option>'
-        for contract_id, label in jurisprudence_contract_options(storage, owner_chat_id)
-    )
     object_options = jurisprudence_object_options(storage, owner_chat_id)
     current_label = object_label.strip()
     if current_label and current_label not in object_options:
@@ -1834,13 +1858,6 @@ def render_legal_letter_object_fields(
         for label in object_options
     )
     return f"""
-      <div class="field">
-        <label>Текущий контракт</label>
-        <select name="contract_id">
-          <option value="">Вне текущих контрактов</option>
-          {contract_options}
-        </select>
-      </div>
       <div class="field">
         <label>Объект</label>
         <select name="object_label" required>
@@ -1949,7 +1966,7 @@ def render_jurisprudence_letter_editor(storage: Storage, owner_chat_id: int, let
       </summary>
       <div class="status-popover" style="min-width:520px;">
         <form class="form-grid" method="post" action="/jurisprudence/letters/{letter.id}/update?owner={owner_chat_id}" enctype="multipart/form-data">
-          {render_legal_letter_object_fields(storage, owner_chat_id, letter.contract_id, letter.object_label)}
+          {render_legal_letter_object_fields(storage, owner_chat_id, letter.object_label)}
           <div class="field">
             <label>Тип письма</label>
             <select name="direction" required>
@@ -7417,7 +7434,7 @@ def render_jurisprudence_letters_section(
             <summary><span class="secondary-btn">Добавить письмо</span></summary>
             <div class="status-popover align-right" style="min-width:560px;">
               <form class="form-grid" method="post" action="/jurisprudence/letters/new?owner={owner_chat_id}" enctype="multipart/form-data">
-                {render_legal_letter_object_fields(storage, owner_chat_id, None, selected_object_label)}
+                {render_legal_letter_object_fields(storage, owner_chat_id, selected_object_label)}
                 <div class="field">
                   <label>Тип письма</label>
                   <select name="direction" required>
@@ -15302,8 +15319,6 @@ def app(environ, start_response):
             if letter is None:
                 raise ValueError("Письмо не найдено")
             form, files = read_multipart_form_data(environ)
-            contract_id_raw = form.get("contract_id", "").strip()
-            selected_contract_id = int(contract_id_raw) if contract_id_raw else None
             direction = form.get("direction", "outgoing").strip()
             if direction not in LEGAL_LETTER_META:
                 raise ValueError("Некорректный тип письма")
@@ -15313,19 +15328,20 @@ def app(environ, start_response):
             letter_date_raw = form.get("letter_date", "").strip()
             if not letter_date_raw:
                 raise ValueError("Укажите дату письма")
-            object_label = form.get("object_label", "").strip()
+            object_label = normalize_legal_letter_object_label(form.get("object_label", ""))
+            resolved_contract_id = resolve_contract_id_by_object_label(storage, current_owner, object_label)
             subject = form.get("subject", "").strip()
             if not subject:
                 raise ValueError("Укажите, о чем письмо")
-            if not storage.update_legal_letter(current_owner, letter_id, selected_contract_id, object_label, direction, source_channel, parse_date(letter_date_raw), subject, form.get("comment", "")):
+            if not storage.update_legal_letter(current_owner, letter_id, resolved_contract_id, object_label, direction, source_channel, parse_date(letter_date_raw), subject, form.get("comment", "")):
                 raise ValueError("Не удалось обновить письмо")
             uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
             if uploads:
-                save_legal_letter_uploads(storage, current_owner, selected_contract_id, letter_id, uploads)
-            if selected_contract_id is not None:
+                save_legal_letter_uploads(storage, current_owner, resolved_contract_id, letter_id, uploads)
+            if resolved_contract_id is not None:
                 storage.add_contract_event(
                     current_owner,
-                    selected_contract_id,
+                    resolved_contract_id,
                     parse_date(letter_date_raw),
                     "letter_update",
                     f"Обновлено письмо: {subject}",
@@ -15336,7 +15352,7 @@ def app(environ, start_response):
                 )
             if next_path:
                 return redirect(start_response, f"{next_path}?owner={current_owner}")
-            target_contract_id = selected_contract_id or contract_id or letter.contract_id
+            target_contract_id = resolved_contract_id or contract_id or letter.contract_id
             return redirect(start_response, f"/contracts/{target_contract_id}?owner={current_owner}")
         except Exception as exc:
             if next_path:
@@ -15354,8 +15370,6 @@ def app(environ, start_response):
             return denied
         try:
             form, files = read_multipart_form_data(environ)
-            contract_id_raw = form.get("contract_id", "").strip()
-            contract_id = int(contract_id_raw) if contract_id_raw else None
             direction = form.get("direction", "outgoing").strip()
             if direction not in LEGAL_LETTER_META:
                 raise ValueError("Некорректный тип письма")
@@ -15365,7 +15379,8 @@ def app(environ, start_response):
             letter_date_raw = form.get("letter_date", "").strip()
             if not letter_date_raw:
                 raise ValueError("Укажите дату письма")
-            object_label = form.get("object_label", "").strip()
+            object_label = normalize_legal_letter_object_label(form.get("object_label", ""))
+            contract_id = resolve_contract_id_by_object_label(storage, current_owner, object_label)
             subject = form.get("subject", "").strip()
             if not subject:
                 raise ValueError("Укажите, о чем письмо")
@@ -15430,8 +15445,6 @@ def app(environ, start_response):
             if letter is None:
                 raise ValueError("Письмо не найдено")
             form, files = read_multipart_form_data(environ)
-            contract_id_raw = form.get("contract_id", "").strip()
-            contract_id = int(contract_id_raw) if contract_id_raw else None
             direction = form.get("direction", "outgoing").strip()
             if direction not in LEGAL_LETTER_META:
                 raise ValueError("Некорректный тип письма")
@@ -15441,7 +15454,8 @@ def app(environ, start_response):
             letter_date_raw = form.get("letter_date", "").strip()
             if not letter_date_raw:
                 raise ValueError("Укажите дату письма")
-            object_label = form.get("object_label", "").strip()
+            object_label = normalize_legal_letter_object_label(form.get("object_label", ""))
+            contract_id = resolve_contract_id_by_object_label(storage, current_owner, object_label)
             subject = form.get("subject", "").strip()
             if not subject:
                 raise ValueError("Укажите, о чем письмо")
