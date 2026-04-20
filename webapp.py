@@ -1798,6 +1798,23 @@ def jurisprudence_object_filter_options(storage: Storage, owner_chat_id: int) ->
     return options
 
 
+def resolve_jurisprudence_filter_label(storage: Storage, owner_chat_id: int, object_filter: str) -> str:
+    raw_filter = object_filter.strip()
+    if not raw_filter:
+        return ""
+    for value, label in jurisprudence_object_filter_options(storage, owner_chat_id):
+        if value == raw_filter:
+            return label
+    if raw_filter.startswith("label:"):
+        return raw_filter.split(":", 1)[1].strip()
+    if raw_filter.startswith("contract:"):
+        contract_id_raw = raw_filter.split(":", 1)[1].strip()
+        for contract_id, label in jurisprudence_contract_options(storage, owner_chat_id):
+            if contract_id == contract_id_raw:
+                return label
+    return raw_filter
+
+
 def render_legal_letter_object_fields(
     storage: Storage,
     owner_chat_id: int,
@@ -5897,6 +5914,10 @@ def layout(
       display: grid;
       gap: 8px;
     }}
+    .status-popover.align-right {{
+      left: auto;
+      right: 0;
+    }}
     .expense-editor-popover {{
       left: 0;
       min-width: 560px;
@@ -7344,6 +7365,7 @@ def render_jurisprudence_letters_section(
 ) -> str:
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     letters = storage.list_legal_letters(owner_chat_id, object_filter=object_filter)
+    selected_object_label = resolve_jurisprudence_filter_label(storage, owner_chat_id, object_filter)
     attachments = storage.list_legal_letter_attachments(owner_chat_id)
     attachment_map: dict[int, list] = {}
     for attachment in attachments:
@@ -7393,9 +7415,9 @@ def render_jurisprudence_letters_section(
         add_letter_button = f"""
           <details class="status-menu">
             <summary><span class="secondary-btn">Добавить письмо</span></summary>
-            <div class="status-popover" style="min-width:560px;">
+            <div class="status-popover align-right" style="min-width:560px;">
               <form class="form-grid" method="post" action="/jurisprudence/letters/new?owner={owner_chat_id}" enctype="multipart/form-data">
-                {render_legal_letter_object_fields(storage, owner_chat_id, None, object_filter)}
+                {render_legal_letter_object_fields(storage, owner_chat_id, None, selected_object_label)}
                 <div class="field">
                   <label>Тип письма</label>
                   <select name="direction" required>
@@ -7434,7 +7456,7 @@ def render_jurisprudence_letters_section(
         add_object_button = f"""
           <details class="status-menu">
             <summary><span class="secondary-btn">Добавить объект</span></summary>
-            <div class="status-popover" style="min-width:420px;">
+            <div class="status-popover align-right" style="min-width:420px;">
               <form class="form-grid" method="post" action="/jurisprudence/objects/new?owner={owner_chat_id}">
                 <div class="field" style="grid-column: 1 / -1;">
                   <label>Название объекта</label>
@@ -7617,7 +7639,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
             add_letter_button = f'''
               <details class="status-menu">
                 <summary><span class="secondary-btn">Добавить письмо</span></summary>
-                <div class="status-popover" style="min-width:520px;">
+                <div class="status-popover align-right" style="min-width:520px;">
                   <form class="form-grid" method="post" action="/contracts/{contract.id}/letters/new?owner={owner_chat_id}" enctype="multipart/form-data">
                     <input type="hidden" name="contract_id" value="{contract.id}">
                     <input type="hidden" name="object_label" value="{escape((contract.object_name.strip() or contract.title) + (', ' + contract.object_address.strip() if contract.object_address.strip() else ''))}">
