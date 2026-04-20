@@ -1774,6 +1774,27 @@ def jurisprudence_object_options(storage: Storage, owner_chat_id: int) -> list[s
     return sorted(labels, key=lambda value: value.lower())
 
 
+def jurisprudence_object_filter_options(storage: Storage, owner_chat_id: int) -> list[tuple[str, str]]:
+    options: list[tuple[str, str]] = []
+    seen_values: set[str] = set()
+    contract_labels = set()
+    for contract_id, label in jurisprudence_contract_options(storage, owner_chat_id):
+        value = f"contract:{contract_id}"
+        contract_labels.add(label.strip())
+        if value not in seen_values:
+            options.append((value, label))
+            seen_values.add(value)
+    for label in jurisprudence_object_options(storage, owner_chat_id):
+        normalized_label = label.strip()
+        if not normalized_label or normalized_label in contract_labels:
+            continue
+        value = f"label:{normalized_label}"
+        if value not in seen_values:
+            options.append((value, normalized_label))
+            seen_values.add(value)
+    return options
+
+
 def render_legal_letter_object_fields(
     storage: Storage,
     owner_chat_id: int,
@@ -7306,20 +7327,16 @@ def render_jurisprudence_letters_section(
     current_user: dict | None,
     flash_message: str = "",
     object_filter: str = "",
-    date_from_raw: str = "",
-    date_to_raw: str = "",
 ) -> str:
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
-    date_from = parse_date(date_from_raw) if date_from_raw else None
-    date_to = parse_date(date_to_raw) if date_to_raw else None
-    letters = storage.list_legal_letters(owner_chat_id, object_filter=object_filter, date_from=date_from, date_to=date_to)
+    letters = storage.list_legal_letters(owner_chat_id, object_filter=object_filter)
     attachments = storage.list_legal_letter_attachments(owner_chat_id)
     attachment_map: dict[int, list] = {}
     for attachment in attachments:
         attachment_map.setdefault(attachment.letter_id, []).append(attachment)
     object_options_html = "".join(
-        f'<option value="{escape(label)}"{" selected" if object_filter == label else ""}>{escape(label)}</option>'
-        for label in jurisprudence_object_options(storage, owner_chat_id)
+        f'<option value="{escape(value)}"{" selected" if object_filter == value else ""}>{escape(label)}</option>'
+        for value, label in jurisprudence_object_filter_options(storage, owner_chat_id)
     )
     letters_rows_html = "".join(
         f"""
@@ -7416,14 +7433,6 @@ def render_jurisprudence_letters_section(
             <option value="">Все объекты</option>
             {object_options_html}
           </select>
-        </div>
-        <div class="field">
-          <label>Дата с</label>
-          <input type="date" name="date_from" value="{escape(date_from_raw)}">
-        </div>
-        <div class="field">
-          <label>Дата по</label>
-          <input type="date" name="date_to" value="{escape(date_to_raw)}">
         </div>
         <div class="action-row" style="align-items:flex-end;">
           <button class="secondary-btn" type="submit">Показать</button>
@@ -13047,15 +13056,11 @@ def app(environ, start_response):
             return denied
         query = parse_qs(environ.get("QUERY_STRING", ""))
         object_filter = query.get("object", [""])[0].strip()
-        date_from_raw = query.get("date_from", [""])[0].strip()
-        date_to_raw = query.get("date_to", [""])[0].strip()
         body = render_jurisprudence_letters_section(
             storage,
             current_owner,
             current_user,
             object_filter=object_filter,
-            date_from_raw=date_from_raw,
-            date_to_raw=date_to_raw,
         )
         html = layout(
             "Юриспруденция",

@@ -3057,19 +3057,28 @@ class Storage:
             clauses = ["l.owner_chat_id = ?"]
             params: list[object] = [chat_id]
             if object_filter.strip():
-                normalized_filter = object_filter.strip().lower()
-                clauses.append(
-                    """
-                    (
-                        LOWER(COALESCE(NULLIF(l.object_label, ''), '')) LIKE ?
-                        OR LOWER(COALESCE(c.object_name, '')) LIKE ?
-                        OR LOWER(COALESCE(c.object_address, '')) LIKE ?
-                        OR LOWER(COALESCE(c.title, '')) LIKE ?
+                normalized_filter = object_filter.strip()
+                if normalized_filter.startswith("contract:"):
+                    contract_id_raw = normalized_filter.split(":", 1)[1].strip()
+                    if contract_id_raw.isdigit():
+                        clauses.append("l.contract_id = ?")
+                        params.append(int(contract_id_raw))
+                else:
+                    if normalized_filter.startswith("label:"):
+                        normalized_filter = normalized_filter.split(":", 1)[1].strip()
+                    normalized_filter = normalized_filter.lower()
+                    clauses.append(
+                        """
+                        (
+                            LOWER(COALESCE(NULLIF(l.object_label, ''), '')) LIKE ?
+                            OR LOWER(COALESCE(c.object_name, '')) LIKE ?
+                            OR LOWER(COALESCE(c.object_address, '')) LIKE ?
+                            OR LOWER(COALESCE(c.title, '')) LIKE ?
+                        )
+                        """
                     )
-                    """
-                )
-                wildcard_filter = f"%{normalized_filter}%"
-                params.extend([wildcard_filter, wildcard_filter, wildcard_filter, wildcard_filter])
+                    wildcard_filter = f"%{normalized_filter}%"
+                    params.extend([wildcard_filter, wildcard_filter, wildcard_filter, wildcard_filter])
             if date_from is not None:
                 clauses.append("l.letter_date >= ?")
                 params.append(date_from.strftime(DATE_FMT))
