@@ -3780,7 +3780,11 @@ def layout(
         for section_id, label, href in visible_sections
     )
     if show_finance_group:
-        active_finance_key = active_subsection or (active_section if active_section in finance_nav_ids else "")
+        active_finance_key = (
+            active_subsection
+            if active_subsection in finance_nav_ids
+            else (active_section if active_section in finance_nav_ids else "")
+        )
         finance_links = "".join(
             f'<a class="nav-sublink{" active" if code == active_finance_key else ""}" href="{href}">{label}</a>'
             for code, label, href in FINANCE_NAV_SECTIONS
@@ -3792,7 +3796,11 @@ def layout(
         </details>
         """
     if show_jurisprudence_group:
-        active_jurisprudence_key = active_subsection or (active_section if active_section in jurisprudence_nav_ids else "")
+        active_jurisprudence_key = (
+            active_subsection
+            if active_subsection in jurisprudence_nav_ids
+            else (active_section if active_section in jurisprudence_nav_ids else "")
+        )
         jurisprudence_links = "".join(
             f'<a class="nav-sublink{" active" if code == active_jurisprudence_key else ""}" href="{href}">{label}</a>'
             for code, label, href in JURISPRUDENCE_NAV_SECTIONS
