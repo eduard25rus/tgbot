@@ -3127,14 +3127,13 @@ class Storage:
                 else:
                     if normalized_filter.startswith("label:"):
                         normalized_filter = normalized_filter.split(":", 1)[1].strip()
-                    normalized_filter = normalized_filter.lower()
                     clauses.append(
                         """
                         (
-                            LOWER(COALESCE(NULLIF(l.object_label, ''), '')) LIKE ?
-                            OR LOWER(COALESCE(c.object_name, '')) LIKE ?
-                            OR LOWER(COALESCE(c.object_address, '')) LIKE ?
-                            OR LOWER(COALESCE(c.title, '')) LIKE ?
+                            COALESCE(NULLIF(l.object_label, ''), '') LIKE ?
+                            OR COALESCE(c.object_name, '') LIKE ?
+                            OR COALESCE(c.object_address, '') LIKE ?
+                            OR COALESCE(c.title, '') LIKE ?
                         )
                         """
                     )
