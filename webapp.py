@@ -611,9 +611,10 @@ def render_legal_file_preview_page(file_url: str, download_url: str, safe_filena
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{escape(f"CRM - {safe_filename}")}</title>
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=20260420a">
-    <link rel="shortcut icon" type="image/png" href="/favicon.png?v=20260420a">
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260420a">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico?v=20260420b">
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?v=20260420b">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=20260420b">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260420b">
     <style>
       html, body {{
         margin: 0;
@@ -3898,9 +3899,10 @@ def layout(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{escape(f"CRM - {title}")}</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=20260420a">
-  <link rel="shortcut icon" type="image/png" href="/favicon.png?v=20260420a">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260420a">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=20260420b">
+  <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?v=20260420b">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=20260420b">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260420b">
   <style>
     :root {{
       --bg: #f4efe7;
@@ -12170,11 +12172,16 @@ def app(environ, start_response):
         if not logo_path.exists():
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Logo not found"]
+        content_type = "image/png"
+        cache_control = "public, max-age=300"
+        if path == "/favicon.ico":
+            content_type = "image/x-icon"
+            cache_control = "no-store, max-age=0"
         start_response(
             "200 OK",
             [
-                ("Content-Type", "image/png"),
-                ("Cache-Control", "public, max-age=300"),
+                ("Content-Type", content_type),
+                ("Cache-Control", cache_control),
             ],
         )
         return [logo_path.read_bytes()]
