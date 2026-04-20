@@ -1768,6 +1768,9 @@ def jurisprudence_object_options(storage: Storage, owner_chat_id: int) -> list[s
     for _, label in jurisprudence_contract_options(storage, owner_chat_id):
         if label.strip():
             labels.add(label.strip())
+    for label in storage.list_jurisprudence_objects(owner_chat_id):
+        if label.strip():
+            labels.add(label.strip())
     for letter in storage.list_legal_letters(owner_chat_id):
         if letter.object_label.strip():
             labels.add(letter.object_label.strip())
@@ -1805,6 +1808,14 @@ def render_legal_letter_object_fields(
         f'<option value="{escape(contract_id)}"{" selected" if selected_contract_id is not None and str(selected_contract_id) == contract_id else ""}>{escape(label)}</option>'
         for contract_id, label in jurisprudence_contract_options(storage, owner_chat_id)
     )
+    object_options = jurisprudence_object_options(storage, owner_chat_id)
+    current_label = object_label.strip()
+    if current_label and current_label not in object_options:
+        object_options = [*object_options, current_label]
+    object_options_html = "".join(
+        f'<option value="{escape(label)}"{" selected" if label == current_label else ""}>{escape(label)}</option>'
+        for label in object_options
+    )
     return f"""
       <div class="field">
         <label>Текущий контракт</label>
@@ -1815,7 +1826,10 @@ def render_legal_letter_object_fields(
       </div>
       <div class="field">
         <label>Объект</label>
-        <input type="text" name="object_label" value="{escape(object_label)}" placeholder="Например, Библиотека №13 / старый объект" required>
+        <select name="object_label" required>
+          <option value="">Выберите объект</option>
+          {object_options_html}
+        </select>
       </div>
     """
 
@@ -7374,6 +7388,7 @@ def render_jurisprudence_letters_section(
         for letter in letters
     ) or '<tr><td colspan="6">Писем пока нет.</td></tr>'
     add_letter_button = ""
+    add_object_button = ""
     if can_edit_jurisprudence(current_user):
         add_letter_button = f"""
           <details class="status-menu">
@@ -7416,6 +7431,20 @@ def render_jurisprudence_letters_section(
             </div>
           </details>
         """
+        add_object_button = f"""
+          <details class="status-menu">
+            <summary><span class="secondary-btn">Добавить объект</span></summary>
+            <div class="status-popover" style="min-width:420px;">
+              <form class="form-grid" method="post" action="/jurisprudence/objects/new?owner={owner_chat_id}">
+                <div class="field" style="grid-column: 1 / -1;">
+                  <label>Название объекта</label>
+                  <input type="text" name="name" placeholder="Например, Школа №28 / старый объект" required>
+                </div>
+                <button class="submit-btn" type="submit">Сохранить объект</button>
+              </form>
+            </div>
+          </details>
+        """
     return f"""
     <section class="card panel">
       <div class="panel-head">
@@ -7423,7 +7452,10 @@ def render_jurisprudence_letters_section(
           <h2 class="panel-title">Общий реестр переписки</h2>
           <div class="panel-sub">Все юридические письма компании в одном месте: и по текущим контрактам, и по прошлым объектам.</div>
         </div>
-        {add_letter_button}
+        <div class="action-row" style="gap:12px; align-items:center;">
+          {add_object_button}
+          {add_letter_button}
+        </div>
       </div>
       {flash_html}
       <form class="form-grid" method="get" action="/jurisprudence/letters?owner={owner_chat_id}" style="margin-bottom:18px;">
@@ -13090,6 +13122,38 @@ def app(environ, start_response):
         )
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
+
+    if path == "/jurisprudence/objects/new" and method == "POST":
+        denied = guard("jurisprudence", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        try:
+            name = form.get("name", "").strip()
+            if not name:
+                raise ValueError("Укажите название объекта")
+            created = storage.add_jurisprudence_object(
+                current_owner,
+                name,
+                current_user.get("id") if current_user else None,
+                current_user.get("full_name", "").strip() if current_user else "",
+            )
+            if created is None:
+                raise ValueError("Не удалось сохранить объект")
+            return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
+        except Exception as exc:
+            body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось добавить объект: {exc}")
+            html = layout(
+                "Юриспруденция",
+                body,
+                owners,
+                current_owner,
+                "jurisprudence",
+                current_user,
+                active_subsection="jurisprudence_letters",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
 
     if path == "/tasks" and method == "GET":
         denied = guard("tasks", "view")

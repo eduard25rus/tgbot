@@ -472,6 +472,16 @@ class Storage:
                     FOREIGN KEY(contract_id) REFERENCES contracts(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS jurisprudence_objects (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, name)
+                );
+
                 CREATE TABLE IF NOT EXISTS legal_letter_attachments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     letter_id INTEGER NOT NULL,
@@ -2618,6 +2628,57 @@ class Storage:
                     comment.strip(),
                     file_name.strip(),
                     file_path.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def list_jurisprudence_objects(self, chat_id: int) -> list[str]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT name
+                FROM jurisprudence_objects
+                WHERE owner_chat_id = ?
+                ORDER BY LOWER(name) ASC, id ASC
+                """,
+                (chat_id,),
+            ).fetchall()
+        return [str(row["name"] or "").strip() for row in rows if str(row["name"] or "").strip()]
+
+    def add_jurisprudence_object(
+        self,
+        chat_id: int,
+        name: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int | None:
+        cleaned_name = name.strip()
+        if not cleaned_name:
+            return None
+        with self.connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM jurisprudence_objects
+                WHERE owner_chat_id = ? AND LOWER(name) = LOWER(?)
+                """,
+                (chat_id, cleaned_name),
+            ).fetchone()
+            if existing is not None:
+                return int(existing["id"])
+            cursor = conn.execute(
+                """
+                INSERT INTO jurisprudence_objects (
+                    owner_chat_id, name, created_by_user_id, created_by_name, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    chat_id,
+                    cleaned_name,
                     created_by_user_id,
                     created_by_name.strip(),
                     datetime.utcnow().isoformat(),
