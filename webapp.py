@@ -610,7 +610,10 @@ def render_legal_file_preview_page(file_url: str, download_url: str, safe_filena
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{escape(safe_filename)}</title>
+    <title>{escape(f"CRM - {safe_filename}")}</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png?v=20260414b">
+    <link rel="shortcut icon" type="image/png" href="/favicon.png?v=20260414b">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260414b">
     <style>
       html, body {{
         margin: 0;
