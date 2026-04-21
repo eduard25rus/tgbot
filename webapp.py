@@ -2522,13 +2522,13 @@ def render_construction_report_photos(owner_chat_id: int, contract_id: int, repo
         </div>
         """
     else:
-        files_html = '<span class="contract-table-subtle">Фото не прикреплены</span>'
+        files_html = ""
     if not can_edit_construction_reports(current_user):
         return files_html
     return f"""
     {files_html}
-    <details class="status-menu" style="margin-top:8px;">
-      <summary><span class="secondary-btn" style="padding:8px 12px; font-size:13px;">Добавить фото</span></summary>
+    <details class="status-menu construction-photo-add-menu" style="margin-top:8px;">
+      <summary><span class="construction-photo-add-link">Добавить фото</span></summary>
       <div class="status-popover" style="min-width:360px;">
         <form class="form-grid" method="post" action="/contracts/construction-reports/{report_id}/photos/new?owner={owner_chat_id}&contract_id={contract_id}" enctype="multipart/form-data">
           <div class="field" style="grid-column: 1 / -1;">
@@ -2628,7 +2628,7 @@ def render_contract_construction_page(storage: Storage, owner_chat_id: int, cont
           <td class="nowrap">{format_date(report.report_date)}</td>
           <td>{render_construction_report_editor(owner_chat_id, contract_id, report, current_user)}</td>
           <td class="nowrap" style="text-align:center;">{report.workers_count}</td>
-          <td>{render_construction_report_photos(owner_chat_id, contract_id, report.id, photo_map.get(report.id, []), current_user)}</td>
+          <td class="construction-photo-cell">{render_construction_report_photos(owner_chat_id, contract_id, report.id, photo_map.get(report.id, []), current_user)}</td>
           <td>
             <div class="contract-table-subtle">{escape(report.created_by_name.strip() or 'Автор неизвестен')}</div>
             <div class="contract-table-subtle">{format_date(report.created_at.astimezone(VLADIVOSTOK_TZ).date() if report.created_at.tzinfo else report.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
@@ -4353,15 +4353,33 @@ def layout(
       display: inline-flex;
     }}
     .construction-section-link {{
-      background: linear-gradient(135deg, rgba(245, 196, 91, 0.24), rgba(216, 142, 63, 0.16));
-      border-color: rgba(216, 142, 63, 0.42);
-      color: #7a4a10;
-      box-shadow: 0 10px 24px rgba(216, 142, 63, 0.12);
+      background: linear-gradient(135deg, #f4c44d, #e3a536);
+      border-color: rgba(181, 111, 23, 0.46);
+      color: #3d2a0a;
+      box-shadow: 0 12px 28px rgba(216, 142, 63, 0.24);
     }}
     .construction-section-link:hover {{
-      background: linear-gradient(135deg, rgba(245, 196, 91, 0.34), rgba(216, 142, 63, 0.22));
-      border-color: rgba(216, 142, 63, 0.58);
-      color: #5e390c;
+      background: linear-gradient(135deg, #ffd464, #e9ae3e);
+      border-color: rgba(181, 111, 23, 0.62);
+      color: #2c1d06;
+    }}
+    .construction-photo-cell {{
+      text-align: center;
+      vertical-align: middle;
+    }}
+    .construction-photo-cell .status-menu {{
+      display: inline-block;
+    }}
+    .construction-photo-add-link {{
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      text-decoration: underline;
+      text-decoration-style: dashed;
+      text-underline-offset: 4px;
+    }}
+    .construction-photo-add-menu {{
+      display: inline-block;
     }}
     .construction-photo-view-btn {{
       display: inline-flex;
