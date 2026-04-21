@@ -2494,13 +2494,35 @@ def render_construction_report_editor(owner_chat_id: int, contract_id: int, repo
 
 
 def render_construction_report_photos(owner_chat_id: int, contract_id: int, report_id: int, photos: list, current_user: dict | None) -> str:
-    files_html = "".join(
-        f'''<div class="legal-letter-file-stack">
-              <a class="legal-letter-file" href="/contracts/construction-photos/{photo.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">{escape(photo.file_name or 'Фото')}</a>
-              <a class="legal-letter-download" href="/contracts/construction-photos/{photo.id}/download?owner={owner_chat_id}">Скачать</a>
-            </div>'''
-        for photo in photos
-    ) or '<span class="contract-table-subtle">Фото не прикреплены</span>'
+    if photos:
+        slides_html = "".join(
+            f'''
+            <figure class="construction-photo-slide{" is-active" if index == 0 else ""}" data-construction-photo-slide="1">
+              <img src="/contracts/construction-photos/{photo.id}/file?owner={owner_chat_id}" alt="{escape(photo.file_name or 'Фото отчета')}">
+              <figcaption>{index + 1} / {len(photos)}</figcaption>
+            </figure>
+            '''
+            for index, photo in enumerate(photos)
+        )
+        files_html = f"""
+        <button class="secondary-btn construction-photo-view-btn" type="button" data-construction-carousel-open="construction-photos-{report_id}">
+          Смотреть
+          <span>{len(photos)}</span>
+        </button>
+        <div class="construction-photo-modal" data-construction-carousel-modal="construction-photos-{report_id}" aria-hidden="true">
+          <div class="construction-photo-backdrop" data-construction-carousel-close="1"></div>
+          <div class="construction-photo-dialog" role="dialog" aria-modal="true" aria-label="Фотографии строительного отчета">
+            <button class="construction-photo-close" type="button" data-construction-carousel-close="1" aria-label="Закрыть">×</button>
+            <button class="construction-photo-arrow construction-photo-arrow-left" type="button" data-construction-carousel-prev="1" aria-label="Предыдущее фото">←</button>
+            <div class="construction-photo-stage" data-construction-carousel-stage="1">
+              {slides_html}
+            </div>
+            <button class="construction-photo-arrow construction-photo-arrow-right" type="button" data-construction-carousel-next="1" aria-label="Следующее фото">→</button>
+          </div>
+        </div>
+        """
+    else:
+        files_html = '<span class="contract-table-subtle">Фото не прикреплены</span>'
     if not can_edit_construction_reports(current_user):
         return files_html
     return f"""
@@ -4329,6 +4351,151 @@ def layout(
     .expenses-adjustment-chip {{
       margin-top: 8px;
       display: inline-flex;
+    }}
+    .construction-section-link {{
+      background: linear-gradient(135deg, rgba(245, 196, 91, 0.24), rgba(216, 142, 63, 0.16));
+      border-color: rgba(216, 142, 63, 0.42);
+      color: #7a4a10;
+      box-shadow: 0 10px 24px rgba(216, 142, 63, 0.12);
+    }}
+    .construction-section-link:hover {{
+      background: linear-gradient(135deg, rgba(245, 196, 91, 0.34), rgba(216, 142, 63, 0.22));
+      border-color: rgba(216, 142, 63, 0.58);
+      color: #5e390c;
+    }}
+    .construction-photo-view-btn {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 9px 14px;
+      min-height: auto;
+      font-size: 13px;
+    }}
+    .construction-photo-view-btn span {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: rgba(17, 25, 38, 0.08);
+      font-size: 12px;
+      color: var(--muted);
+    }}
+    .construction-photo-modal {{
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 34px;
+    }}
+    .construction-photo-modal.is-open {{
+      display: flex;
+    }}
+    .construction-photo-backdrop {{
+      position: absolute;
+      inset: 0;
+      background: rgba(17, 25, 38, 0.72);
+      backdrop-filter: blur(5px);
+    }}
+    .construction-photo-dialog {{
+      position: relative;
+      width: min(1120px, 94vw);
+      height: min(760px, 86vh);
+      border-radius: 28px;
+      background: rgba(246, 248, 250, 0.98);
+      border: 1px solid rgba(255,255,255,0.28);
+      box-shadow: 0 28px 80px rgba(17,25,38,0.32);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }}
+    .construction-photo-stage {{
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 54px 78px;
+      box-sizing: border-box;
+    }}
+    .construction-photo-slide {{
+      display: none;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }}
+    .construction-photo-slide.is-active {{
+      display: flex;
+    }}
+    .construction-photo-slide img {{
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 18px;
+      box-shadow: 0 18px 42px rgba(17,25,38,0.18);
+      background: #fff;
+    }}
+    .construction-photo-slide figcaption {{
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.88);
+    }}
+    .construction-photo-close,
+    .construction-photo-arrow {{
+      position: absolute;
+      z-index: 2;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.92);
+      color: var(--ink);
+      cursor: pointer;
+      box-shadow: 0 12px 26px rgba(17,25,38,0.12);
+      transition: transform 0.16s ease, background 0.16s ease;
+    }}
+    .construction-photo-close:hover,
+    .construction-photo-arrow:hover {{
+      transform: translateY(-1px);
+      background: #fff;
+    }}
+    .construction-photo-close {{
+      top: 18px;
+      right: 18px;
+      width: 42px;
+      height: 42px;
+      border-radius: 999px;
+      font-size: 28px;
+      line-height: 1;
+    }}
+    .construction-photo-arrow {{
+      top: 50%;
+      width: 52px;
+      height: 68px;
+      border-radius: 18px;
+      font-size: 28px;
+      transform: translateY(-50%);
+    }}
+    .construction-photo-arrow:hover {{
+      transform: translateY(calc(-50% - 1px));
+    }}
+    .construction-photo-arrow-left {{
+      left: 18px;
+    }}
+    .construction-photo-arrow-right {{
+      right: 18px;
     }}
     .content {{
       min-width: 0;
@@ -6356,6 +6523,41 @@ function buildContractStageFields(form, count) {{
 }}
 
 document.addEventListener("click", (event) => {{
+  const carouselOpen = event.target.closest("[data-construction-carousel-open]");
+  if (carouselOpen) {{
+    const modalId = carouselOpen.dataset.constructionCarouselOpen || "";
+    const modal = document.querySelector(`[data-construction-carousel-modal="${{modalId}}"]`);
+    if (modal) {{
+      modal.classList.add("is-open");
+      modal.setAttribute("aria-hidden", "false");
+      document.body.style.overflow = "hidden";
+    }}
+    return;
+  }}
+  const carouselClose = event.target.closest("[data-construction-carousel-close]");
+  if (carouselClose) {{
+    const modal = carouselClose.closest("[data-construction-carousel-modal]");
+    if (modal) {{
+      modal.classList.remove("is-open");
+      modal.setAttribute("aria-hidden", "true");
+      if (!document.querySelector(".construction-photo-modal.is-open")) {{
+        document.body.style.overflow = "";
+      }}
+    }}
+    return;
+  }}
+  const carouselStep = event.target.closest("[data-construction-carousel-prev], [data-construction-carousel-next]");
+  if (carouselStep) {{
+    const modal = carouselStep.closest("[data-construction-carousel-modal]");
+    const slides = modal ? Array.from(modal.querySelectorAll("[data-construction-photo-slide]")) : [];
+    if (slides.length) {{
+      const activeIndex = Math.max(0, slides.findIndex((slide) => slide.classList.contains("is-active")));
+      const direction = carouselStep.hasAttribute("data-construction-carousel-prev") ? -1 : 1;
+      const nextIndex = (activeIndex + direction + slides.length) % slides.length;
+      slides.forEach((slide, index) => slide.classList.toggle("is-active", index === nextIndex));
+    }}
+    return;
+  }}
   const payrollMonthEditToggle = event.target.closest('#payroll-month-edit-toggle');
   if (payrollMonthEditToggle) {{
     event.preventDefault();
@@ -6560,6 +6762,30 @@ document.addEventListener("submit", (event) => {{
   if (event.target.closest(".payables-filter-form")) {{
     window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
   }}
+}});
+
+document.addEventListener("keydown", (event) => {{
+  const modal = document.querySelector(".construction-photo-modal.is-open");
+  if (!modal) {{
+    return;
+  }}
+  if (event.key === "Escape") {{
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+    return;
+  }}
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {{
+    return;
+  }}
+  const slides = Array.from(modal.querySelectorAll("[data-construction-photo-slide]"));
+  if (!slides.length) {{
+    return;
+  }}
+  const activeIndex = Math.max(0, slides.findIndex((slide) => slide.classList.contains("is-active")));
+  const direction = event.key === "ArrowLeft" ? -1 : 1;
+  const nextIndex = (activeIndex + direction + slides.length) % slides.length;
+  slides.forEach((slide, index) => slide.classList.toggle("is-active", index === nextIndex));
 }});
 
 document.addEventListener("click", (event) => {{
@@ -7805,7 +8031,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         <span class="chip">Этапов: {len(payload["stages"])}</span>
         <span class="chip">Оплат: {len(payload["payments"])}</span>
         {f'<a class="secondary-btn" href="/contracts/{contract.id}/timeline?owner={owner_chat_id}">Хронология</a>' if can_view_contract_timeline(current_user) else ''}
-        {f'<a class="secondary-btn" href="/contracts/{contract.id}/construction?owner={owner_chat_id}">Строительный раздел</a>' if can_view_construction_reports(current_user) else ''}
+        {f'<a class="secondary-btn construction-section-link" href="/contracts/{contract.id}/construction?owner={owner_chat_id}">Строительный раздел</a>' if can_view_construction_reports(current_user) else ''}
       </div>
     </section>
     <section class="stats expenses-stats">
