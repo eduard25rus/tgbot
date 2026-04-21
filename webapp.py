@@ -2527,7 +2527,7 @@ def render_construction_report_photos(owner_chat_id: int, contract_id: int, repo
         return files_html
     return f"""
     {files_html}
-    <details class="status-menu construction-photo-add-menu" style="margin-top:8px;">
+    <details class="status-menu construction-photo-add-menu">
       <summary><span class="construction-photo-add-link">Добавить фото</span></summary>
       <div class="status-popover" style="min-width:360px;">
         <form class="form-grid" method="post" action="/contracts/construction-reports/{report_id}/photos/new?owner={owner_chat_id}&contract_id={contract_id}" enctype="multipart/form-data">
@@ -2626,7 +2626,7 @@ def render_contract_construction_page(storage: Storage, owner_chat_id: int, cont
         f"""
         <tr>
           <td class="nowrap">{format_date(report.report_date)}</td>
-          <td>{render_construction_report_editor(owner_chat_id, contract_id, report, current_user)}</td>
+          <td class="construction-work-cell">{render_construction_report_editor(owner_chat_id, contract_id, report, current_user)}</td>
           <td class="nowrap" style="text-align:center;">{report.workers_count}</td>
           <td class="construction-photo-cell">{render_construction_report_photos(owner_chat_id, contract_id, report.id, photo_map.get(report.id, []), current_user)}</td>
           <td>
@@ -2667,6 +2667,13 @@ def render_contract_construction_page(storage: Storage, owner_chat_id: int, cont
         </div>
       </div>
       <table class="table contract-table">
+        <colgroup>
+          <col style="width:12%;">
+          <col style="width:44%;">
+          <col style="width:10%;">
+          <col style="width:17%;">
+          <col style="width:17%;">
+        </colgroup>
         <thead>
           <tr>
             <th class="nowrap">Дата</th>
@@ -4370,16 +4377,21 @@ def layout(
     .construction-photo-cell .status-menu {{
       display: inline-block;
     }}
+    .construction-work-cell {{
+      max-width: 560px;
+    }}
     .construction-photo-add-link {{
       color: var(--muted);
       font-size: 13px;
-      font-weight: 700;
+      font-weight: 400;
       text-decoration: underline;
       text-decoration-style: dashed;
       text-underline-offset: 4px;
     }}
     .construction-photo-add-menu {{
-      display: inline-block;
+      display: block;
+      margin: 10px auto 0;
+      width: max-content;
     }}
     .construction-photo-view-btn {{
       display: inline-flex;
