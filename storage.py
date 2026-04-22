@@ -2686,6 +2686,51 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
+    def update_jurisprudence_object(self, chat_id: int, old_name: str, new_name: str) -> bool:
+        cleaned_old_name = old_name.strip()
+        cleaned_new_name = new_name.strip()
+        if not cleaned_old_name or not cleaned_new_name:
+            return False
+        with self.connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM jurisprudence_objects
+                WHERE owner_chat_id = ? AND name = ?
+                """,
+                (chat_id, cleaned_old_name),
+            ).fetchone()
+            if existing is None:
+                return False
+            duplicate = conn.execute(
+                """
+                SELECT id
+                FROM jurisprudence_objects
+                WHERE owner_chat_id = ? AND name = ? AND id != ?
+                """,
+                (chat_id, cleaned_new_name, int(existing["id"])),
+            ).fetchone()
+            if duplicate is not None:
+                return False
+            conn.execute(
+                """
+                UPDATE jurisprudence_objects
+                SET name = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (cleaned_new_name, int(existing["id"]), chat_id),
+            )
+            conn.execute(
+                """
+                UPDATE legal_letters
+                SET object_label = ?
+                WHERE owner_chat_id = ?
+                  AND (object_label = ? OR object_label = ?)
+                """,
+                (cleaned_new_name, chat_id, cleaned_old_name, f"label:{cleaned_old_name}"),
+            )
+            return True
+
     def add_legal_letter_attachment(self, chat_id: int, letter_id: int, file_name: str, file_path: str) -> int | None:
         with self.connection() as conn:
             letter = conn.execute(

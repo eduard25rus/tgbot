@@ -1831,6 +1831,21 @@ def normalize_legal_letter_object_label(object_label: str) -> str:
     return normalized
 
 
+def short_jurisprudence_object_label(object_label: str, contract=None) -> str:
+    if contract is not None:
+        return (contract.object_name.strip() or contract.title.strip() or object_label.strip() or "Без объекта").strip()
+    normalized = normalize_legal_letter_object_label(object_label)
+    if "«" in normalized and "»" in normalized:
+        quoted = normalized.split("«", 1)[1].split("»", 1)[0].strip()
+        if quoted:
+            return quoted
+    if "," in normalized:
+        first_part = normalized.split(",", 1)[0].strip()
+        if first_part:
+            return first_part
+    return normalized or "Без объекта"
+
+
 def resolve_contract_id_by_object_label(storage: Storage, owner_chat_id: int, object_label: str) -> int | None:
     normalized_label = normalize_legal_letter_object_label(object_label).lower()
     if not normalized_label:
@@ -6065,6 +6080,38 @@ def layout(
       color: var(--ok);
       font-weight: 700;
     }}
+    .jurisprudence-new-badge {{
+      margin-top: 5px;
+      color: var(--ok);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+    }}
+    .jurisprudence-object-edit-list {{
+      display: grid;
+      gap: 8px;
+      margin-bottom: 14px;
+      max-height: 240px;
+      overflow: auto;
+      padding-right: 4px;
+    }}
+    .jurisprudence-object-edit-row {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      margin: 0;
+    }}
+    .jurisprudence-object-edit-row input {{
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 9px 11px;
+      background: rgba(255,255,255,0.72);
+      color: var(--ink);
+      font: inherit;
+    }}
     .auction-added-tooltip {{
       position: relative;
       cursor: default;
@@ -7638,6 +7685,8 @@ def render_jurisprudence_letters_section(
 ) -> str:
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
     letters = storage.list_legal_letters(owner_chat_id, object_filter=object_filter)
+    contracts_by_id = {contract.id: contract for contract in storage.list_contracts(owner_chat_id)}
+    today = datetime.now(VLADIVOSTOK_TZ).date()
     selected_object_label = resolve_jurisprudence_filter_label(storage, owner_chat_id, object_filter)
     attachments = storage.list_legal_letter_attachments(owner_chat_id)
     attachment_map: dict[int, list] = {}
@@ -7647,18 +7696,32 @@ def render_jurisprudence_letters_section(
         f'<option value="{escape(value)}"{" selected" if object_filter == value else ""}>{escape(label)}</option>'
         for value, label in jurisprudence_object_filter_options(storage, owner_chat_id)
     )
+    manual_objects = storage.list_jurisprudence_objects(owner_chat_id)
+    object_editor_rows = "".join(
+        f"""
+        <form class="jurisprudence-object-edit-row" method="post" action="/jurisprudence/objects/update?owner={owner_chat_id}">
+          <input type="hidden" name="old_name" value="{escape(object_name)}">
+          <input type="text" name="new_name" value="{escape(object_name)}" required>
+          <button class="chip" type="submit">Сохранить</button>
+        </form>
+        """
+        for object_name in manual_objects
+    ) or '<div class="contract-table-subtle">Ручных объектов пока нет.</div>'
     letters_rows_html = "".join(
         f"""
         <tr>
           <td>
-            <div class="timeline-title">{escape(letter.object_label or 'Без объекта')}</div>
+            <div class="timeline-title">{escape(short_jurisprudence_object_label(letter.object_label, contracts_by_id.get(letter.contract_id or -1)))}</div>
             {f'<div class="contract-table-subtle">{escape(letter.contract_title)}</div>' if letter.contract_title else '<div class="contract-table-subtle">Вне текущих контрактов</div>'}
           </td>
           <td style="text-align:center;">
             <span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span>
             <div class="contract-table-subtle">{escape(LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта"))}</div>
           </td>
-          <td class="nowrap">{format_date(letter.letter_date)}</td>
+          <td class="nowrap">
+            <div>{format_date(letter.letter_date)}</div>
+            {f'<div class="jurisprudence-new-badge">NEW</div>' if letter.letter_date == today else ''}
+          </td>
           <td>{render_jurisprudence_letter_editor(storage, owner_chat_id, letter, attachment_map.get(letter.id, []), current_user)}</td>
           <td>
             {"".join(
@@ -7728,11 +7791,15 @@ def render_jurisprudence_letters_section(
         """
         add_object_button = f"""
           <details class="status-menu">
-            <summary><span class="secondary-btn">Добавить объект</span></summary>
+            <summary><span class="secondary-btn">Объекты</span></summary>
             <div class="status-popover align-right" style="min-width:420px;">
+              <div class="contract-table-subtle" style="margin-bottom:8px;">Справочник объектов</div>
+              <div class="jurisprudence-object-edit-list">
+                {object_editor_rows}
+              </div>
               <form class="form-grid" method="post" action="/jurisprudence/objects/new?owner={owner_chat_id}">
                 <div class="field" style="grid-column: 1 / -1;">
-                  <label>Название объекта</label>
+                  <label>Добавить объект</label>
                   <input type="text" name="name" placeholder="Например, Школа №28 / старый объект" required>
                 </div>
                 <button class="submit-btn" type="submit">Сохранить объект</button>
@@ -13438,6 +13505,33 @@ def app(environ, start_response):
             return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
         except Exception as exc:
             body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось добавить объект: {exc}")
+            html = layout(
+                "Юриспруденция",
+                body,
+                owners,
+                current_owner,
+                "jurisprudence",
+                current_user,
+                active_subsection="jurisprudence_letters",
+            )
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/jurisprudence/objects/update" and method == "POST":
+        denied = guard("jurisprudence", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        try:
+            old_name = form.get("old_name", "").strip()
+            new_name = form.get("new_name", "").strip()
+            if not old_name or not new_name:
+                raise ValueError("Укажите название объекта")
+            if not storage.update_jurisprudence_object(current_owner, old_name, new_name):
+                raise ValueError("Не удалось обновить объект")
+            return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
+        except Exception as exc:
+            body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось обновить объект: {exc}")
             html = layout(
                 "Юриспруденция",
                 body,
