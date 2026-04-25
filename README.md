@@ -128,6 +128,31 @@ PUBLIC_BASE_URL=https://ваш-публичный-url-railway
 
 Если `PUBLIC_BASE_URL` не задан, CRM сама попробует собрать внешний адрес из запроса Railway.
 
+## Безопасные правки и быстрый откат
+
+Перед изменениями в CRM полезно держать правки маленькими и проверяемыми:
+
+```bash
+git status
+PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile webapp.py storage.py bot.py serve.py scripts/smoke_webapp.py
+python3 scripts/smoke_webapp.py
+```
+
+`scripts/smoke_webapp.py` создает временную SQLite-базу, тестового админа и открывает основные страницы CRM без запуска сервера. Если какая-то страница падает с 500, скрипт завершится с ошибкой до деплоя.
+
+После успешной проверки лучше фиксировать изменения небольшими коммитами:
+
+```bash
+git add webapp.py storage.py README.md scripts/smoke_webapp.py
+git commit -m "Короткое описание изменения"
+git push origin main
+```
+
+Если после деплоя что-то сломалось, быстрые варианты отката:
+
+- в Railway открыть предыдущий успешный deploy и нажать redeploy/rollback;
+- либо сделать обратный коммит локально: `git revert <hash_проблемного_коммита>` и снова `git push origin main`.
+
 ## Хранение данных
 
 - Все данные хранятся локально в SQLite-файле `contracts.db`.
