@@ -65,6 +65,32 @@ def seed_demo_data(db_path: Path) -> str:
         None,
         "Smoke",
     )
+    storage.add_jurisprudence_object(OWNER_CHAT_ID, "Smoke court object", None, "Smoke")
+    court_case_id = storage.add_court_case(
+        OWNER_CHAT_ID,
+        "Smoke court object",
+        "А51-smoke",
+        "Smoke court case",
+        "plaintiff",
+        "Smoke opponent",
+        100_000,
+        today + timedelta(days=10),
+        "active",
+        "Smoke court comment",
+        None,
+        "Smoke",
+    )
+    if court_case_id is not None:
+        storage.add_court_event(
+            OWNER_CHAT_ID,
+            court_case_id,
+            today,
+            "hearing",
+            "Smoke hearing",
+            "Smoke event",
+            None,
+            "Smoke",
+        )
 
     storage.ensure_default_web_admin(OWNER_CHAT_ID)
     admin = next(user for user in storage.list_web_users(OWNER_CHAT_ID) if user["is_super_admin"])
@@ -123,6 +149,7 @@ def main() -> int:
         "/finance-liabilities",
         "/jurisprudence/letters",
         "/jurisprudence/courts",
+        "/jurisprudence/courts/1",
         "/access",
         "/favicon.png",
     ]

@@ -101,6 +101,38 @@ class LegalLetterAttachment:
 
 
 @dataclass
+class CourtCase:
+    id: int
+    owner_chat_id: int
+    object_label: str
+    case_number: str
+    title: str
+    side_status: str
+    opponent: str
+    claim_amount: float
+    hearing_date: Optional[date]
+    status: str
+    comment: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass
+class CourtEvent:
+    id: int
+    court_case_id: int
+    event_date: date
+    event_type: str
+    title: str
+    description: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+
+
+@dataclass
 class ContractMeeting:
     id: int
     contract_id: int
@@ -491,6 +523,37 @@ class Storage:
                     FOREIGN KEY(letter_id) REFERENCES legal_letters(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS court_cases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    object_label TEXT NOT NULL DEFAULT '',
+                    case_number TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    side_status TEXT NOT NULL DEFAULT 'plaintiff',
+                    opponent TEXT NOT NULL DEFAULT '',
+                    claim_amount REAL NOT NULL DEFAULT 0,
+                    hearing_date TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    comment TEXT NOT NULL DEFAULT '',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS court_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    court_case_id INTEGER NOT NULL,
+                    event_date TEXT NOT NULL,
+                    event_type TEXT NOT NULL DEFAULT 'note',
+                    title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(court_case_id) REFERENCES court_cases(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS contract_meetings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     contract_id INTEGER NOT NULL,
@@ -818,6 +881,12 @@ class Storage:
                 row["name"] for row in conn.execute("PRAGMA table_info(legal_letters)").fetchall()
             }
             legal_letter_info = conn.execute("PRAGMA table_info(legal_letters)").fetchall()
+            court_case_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(court_cases)").fetchall()
+            }
+            court_event_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(court_events)").fetchall()
+            }
             meeting_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(contract_meetings)").fetchall()
             }
@@ -1021,6 +1090,36 @@ class Storage:
                 }
             if "source_channel" not in legal_letter_columns:
                 conn.execute("ALTER TABLE legal_letters ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'mail'")
+            court_case_alters = [
+                ("object_label", "TEXT NOT NULL DEFAULT ''"),
+                ("case_number", "TEXT NOT NULL DEFAULT ''"),
+                ("title", "TEXT NOT NULL DEFAULT ''"),
+                ("side_status", "TEXT NOT NULL DEFAULT 'plaintiff'"),
+                ("opponent", "TEXT NOT NULL DEFAULT ''"),
+                ("claim_amount", "REAL NOT NULL DEFAULT 0"),
+                ("hearing_date", "TEXT"),
+                ("status", "TEXT NOT NULL DEFAULT 'active'"),
+                ("comment", "TEXT NOT NULL DEFAULT ''"),
+                ("created_by_user_id", "INTEGER"),
+                ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
+                ("created_at", "TEXT NOT NULL DEFAULT ''"),
+                ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in court_case_alters:
+                if column_name not in court_case_columns:
+                    conn.execute(f"ALTER TABLE court_cases ADD COLUMN {column_name} {column_def}")
+            court_event_alters = [
+                ("event_date", "TEXT NOT NULL DEFAULT ''"),
+                ("event_type", "TEXT NOT NULL DEFAULT 'note'"),
+                ("title", "TEXT NOT NULL DEFAULT ''"),
+                ("description", "TEXT NOT NULL DEFAULT ''"),
+                ("created_by_user_id", "INTEGER"),
+                ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
+                ("created_at", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in court_event_alters:
+                if column_name not in court_event_columns:
+                    conn.execute(f"ALTER TABLE court_events ADD COLUMN {column_name} {column_def}")
             meeting_alters = [
                 ("meeting_date", "TEXT NOT NULL DEFAULT ''"),
                 ("summary", "TEXT NOT NULL DEFAULT ''"),
@@ -2805,6 +2904,211 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def list_court_cases(self, chat_id: int, status_filter: str = "") -> list[CourtCase]:
+        clauses = ["owner_chat_id = ?"]
+        params: list[object] = [chat_id]
+        if status_filter:
+            clauses.append("status = ?")
+            params.append(status_filter)
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM court_cases
+                WHERE {' AND '.join(clauses)}
+                ORDER BY
+                  CASE WHEN hearing_date IS NULL OR hearing_date = '' THEN 1 ELSE 0 END ASC,
+                  hearing_date ASC,
+                  updated_at DESC,
+                  id DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._court_case_from_row(row) for row in rows]
+
+    def get_court_case(self, chat_id: int, court_case_id: int) -> CourtCase | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM court_cases
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (court_case_id, chat_id),
+            ).fetchone()
+        return self._court_case_from_row(row) if row else None
+
+    def add_court_case(
+        self,
+        chat_id: int,
+        object_label: str,
+        case_number: str,
+        title: str,
+        side_status: str,
+        opponent: str,
+        claim_amount: float,
+        hearing_date: date | None,
+        status: str,
+        comment: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int | None:
+        if not title.strip():
+            return None
+        now = datetime.utcnow().isoformat()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO court_cases (
+                    owner_chat_id, object_label, case_number, title, side_status, opponent,
+                    claim_amount, hearing_date, status, comment, created_by_user_id,
+                    created_by_name, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chat_id,
+                    object_label.strip(),
+                    case_number.strip(),
+                    title.strip(),
+                    side_status.strip() or "plaintiff",
+                    opponent.strip(),
+                    claim_amount,
+                    hearing_date.strftime(DATE_FMT) if hearing_date else None,
+                    status.strip() or "active",
+                    comment.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    now,
+                    now,
+                ),
+            )
+            court_case_id = int(cursor.lastrowid)
+            conn.execute(
+                """
+                INSERT INTO court_events (
+                    court_case_id, event_date, event_type, title, description,
+                    created_by_user_id, created_by_name, created_at
+                )
+                VALUES (?, ?, 'case_created', 'Дело добавлено в реестр', ?, ?, ?, ?)
+                """,
+                (
+                    court_case_id,
+                    date.today().strftime(DATE_FMT),
+                    comment.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    now,
+                ),
+            )
+            return court_case_id
+
+    def update_court_case(
+        self,
+        chat_id: int,
+        court_case_id: int,
+        object_label: str,
+        case_number: str,
+        title: str,
+        side_status: str,
+        opponent: str,
+        claim_amount: float,
+        hearing_date: date | None,
+        status: str,
+        comment: str,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE court_cases
+                SET object_label = ?, case_number = ?, title = ?, side_status = ?,
+                    opponent = ?, claim_amount = ?, hearing_date = ?, status = ?,
+                    comment = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (
+                    object_label.strip(),
+                    case_number.strip(),
+                    title.strip(),
+                    side_status.strip() or "plaintiff",
+                    opponent.strip(),
+                    claim_amount,
+                    hearing_date.strftime(DATE_FMT) if hearing_date else None,
+                    status.strip() or "active",
+                    comment.strip(),
+                    datetime.utcnow().isoformat(),
+                    court_case_id,
+                    chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def add_court_event(
+        self,
+        chat_id: int,
+        court_case_id: int,
+        event_date: date,
+        event_type: str,
+        title: str,
+        description: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int | None:
+        with self.connection() as conn:
+            court_case = conn.execute(
+                """
+                SELECT id
+                FROM court_cases
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (court_case_id, chat_id),
+            ).fetchone()
+            if court_case is None:
+                return None
+            now = datetime.utcnow().isoformat()
+            cursor = conn.execute(
+                """
+                INSERT INTO court_events (
+                    court_case_id, event_date, event_type, title, description,
+                    created_by_user_id, created_by_name, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    court_case_id,
+                    event_date.strftime(DATE_FMT),
+                    event_type.strip() or "note",
+                    title.strip(),
+                    description.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE court_cases
+                SET updated_at = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (now, court_case_id, chat_id),
+            )
+            return int(cursor.lastrowid)
+
+    def list_court_events(self, chat_id: int, court_case_id: int) -> list[CourtEvent]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.*
+                FROM court_events e
+                JOIN court_cases c ON c.id = e.court_case_id
+                WHERE e.court_case_id = ? AND c.owner_chat_id = ?
+                ORDER BY e.event_date ASC, e.created_at ASC, e.id ASC
+                """,
+                (court_case_id, chat_id),
+            ).fetchall()
+        return [self._court_event_from_row(row) for row in rows]
+
     def add_contract_meeting(
         self,
         chat_id: int,
@@ -3692,6 +3996,40 @@ class Storage:
             created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],
+        )
+
+    @staticmethod
+    def _court_case_from_row(row: sqlite3.Row) -> CourtCase:
+        return CourtCase(
+            id=int(row["id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            object_label=row["object_label"] or "",
+            case_number=row["case_number"] or "",
+            title=row["title"] or "",
+            side_status=row["side_status"] or "plaintiff",
+            opponent=row["opponent"] or "",
+            claim_amount=float(row["claim_amount"] or 0),
+            hearing_date=date.fromisoformat(row["hearing_date"]) if row["hearing_date"] else None,
+            status=row["status"] or "active",
+            comment=row["comment"] or "",
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else datetime.utcnow(),
+            updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else datetime.utcnow(),
+        )
+
+    @staticmethod
+    def _court_event_from_row(row: sqlite3.Row) -> CourtEvent:
+        return CourtEvent(
+            id=int(row["id"]),
+            court_case_id=int(row["court_case_id"]),
+            event_date=date.fromisoformat(row["event_date"]) if row["event_date"] else date.today(),
+            event_type=row["event_type"] or "note",
+            title=row["title"] or "",
+            description=row["description"] or "",
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else datetime.utcnow(),
         )
 
     @staticmethod

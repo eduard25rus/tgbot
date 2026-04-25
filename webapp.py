@@ -379,6 +379,26 @@ LEGAL_CHANNEL_META = {
     "mail": "Почта",
     "eis": "ЕИС",
 }
+COURT_SIDE_META = {
+    "plaintiff": ("Истец", "chip ok"),
+    "defendant": ("Ответчик", "chip danger"),
+    "third_party": ("Третье лицо", "chip warn"),
+}
+COURT_STATUS_META = {
+    "active": ("В работе", "chip warn"),
+    "waiting": ("Ждем заседание", "chip accent"),
+    "won": ("Выиграли", "chip ok"),
+    "lost": ("Проиграли", "chip danger"),
+    "closed": ("Закрыто", "chip"),
+}
+COURT_EVENT_META = {
+    "note": "Событие",
+    "letter": "Переписка",
+    "hearing": "Заседание",
+    "document": "Документ",
+    "decision": "Решение",
+    "case_created": "Создание",
+}
 LEGAL_UPLOAD_MIME = {
     ".pdf": "application/pdf",
     ".jpg": "image/jpeg",
@@ -7850,17 +7870,256 @@ def render_jurisprudence_letters_section(
     """
 
 
-def render_jurisprudence_courts_section(owner_chat_id: int) -> str:
+def court_side_badge(value: str) -> str:
+    label, css = COURT_SIDE_META.get(value, COURT_SIDE_META["plaintiff"])
+    return f'<span class="{css}">{escape(label)}</span>'
+
+
+def court_status_badge(value: str) -> str:
+    label, css = COURT_STATUS_META.get(value, COURT_STATUS_META["active"])
+    return f'<span class="{css}">{escape(label)}</span>'
+
+
+def court_case_form_fields(storage: Storage, owner_chat_id: int, court_case=None) -> str:
+    current_object_label = normalize_legal_letter_object_label(court_case.object_label) if court_case else ""
+    object_options = "".join(
+        f'<option value="{escape(value)}"{" selected" if court_case and (court_case.object_label == value or current_object_label == normalize_legal_letter_object_label(label)) else ""}>{escape(label)}</option>'
+        for value, label in jurisprudence_object_filter_options(storage, owner_chat_id)
+        if value
+    )
+    side_options = "".join(
+        f'<option value="{escape(value)}"{" selected" if court_case and court_case.side_status == value else ""}>{escape(label)}</option>'
+        for value, (label, _css) in COURT_SIDE_META.items()
+    )
+    status_options = "".join(
+        f'<option value="{escape(value)}"{" selected" if court_case and court_case.status == value else ""}>{escape(label)}</option>'
+        for value, (label, _css) in COURT_STATUS_META.items()
+    )
+    return f"""
+      <div class="field">
+        <label>Объект</label>
+        <select name="object_label" required>
+          <option value="">Выберите объект</option>
+          {object_options}
+        </select>
+      </div>
+      <div class="field">
+        <label>Номер дела</label>
+        <input type="text" name="case_number" value="{escape(court_case.case_number if court_case else '')}" placeholder="А51-..." required>
+      </div>
+      <div class="field">
+        <label>Статус стороны</label>
+        <select name="side_status" required>{side_options}</select>
+      </div>
+      <div class="field">
+        <label>Оппонент</label>
+        <input type="text" name="opponent" value="{escape(court_case.opponent if court_case else '')}" placeholder="Контрагент / заказчик" required>
+      </div>
+      <div class="field" style="grid-column: 1 / -1;">
+        <label>Суть дела</label>
+        <input type="text" name="title" value="{escape(court_case.title if court_case else '')}" placeholder="Например, взыскание задолженности / спор по поставке" required>
+      </div>
+      <div class="field">
+        <label>Сумма иска</label>
+        <input type="text" name="claim_amount" data-money-input="1" value="{escape(format_amount_input(court_case.claim_amount) if court_case else '')}" placeholder="0,00" required>
+      </div>
+      <div class="field">
+        <label>Дата заседания</label>
+        <input type="date" name="hearing_date" value="{court_case.hearing_date.isoformat() if court_case and court_case.hearing_date else ''}">
+      </div>
+      <div class="field">
+        <label>Статус дела</label>
+        <select name="status" required>{status_options}</select>
+      </div>
+      <div class="field" style="grid-column: 1 / -1;">
+        <label>Комментарий</label>
+        <textarea name="comment" placeholder="Коротко: что происходит, риски, что ждем">{escape(court_case.comment if court_case else '')}</textarea>
+      </div>
+    """
+
+
+def render_jurisprudence_courts_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    flash_message: str = "",
+) -> str:
+    flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
+    cases = storage.list_court_cases(owner_chat_id)
+    total_amount = sum(item.claim_amount for item in cases if item.status != "closed")
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td>
+            <div class="timeline-title"><a class="contract-table-link" href="/jurisprudence/courts/{item.id}?owner={owner_chat_id}">{escape(item.title)}</a></div>
+            <div class="contract-table-subtle">{escape(short_jurisprudence_object_label(item.object_label))}</div>
+            <div class="contract-table-subtle">Дело: {escape(item.case_number)}</div>
+          </td>
+          <td style="text-align:center;">
+            {court_side_badge(item.side_status)}
+            <div class="contract-table-subtle">{escape(item.opponent)}</div>
+          </td>
+          <td class="nowrap">{format_amount(item.claim_amount)}</td>
+          <td class="nowrap">{format_date(item.hearing_date) if item.hearing_date else '<span class="contract-table-subtle">Не назначено</span>'}</td>
+          <td style="text-align:center;">{court_status_badge(item.status)}</td>
+          <td>
+            <div class="contract-table-subtle">{escape(item.created_by_name.strip() or 'Автор неизвестен')}</div>
+            <div class="contract-table-subtle">{format_date(item.created_at.astimezone(VLADIVOSTOK_TZ).date() if item.created_at.tzinfo else item.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
+          </td>
+        </tr>
+        """
+        for item in cases
+    ) or '<tr><td colspan="6">Судебных дел пока нет.</td></tr>'
+    add_case_button = ""
+    if can_edit_jurisprudence(current_user):
+        add_case_button = f"""
+          <details class="status-menu">
+            <summary><span class="secondary-btn">Добавить дело</span></summary>
+            <div class="status-popover align-right" style="min-width:680px;">
+              <form class="form-grid" method="post" action="/jurisprudence/courts/new?owner={owner_chat_id}">
+                {court_case_form_fields(storage, owner_chat_id)}
+                <button class="submit-btn" type="submit">Добавить дело</button>
+              </form>
+            </div>
+          </details>
+        """
     return f"""
     <section class="card panel">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Суды</h2>
-          <div class="panel-sub">Каркас раздела уже создан. Следующим шагом сюда перенесем судебные дела, статусы, суммы и ключевые даты.</div>
+          <div class="panel-sub">Ручной реестр судебных дел с заседаниями, суммами и внутренней хронологией.</div>
+        </div>
+        <div class="action-row" style="gap:12px; align-items:center;">
+          <span class="chip">Активная сумма: {format_amount(total_amount)}</span>
+          {add_case_button}
         </div>
       </div>
-      <div class="empty">Раздел судов пока пуст. Переписку уже можно вести в общем юр-реестре.</div>
+      {flash_html}
+      <table class="table contract-table">
+        <thead>
+          <tr>
+            <th>Дело</th>
+            <th class="nowrap">Сторона</th>
+            <th class="nowrap">Сумма иска</th>
+            <th class="nowrap">Заседание</th>
+            <th class="nowrap">Статус</th>
+            <th class="nowrap">Добавил</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+      </table>
     </section>
+    """
+
+
+def render_court_case_detail(
+    storage: Storage,
+    owner_chat_id: int,
+    court_case_id: int,
+    current_user: dict | None,
+    flash_message: str = "",
+) -> str:
+    court_case = storage.get_court_case(owner_chat_id, court_case_id)
+    if court_case is None:
+        return '<section class="card panel"><div class="empty">Судебное дело не найдено.</div></section>'
+    events = storage.list_court_events(owner_chat_id, court_case.id)
+    flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
+    edit_button = ""
+    add_event_block = ""
+    if can_edit_jurisprudence(current_user):
+        edit_button = f"""
+          <details class="status-menu">
+            <summary><span class="secondary-btn">Редактировать дело</span></summary>
+            <div class="status-popover align-right" style="min-width:680px;">
+              <form class="form-grid" method="post" action="/jurisprudence/courts/{court_case.id}/update?owner={owner_chat_id}">
+                {court_case_form_fields(storage, owner_chat_id, court_case)}
+                <button class="submit-btn" type="submit">Сохранить дело</button>
+              </form>
+            </div>
+          </details>
+        """
+        event_options = "".join(
+            f'<option value="{escape(value)}">{escape(label)}</option>'
+            for value, label in COURT_EVENT_META.items()
+            if value != "case_created"
+        )
+        add_event_block = f"""
+        <section class="card panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Добавить событие</h2>
+              <div class="panel-sub">Фиксируем заседания, документы, переписку и любые важные действия по делу.</div>
+            </div>
+          </div>
+          <form class="form-grid" method="post" action="/jurisprudence/courts/{court_case.id}/events/new?owner={owner_chat_id}">
+            <div class="field">
+              <label>Дата события</label>
+              <input type="date" name="event_date" required>
+            </div>
+            <div class="field">
+              <label>Тип события</label>
+              <select name="event_type">{event_options}</select>
+            </div>
+            <div class="field" style="grid-column: 1 / -1;">
+              <label>Заголовок</label>
+              <input type="text" name="title" placeholder="Например, заседание перенесено / направлена претензия" required>
+            </div>
+            <div class="field" style="grid-column: 1 / -1;">
+              <label>Описание</label>
+              <textarea name="description" placeholder="Что произошло, что решили, что нужно сделать дальше"></textarea>
+            </div>
+            <button class="submit-btn" type="submit">Добавить в хронологию</button>
+          </form>
+        </section>
+        """
+    timeline_rows = "".join(
+        f"""
+        <div class="timeline-item">
+          <div class="timeline-date">{format_date(item.event_date)}</div>
+          <div>
+            <div style="margin-bottom:8px;"><span class="chip">{escape(COURT_EVENT_META.get(item.event_type, 'Событие'))}</span></div>
+            <div class="timeline-title">{escape(item.title or 'Событие по делу')}</div>
+            {f'<div class="contract-table-subtle" style="white-space:pre-line;">{escape(item.description)}</div>' if item.description else ''}
+            <div class="contract-table-subtle" style="margin-top:6px;">{escape(item.created_by_name.strip() or 'Автор неизвестен')} · {format_datetime(item.created_at)}</div>
+          </div>
+        </div>
+        """
+        for item in events
+    ) or '<div class="empty">Хронология пока пустая.</div>'
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">{escape(court_case.title)}</h2>
+          <div class="panel-sub">{escape(short_jurisprudence_object_label(court_case.object_label))} · дело {escape(court_case.case_number)}</div>
+        </div>
+        <div class="action-row" style="gap:12px; align-items:center;">
+          <a class="secondary-btn" href="/jurisprudence/courts?owner={owner_chat_id}">← Назад к судам</a>
+          {edit_button}
+        </div>
+      </div>
+      {flash_html}
+      <div class="info-row">
+        {court_side_badge(court_case.side_status)}
+        {court_status_badge(court_case.status)}
+        <span class="chip">Оппонент: {escape(court_case.opponent)}</span>
+        <span class="chip">Сумма: {format_amount(court_case.claim_amount)}</span>
+        <span class="chip">Заседание: {format_date(court_case.hearing_date) if court_case.hearing_date else 'не назначено'}</span>
+      </div>
+      {f'<div class="contract-table-subtle" style="white-space:pre-line; margin-top:16px;">{escape(court_case.comment)}</div>' if court_case.comment else ''}
+    </section>
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Хронология дела</h2>
+          <div class="panel-sub">Все ключевые действия по суду единым списком по датам.</div>
+        </div>
+        <span class="chip">Событий: {len(events)}</span>
+      </div>
+      <div class="timeline">{timeline_rows}</div>
+    </section>
+    {add_event_block}
     """
 
 
@@ -13472,7 +13731,7 @@ def app(environ, start_response):
         denied = guard("jurisprudence", "view")
         if denied:
             return denied
-        body = render_jurisprudence_courts_section(current_owner)
+        body = render_jurisprudence_courts_section(storage, current_owner, current_user)
         html = layout(
             "Юриспруденция",
             body,
@@ -13480,6 +13739,154 @@ def app(environ, start_response):
             current_owner,
             "jurisprudence",
             current_user,
+            active_subsection="jurisprudence_courts",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/jurisprudence/courts/new" and method == "POST":
+        denied = guard("jurisprudence", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        try:
+            object_label = normalize_legal_letter_object_label(resolve_jurisprudence_filter_label(storage, current_owner, form.get("object_label", "")))
+            case_number = form.get("case_number", "").strip()
+            title = form.get("title", "").strip()
+            side_status = form.get("side_status", "").strip()
+            opponent = form.get("opponent", "").strip()
+            claim_amount = parse_amount(form.get("claim_amount", "").strip())
+            hearing_date_raw = form.get("hearing_date", "").strip()
+            hearing_date = parse_date(hearing_date_raw) if hearing_date_raw else None
+            status = form.get("status", "").strip()
+            comment = form.get("comment", "").strip()
+            if not object_label:
+                raise ValueError("Выберите объект")
+            if not case_number:
+                raise ValueError("Укажите номер дела")
+            if not title:
+                raise ValueError("Укажите суть дела")
+            if side_status not in COURT_SIDE_META:
+                raise ValueError("Выберите статус стороны")
+            if status not in COURT_STATUS_META:
+                raise ValueError("Выберите статус дела")
+            created = storage.add_court_case(
+                current_owner,
+                object_label,
+                case_number,
+                title,
+                side_status,
+                opponent,
+                claim_amount,
+                hearing_date,
+                status,
+                comment,
+                current_user.get("id") if current_user else None,
+                current_user.get("full_name", "").strip() if current_user else "",
+            )
+            if created is None:
+                raise ValueError("Не удалось сохранить дело")
+            return redirect(start_response, f"/jurisprudence/courts/{created}?owner={current_owner}")
+        except Exception as exc:
+            body = render_jurisprudence_courts_section(storage, current_owner, current_user, f"Не удалось добавить дело: {exc}")
+            html = layout("Юриспруденция", body, owners, current_owner, "jurisprudence", current_user, active_subsection="jurisprudence_courts")
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/jurisprudence/courts/") and path.endswith("/update") and method == "POST":
+        denied = guard("jurisprudence", "edit")
+        if denied:
+            return denied
+        try:
+            court_case_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            court_case_id = -1
+        form = read_post_data(environ)
+        try:
+            object_label = normalize_legal_letter_object_label(resolve_jurisprudence_filter_label(storage, current_owner, form.get("object_label", "")))
+            case_number = form.get("case_number", "").strip()
+            title = form.get("title", "").strip()
+            side_status = form.get("side_status", "").strip()
+            opponent = form.get("opponent", "").strip()
+            claim_amount = parse_amount(form.get("claim_amount", "").strip())
+            hearing_date_raw = form.get("hearing_date", "").strip()
+            hearing_date = parse_date(hearing_date_raw) if hearing_date_raw else None
+            status = form.get("status", "").strip()
+            comment = form.get("comment", "").strip()
+            if not object_label:
+                raise ValueError("Выберите объект")
+            if not case_number:
+                raise ValueError("Укажите номер дела")
+            if not title:
+                raise ValueError("Укажите суть дела")
+            if side_status not in COURT_SIDE_META:
+                raise ValueError("Выберите статус стороны")
+            if status not in COURT_STATUS_META:
+                raise ValueError("Выберите статус дела")
+            if not storage.update_court_case(current_owner, court_case_id, object_label, case_number, title, side_status, opponent, claim_amount, hearing_date, status, comment):
+                raise ValueError("Дело не найдено")
+            return redirect(start_response, f"/jurisprudence/courts/{court_case_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_court_case_detail(storage, current_owner, court_case_id, current_user, f"Не удалось обновить дело: {exc}")
+            html = layout("Судебное дело", body, owners, current_owner, "jurisprudence", current_user, active_subsection="jurisprudence_courts")
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/jurisprudence/courts/") and path.endswith("/events/new") and method == "POST":
+        denied = guard("jurisprudence", "edit")
+        if denied:
+            return denied
+        try:
+            court_case_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            court_case_id = -1
+        form = read_post_data(environ)
+        try:
+            event_date = parse_date(form.get("event_date", "").strip())
+            event_type = form.get("event_type", "").strip() or "note"
+            title = form.get("title", "").strip()
+            description = form.get("description", "").strip()
+            if event_type not in COURT_EVENT_META:
+                raise ValueError("Выберите тип события")
+            if not title:
+                raise ValueError("Укажите заголовок события")
+            created = storage.add_court_event(
+                current_owner,
+                court_case_id,
+                event_date,
+                event_type,
+                title,
+                description,
+                current_user.get("id") if current_user else None,
+                current_user.get("full_name", "").strip() if current_user else "",
+            )
+            if created is None:
+                raise ValueError("Дело не найдено")
+            return redirect(start_response, f"/jurisprudence/courts/{court_case_id}?owner={current_owner}")
+        except Exception as exc:
+            body = render_court_case_detail(storage, current_owner, court_case_id, current_user, f"Не удалось добавить событие: {exc}")
+            html = layout("Судебное дело", body, owners, current_owner, "jurisprudence", current_user, active_subsection="jurisprudence_courts")
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/jurisprudence/courts/") and method == "GET":
+        denied = guard("jurisprudence", "view")
+        if denied:
+            return denied
+        try:
+            court_case_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            court_case_id = -1
+        body = render_court_case_detail(storage, current_owner, court_case_id, current_user)
+        html = layout(
+            "Судебное дело",
+            body,
+            owners,
+            current_owner,
+            "jurisprudence",
+            current_user,
+            hero_title_override="Судебное дело",
+            hero_copy_override="Карточка судебного дела с параметрами, заседаниями и ручной хронологией.",
             active_subsection="jurisprudence_courts",
         )
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
