@@ -6137,17 +6137,25 @@ def layout(
       color: var(--ink);
       font: inherit;
     }}
-    .directory-inline-form {{
-      grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr) auto auto;
-      gap: 10px;
-      align-items: end;
-      margin: 0;
+    .directory-edit-menu {{
+      display: inline-block;
+      max-width: 100%;
     }}
-    .directory-inline-form .field {{
-      margin: 0;
+    .directory-edit-menu summary {{
+      list-style: none;
+      cursor: pointer;
     }}
-    .directory-inline-form input:disabled {{
-      opacity: 0.72;
+    .directory-edit-menu summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .directory-edit-menu .contract-table-link {{
+      font-weight: 800;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 4px;
+    }}
+    .directory-edit-form {{
+      min-width: min(520px, 84vw);
+      margin: 0;
     }}
     .auction-added-tooltip {{
       position: relative;
@@ -8137,11 +8145,24 @@ def render_directories_section(
         f"""
         <tr>
           <td>
-            <form class="jurisprudence-object-edit-row" method="post" action="/directories/objects/update?owner={owner_chat_id}">
-              <input type="hidden" name="old_name" value="{escape(object_name)}">
-              <input type="text" name="new_name" value="{escape(object_name)}" {"required" if can_edit else "disabled"}>
-              {f'<button class="chip" type="submit">Сохранить</button>' if can_edit else ''}
-            </form>
+            <div class="timeline-title">
+              {f'''
+              <details class="status-menu directory-edit-menu">
+                <summary><span class="contract-table-link">{escape(object_name)}</span></summary>
+                <div class="status-popover" style="min-width:420px;">
+                  <form class="form-grid directory-edit-form" method="post" action="/directories/objects/update?owner={owner_chat_id}">
+                    <input type="hidden" name="old_name" value="{escape(object_name)}">
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Название объекта</label>
+                      <input type="text" name="new_name" value="{escape(object_name)}" required>
+                    </div>
+                    <button class="submit-btn" type="submit">Сохранить объект</button>
+                  </form>
+                </div>
+              </details>
+              ''' if can_edit else escape(object_name)}
+            </div>
+            <div class="contract-table-subtle">Ручной объект справочника</div>
           </td>
           <td><span class="chip">Ручной объект</span></td>
           <td><div class="contract-table-subtle">Используется в переписке, судах и будущих юридических разделах</div></td>
@@ -8174,20 +8195,30 @@ def render_directories_section(
         f"""
         <tr>
           <td>
-            <form class="form-grid directory-inline-form" method="post" action="/directories/employees/{employee.id}/update?owner={owner_chat_id}">
-              <div class="field">
-                <label>ФИО</label>
-                <input type="text" name="full_name" value="{escape(employee.full_name)}" {"required" if can_edit else "disabled"}>
-              </div>
-              <div class="field">
-                <label>Должность</label>
-                <input type="text" name="role_title" value="{escape(employee.role_title)}" {"required" if can_edit else "disabled"}>
-              </div>
-              <label class="advance-toggle" style="align-self:end;">
-                <input class="toggle-checkbox" type="checkbox" name="is_active" value="1" {"checked" if employee.is_active else ""} {"disabled" if not can_edit else ""}> Активен
-              </label>
-              {f'<button class="chip" type="submit">Сохранить</button>' if can_edit else ''}
-            </form>
+            <div class="timeline-title">
+              {f'''
+              <details class="status-menu directory-edit-menu">
+                <summary><span class="contract-table-link">{escape(employee.full_name)}</span></summary>
+                <div class="status-popover" style="min-width:520px;">
+                  <form class="form-grid directory-edit-form" method="post" action="/directories/employees/{employee.id}/update?owner={owner_chat_id}">
+                    <div class="field">
+                      <label>ФИО</label>
+                      <input type="text" name="full_name" value="{escape(employee.full_name)}" required>
+                    </div>
+                    <div class="field">
+                      <label>Должность</label>
+                      <input type="text" name="role_title" value="{escape(employee.role_title)}" required>
+                    </div>
+                    <label class="advance-toggle" style="align-self:end;">
+                      <input class="toggle-checkbox" type="checkbox" name="is_active" value="1" {"checked" if employee.is_active else ""}> Активен
+                    </label>
+                    <button class="submit-btn" type="submit">Сохранить сотрудника</button>
+                  </form>
+                </div>
+              </details>
+              ''' if can_edit else escape(employee.full_name)}
+            </div>
+            <div class="contract-table-subtle">{escape(employee.role_title or "Без должности")}</div>
           </td>
           <td><span class="chip{" ok" if employee.is_active else ""}">{"Активен" if employee.is_active else "Неактивен"}</span></td>
         </tr>
