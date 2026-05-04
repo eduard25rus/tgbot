@@ -3781,6 +3781,7 @@ SECTIONS = [
     ("auctions", "Аукционы", "/auctions"),
     ("events", "Календарь событий", "/events"),
     ("tasks", "Задачи", "/tasks"),
+    ("directories", "Справочники", "/directories"),
     ("payables", "Кредиторка", "/payables"),
     ("expenses", "Расходы компании", "/expenses"),
     ("payroll", "Зарплата", "/payroll"),
@@ -3822,6 +3823,10 @@ SECTION_HERO = {
     "tasks": (
         "Задачи",
         "Внутренний задачник компании: автоматические задачи по ролям и ручные поручения с дедлайнами, ответственными и отметкой выполнения.",
+    ),
+    "directories": (
+        "Справочники",
+        "Единая база объектов и сотрудников, откуда CRM подтягивает данные в суды, переписки, зарплату и будущие разделы.",
     ),
     "payables": (
         "Кредиторка",
@@ -6132,6 +6137,18 @@ def layout(
       color: var(--ink);
       font: inherit;
     }}
+    .directory-inline-form {{
+      grid-template-columns: minmax(220px, 1.2fr) minmax(180px, 1fr) auto auto;
+      gap: 10px;
+      align-items: end;
+      margin: 0;
+    }}
+    .directory-inline-form .field {{
+      margin: 0;
+    }}
+    .directory-inline-form input:disabled {{
+      opacity: 0.72;
+    }}
     .auction-added-tooltip {{
       position: relative;
       cursor: default;
@@ -7716,17 +7733,6 @@ def render_jurisprudence_letters_section(
         f'<option value="{escape(value)}"{" selected" if object_filter == value else ""}>{escape(label)}</option>'
         for value, label in jurisprudence_object_filter_options(storage, owner_chat_id)
     )
-    manual_objects = storage.list_jurisprudence_objects(owner_chat_id)
-    object_editor_rows = "".join(
-        f"""
-        <form class="jurisprudence-object-edit-row" method="post" action="/jurisprudence/objects/update?owner={owner_chat_id}">
-          <input type="hidden" name="old_name" value="{escape(object_name)}">
-          <input type="text" name="new_name" value="{escape(object_name)}" required>
-          <button class="chip" type="submit">Сохранить</button>
-        </form>
-        """
-        for object_name in manual_objects
-    ) or '<div class="contract-table-subtle">Ручных объектов пока нет.</div>'
     letters_rows_html = "".join(
         f"""
         <tr>
@@ -7766,7 +7772,6 @@ def render_jurisprudence_letters_section(
         for letter in letters
     ) or '<tr><td colspan="6">Писем пока нет.</td></tr>'
     add_letter_button = ""
-    add_object_button = ""
     if can_edit_jurisprudence(current_user):
         add_letter_button = f"""
           <details class="status-menu">
@@ -7809,24 +7814,6 @@ def render_jurisprudence_letters_section(
             </div>
           </details>
         """
-        add_object_button = f"""
-          <details class="status-menu">
-            <summary><span class="secondary-btn">Объекты</span></summary>
-            <div class="status-popover align-right" style="min-width:420px;">
-              <div class="contract-table-subtle" style="margin-bottom:8px;">Справочник объектов</div>
-              <div class="jurisprudence-object-edit-list">
-                {object_editor_rows}
-              </div>
-              <form class="form-grid" method="post" action="/jurisprudence/objects/new?owner={owner_chat_id}">
-                <div class="field" style="grid-column: 1 / -1;">
-                  <label>Добавить объект</label>
-                  <input type="text" name="name" placeholder="Например, Школа №28 / старый объект" required>
-                </div>
-                <button class="submit-btn" type="submit">Сохранить объект</button>
-              </form>
-            </div>
-          </details>
-        """
     return f"""
     <section class="card panel">
       <div class="panel-head">
@@ -7835,7 +7822,6 @@ def render_jurisprudence_letters_section(
           <div class="panel-sub">Все юридические письма компании в одном месте: и по текущим контрактам, и по прошлым объектам.</div>
         </div>
         <div class="action-row" style="gap:12px; align-items:center;">
-          {add_object_button}
           {add_letter_button}
         </div>
       </div>
@@ -8120,6 +8106,153 @@ def render_court_case_detail(
       <div class="timeline">{timeline_rows}</div>
     </section>
     {add_event_block}
+    """
+
+
+def render_directories_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    flash_message: str = "",
+    success: bool = False,
+) -> str:
+    can_edit = has_permission(current_user, "directories", "edit")
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    contracts = storage.list_contracts(owner_chat_id)
+    contract_object_rows = "".join(
+        f"""
+        <tr>
+          <td>
+            <div class="timeline-title">{escape(contract.object_name.strip() or contract.title)}</div>
+            {f'<div class="contract-table-subtle">{escape(contract.object_address)}</div>' if contract.object_address else ''}
+          </td>
+          <td><span class="chip">Контракт</span></td>
+          <td><div class="contract-table-subtle">Редактируется в карточке контракта</div></td>
+        </tr>
+        """
+        for contract in contracts
+    )
+    manual_objects = storage.list_jurisprudence_objects(owner_chat_id)
+    manual_object_rows = "".join(
+        f"""
+        <tr>
+          <td>
+            <form class="jurisprudence-object-edit-row" method="post" action="/directories/objects/update?owner={owner_chat_id}">
+              <input type="hidden" name="old_name" value="{escape(object_name)}">
+              <input type="text" name="new_name" value="{escape(object_name)}" {"required" if can_edit else "disabled"}>
+              {f'<button class="chip" type="submit">Сохранить</button>' if can_edit else ''}
+            </form>
+          </td>
+          <td><span class="chip">Ручной объект</span></td>
+          <td><div class="contract-table-subtle">Используется в переписке, судах и будущих юридических разделах</div></td>
+        </tr>
+        """
+        for object_name in manual_objects
+    )
+    object_rows = contract_object_rows + manual_object_rows
+    if not object_rows:
+        object_rows = '<tr><td colspan="3">Объекты пока не заведены.</td></tr>'
+    add_object_block = ""
+    if can_edit:
+        add_object_block = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Добавить объект</span></summary>
+          <div class="status-popover align-right" style="min-width:420px;">
+            <form class="form-grid" method="post" action="/directories/objects/new?owner={owner_chat_id}">
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Название объекта</label>
+                <input type="text" name="name" placeholder="Например, Детский сад №28 / старый объект" required>
+              </div>
+              <button class="submit-btn" type="submit">Сохранить объект</button>
+            </form>
+          </div>
+        </details>
+        """
+
+    employees = storage.list_payroll_employees(owner_chat_id)
+    employee_rows = "".join(
+        f"""
+        <tr>
+          <td>
+            <form class="form-grid directory-inline-form" method="post" action="/directories/employees/{employee.id}/update?owner={owner_chat_id}">
+              <div class="field">
+                <label>ФИО</label>
+                <input type="text" name="full_name" value="{escape(employee.full_name)}" {"required" if can_edit else "disabled"}>
+              </div>
+              <div class="field">
+                <label>Должность</label>
+                <input type="text" name="role_title" value="{escape(employee.role_title)}" {"required" if can_edit else "disabled"}>
+              </div>
+              <label class="advance-toggle" style="align-self:end;">
+                <input class="toggle-checkbox" type="checkbox" name="is_active" value="1" {"checked" if employee.is_active else ""} {"disabled" if not can_edit else ""}> Активен
+              </label>
+              {f'<button class="chip" type="submit">Сохранить</button>' if can_edit else ''}
+            </form>
+          </td>
+          <td><span class="chip{" ok" if employee.is_active else ""}">{"Активен" if employee.is_active else "Неактивен"}</span></td>
+        </tr>
+        """
+        for employee in employees
+    ) or '<tr><td colspan="2">Сотрудников пока нет.</td></tr>'
+    add_employee_block = ""
+    if can_edit:
+        add_employee_block = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Добавить сотрудника</span></summary>
+          <div class="status-popover align-right" style="min-width:520px;">
+            <form class="form-grid" method="post" action="/directories/employees/new?owner={owner_chat_id}">
+              <div class="field">
+                <label>ФИО</label>
+                <input type="text" name="full_name" placeholder="Имя сотрудника" required>
+              </div>
+              <div class="field">
+                <label>Должность / роль</label>
+                <input type="text" name="role_title" placeholder="Например, юрист / прораб / снабженец" required>
+              </div>
+              <button class="submit-btn" type="submit">Добавить сотрудника</button>
+            </form>
+          </div>
+        </details>
+        """
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Справочник объектов</h2>
+          <div class="panel-sub">Единое место, где заводим объекты для переписки, судов и будущих связей по CRM.</div>
+        </div>
+        {add_object_block}
+      </div>
+      {flash_html}
+      <table class="table contract-table">
+        <thead>
+          <tr>
+            <th>Объект</th>
+            <th class="nowrap">Тип</th>
+            <th>Где редактировать</th>
+          </tr>
+        </thead>
+        <tbody>{object_rows}</tbody>
+      </table>
+    </section>
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Справочник сотрудников</h2>
+          <div class="panel-sub">База людей для зарплаты и будущих выборов ответственных. Пока используем тот же список, что и в модуле зарплаты.</div>
+        </div>
+        {add_employee_block}
+      </div>
+      <table class="table contract-table">
+        <thead>
+          <tr>
+            <th>Сотрудник</th>
+            <th class="nowrap">Статус</th>
+          </tr>
+        </thead>
+        <tbody>{employee_rows}</tbody>
+      </table>
+    </section>
     """
 
 
@@ -13696,6 +13829,104 @@ def app(environ, start_response):
         storage.update_finance_entry_status(current_owner, entry_id, status)
         target_tab = "archive" if status == "closed" else "active"
         return redirect(start_response, f"/finance-liabilities{finance_query_suffix(current_owner, target_tab)}")
+
+    if path == "/directories" and method == "GET":
+        denied = guard("directories", "view")
+        if denied:
+            return denied
+        body = render_directories_section(storage, current_owner, current_user)
+        html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/directories/objects/new" and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        try:
+            name = form.get("name", "").strip()
+            if not name:
+                raise ValueError("Укажите название объекта")
+            created = storage.add_jurisprudence_object(
+                current_owner,
+                name,
+                current_user.get("id") if current_user else None,
+                current_user.get("full_name", "").strip() if current_user else "",
+            )
+            if created is None:
+                raise ValueError("Не удалось сохранить объект")
+            return redirect(start_response, f"/directories?owner={current_owner}")
+        except Exception as exc:
+            body = render_directories_section(storage, current_owner, current_user, f"Не удалось добавить объект: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/directories/objects/update" and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        try:
+            old_name = form.get("old_name", "").strip()
+            new_name = form.get("new_name", "").strip()
+            if not old_name or not new_name:
+                raise ValueError("Укажите название объекта")
+            if not storage.update_jurisprudence_object(current_owner, old_name, new_name):
+                raise ValueError("Объект не найден или уже существует")
+            return redirect(start_response, f"/directories?owner={current_owner}")
+        except Exception as exc:
+            body = render_directories_section(storage, current_owner, current_user, f"Не удалось обновить объект: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/directories/employees/new" and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        try:
+            full_name = form.get("full_name", "").strip()
+            role_title = form.get("role_title", "").strip()
+            if not full_name:
+                raise ValueError("Укажите ФИО сотрудника")
+            if not role_title:
+                raise ValueError("Укажите должность")
+            storage.add_payroll_employee(current_owner, full_name, role_title)
+            return redirect(start_response, f"/directories?owner={current_owner}")
+        except Exception as exc:
+            body = render_directories_section(storage, current_owner, current_user, f"Не удалось добавить сотрудника: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/directories/employees/") and path.endswith("/update") and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        try:
+            employee_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            employee_id = -1
+        form = read_post_data(environ)
+        try:
+            full_name = form.get("full_name", "").strip()
+            role_title = form.get("role_title", "").strip()
+            is_active = form.get("is_active") == "1"
+            if not full_name:
+                raise ValueError("Укажите ФИО сотрудника")
+            if not role_title:
+                raise ValueError("Укажите должность")
+            if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, is_active):
+                raise ValueError("Сотрудник не найден")
+            return redirect(start_response, f"/directories?owner={current_owner}")
+        except Exception as exc:
+            body = render_directories_section(storage, current_owner, current_user, f"Не удалось обновить сотрудника: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
 
     if path == "/jurisprudence":
         denied = guard("jurisprudence", "view")

@@ -9,7 +9,7 @@ from typing import Optional
 
 
 DATE_FMT = "%Y-%m-%d"
-WEB_SECTION_IDS = ("contracts", "auctions", "events", "tasks", "payables", "expenses", "payroll", "finance", "jurisprudence", "access")
+WEB_SECTION_IDS = ("contracts", "auctions", "events", "tasks", "directories", "payables", "expenses", "payroll", "finance", "jurisprudence", "access")
 
 
 @dataclass
@@ -4216,6 +4216,21 @@ class Storage:
     def add_payroll_employee(self, owner_chat_id: int, full_name: str, role_title: str) -> int:
         with self.connection() as conn:
             return self._ensure_payroll_employee(conn, owner_chat_id, full_name.strip(), role_title.strip())
+
+    def update_payroll_employee(self, owner_chat_id: int, employee_id: int, full_name: str, role_title: str, is_active: bool) -> bool:
+        cleaned_name = full_name.strip()
+        if not cleaned_name:
+            return False
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE payroll_employees
+                SET full_name = ?, role_title = ?, is_active = ?
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (cleaned_name, role_title.strip(), 1 if is_active else 0, employee_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
 
     def clone_payroll_month(self, owner_chat_id: int, source_month: date, target_month: date) -> bool:
         if source_month == target_month:

@@ -139,6 +139,7 @@ def main() -> int:
         "/auctions",
         "/events",
         "/tasks",
+        "/directories",
         "/payables",
         "/expenses",
         "/payroll",
