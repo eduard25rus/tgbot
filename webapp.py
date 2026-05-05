@@ -11821,6 +11821,25 @@ def render_cashoperations_body(
                 return comment.strip()
             comment = cleaned
 
+    income_source_labels = {
+        "bank": "Расчетный счет",
+        "owner": "Эдуард / владелец",
+        "partner": "Денис / партнер",
+        "loan": "Займ",
+        "return": "Возврат",
+        "other": "Другое",
+    }
+    income_source_codes = {label: code for code, label in income_source_labels.items()}
+
+    def income_source_code(entry) -> str:
+        title = entry.title or ""
+        if title.startswith("Пополнение кассы:"):
+            return income_source_codes.get(title.split(":", 1)[1].strip(), "other")
+        source_match = re.search(r"\[Источник:\s*([^\]]+)\]", entry.comment or "")
+        if source_match:
+            return income_source_codes.get(source_match.group(1).strip(), "other")
+        return "bank"
+
     def operation_card(kind: str, entry) -> str:
         title = (entry.title or "Пополнение кассы") if kind == "income" else entry.title
         category = "Вывод в кассу" if kind == "income" else expense_category_label(entry.category_code, category_labels)
@@ -11839,6 +11858,25 @@ def render_cashoperations_body(
             if kind != "income" and getattr(entry, "receipt_file_path", "")
             else ""
         )
+        if kind == "income" and can_edit:
+            return f"""
+            <button class="cash-mobile-op editable" type="button"
+              data-edit-income="1"
+              data-income-id="{entry.id}"
+              data-income-amount="{escape(str(entry.amount))}"
+              data-income-source="{escape(income_source_code(entry))}"
+              data-income-date="{entry.expense_date.isoformat()}"
+              data-income-comment="{escape(editable_comment(entry))}">
+              <span class="cash-mobile-op-main">
+                <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
+                <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
+                <span class="cash-mobile-op-comment">{escape(comment)}</span>
+              </span>
+              <span class="cash-mobile-op-side">
+                <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
+              </span>
+            </button>
+            """
         if kind == "expense" and can_edit:
             return f"""
             <button class="cash-mobile-op editable" type="button"
@@ -11956,15 +11994,16 @@ def render_cashoperations_body(
     if can_edit:
         income_screen = f"""
         <section class="cash-mobile-panel">
-          <div class="cash-mobile-section-head"><h2>Добавить поступление</h2></div>
+          <div class="cash-mobile-section-head"><h2 data-cash-income-title>Добавить поступление</h2></div>
           <form class="cash-mobile-form" method="post" action="/cashoperations/income">
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
-            <input type="hidden" name="request_key" value="{secrets.token_urlsafe(18)}">
+            <input type="hidden" name="income_id" value="" data-cash-income-id>
+            <input type="hidden" name="request_key" value="{secrets.token_urlsafe(18)}" data-cash-income-request-key>
             <label>Сумма
               <input type="text" name="amount" inputmode="decimal" placeholder="0" required>
             </label>
             <label>Источник
-              <select name="source">
+              <select name="source" data-cash-income-source>
                 <option value="bank">Расчетный счет</option>
                 <option value="owner">Эдуард / владелец</option>
                 <option value="partner">Денис / партнер</option>
@@ -11979,7 +12018,8 @@ def render_cashoperations_body(
             <label>Комментарий
               <textarea name="comment" placeholder="Откуда поступили деньги"></textarea>
             </label>
-            <button type="submit">Сохранить поступление</button>
+            <button type="submit" data-cash-income-submit>Сохранить поступление</button>
+            <button class="danger" type="submit" formaction="/cashoperations/income/delete" data-cash-income-delete hidden>Удалить поступление</button>
           </form>
         </section>
         """
@@ -12212,6 +12252,7 @@ def render_cashoperations_body(
       }}
       .cash-mobile-op-title {{
         margin-top: 4px;
+        font-size: 12px;
         line-height: 1.3;
       }}
       .cash-mobile-op-title strong {{
@@ -12367,7 +12408,7 @@ def render_cashoperations_body(
         </section>
         <div class="cash-mobile-actions">
           <button class="cash-mobile-action expense" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
-          <button class="cash-mobile-action income" type="button" data-cash-screen="income">Добавить поступление</button>
+          <button class="cash-mobile-action income" type="button" data-cash-screen="income" data-cash-new-income="1">Добавить поступление</button>
           <button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>
           <button class="cash-mobile-action" type="button" data-cash-screen="reconcile">Сверить кассу</button>
         </div>
@@ -12415,6 +12456,12 @@ def render_cashoperations_body(
         const expenseDelete = document.querySelector("[data-cash-expense-delete]");
         const expenseIdInput = document.querySelector("[data-cash-expense-id]");
         const requestKeyInput = document.querySelector("[data-cash-request-key]");
+        const incomeHeading = document.querySelector("[data-cash-income-title]");
+        const incomeSubmit = document.querySelector("[data-cash-income-submit]");
+        const incomeDelete = document.querySelector("[data-cash-income-delete]");
+        const incomeIdInput = document.querySelector("[data-cash-income-id]");
+        const incomeRequestKeyInput = document.querySelector("[data-cash-income-request-key]");
+        const incomeSourceSelect = document.querySelector("[data-cash-income-source]");
         const flash = document.querySelector("[data-cash-flash]");
         const editbar = document.querySelector("[data-cash-editbar]");
         const editBack = document.querySelector("[data-cash-edit-back]");
@@ -12457,6 +12504,7 @@ def render_cashoperations_body(
         function canRefresh() {{
           if (isSubmitting) return false;
           if (expenseIdInput && expenseIdInput.value) return false;
+          if (incomeIdInput && incomeIdInput.value) return false;
           if (activeScreenName() === "income") return false;
           return !(activeScreenName() === "expense" && formDirty);
         }}
@@ -12518,6 +12566,18 @@ def render_cashoperations_body(
           formDirty = false;
           syncAdminProject();
         }}
+        function resetIncomeForm() {{
+          if (!incomeForm) return;
+          incomeForm.reset();
+          if (incomeIdInput) incomeIdInput.value = "";
+          if (incomeRequestKeyInput) incomeRequestKeyInput.value = randomKey();
+          if (incomeForm.elements.expense_date) incomeForm.elements.expense_date.value = "{today.isoformat()}";
+          if (incomeHeading) incomeHeading.textContent = "Добавить поступление";
+          if (incomeSubmit) incomeSubmit.textContent = "Сохранить поступление";
+          if (incomeDelete) incomeDelete.hidden = true;
+          showEditbar(false);
+          formDirty = false;
+        }}
         function editExpense(button) {{
           if (!expenseForm) return;
           editBackScreen = activeScreenName();
@@ -12546,20 +12606,47 @@ def render_cashoperations_body(
           syncAdminProject();
           show("expense");
         }}
+        function editIncome(button) {{
+          if (!incomeForm) return;
+          editBackScreen = activeScreenName();
+          clearNotice();
+          if (incomeIdInput) incomeIdInput.value = button.dataset.incomeId || "";
+          if (incomeForm.elements.amount) incomeForm.elements.amount.value = button.dataset.incomeAmount || "";
+          if (incomeSourceSelect) incomeSourceSelect.value = button.dataset.incomeSource || "other";
+          if (incomeForm.elements.expense_date) incomeForm.elements.expense_date.value = button.dataset.incomeDate || "{today.isoformat()}";
+          if (incomeForm.elements.comment) incomeForm.elements.comment.value = button.dataset.incomeComment || "";
+          if (incomeHeading) incomeHeading.textContent = "Редактировать поступление";
+          if (incomeSubmit) incomeSubmit.textContent = "Сохранить изменения";
+          if (incomeDelete) incomeDelete.hidden = false;
+          showEditbar(true);
+          formDirty = false;
+          show("income");
+        }}
         document.querySelectorAll("[data-cash-screen]").forEach((button) => {{
           button.addEventListener("click", () => {{
             clearNotice();
-            if (button.dataset.cashNewExpense) resetExpenseForm();
-            if (!button.dataset.cashNewExpense && refreshIfStale(button.dataset.cashScreen, 5000)) return;
-            if (button.dataset.cashScreen !== "expense") showEditbar(false);
+            if (button.dataset.cashNewExpense) {{
+              resetIncomeForm();
+              resetExpenseForm();
+            }}
+            if (button.dataset.cashNewIncome) {{
+              resetExpenseForm();
+              resetIncomeForm();
+            }}
+            if (!button.dataset.cashNewExpense && !button.dataset.cashNewIncome && refreshIfStale(button.dataset.cashScreen, 5000)) return;
+            if (button.dataset.cashScreen !== "expense" && button.dataset.cashScreen !== "income") showEditbar(false);
             show(button.dataset.cashScreen);
           }});
         }});
         document.querySelectorAll("[data-edit-expense]").forEach((button) => {{
           button.addEventListener("click", () => editExpense(button));
         }});
+        document.querySelectorAll("[data-edit-income]").forEach((button) => {{
+          button.addEventListener("click", () => editIncome(button));
+        }});
         editBack && editBack.addEventListener("click", () => {{
           resetExpenseForm();
+          resetIncomeForm();
           show(editBackScreen || "history");
         }});
         receiptInput && receiptInput.addEventListener("change", () => {{
@@ -12607,12 +12694,23 @@ def render_cashoperations_body(
           }});
           if (submitter) submitter.textContent = submitter.dataset.cashExpenseDelete ? "Удаляем..." : "Сохраняем...";
         }});
-        incomeForm && incomeForm.addEventListener("submit", () => {{
+        incomeForm && incomeForm.addEventListener("input", () => {{
+          formDirty = true;
+        }});
+        incomeForm && incomeForm.addEventListener("change", () => {{
+          formDirty = true;
+        }});
+        incomeForm && incomeForm.addEventListener("submit", (event) => {{
+          const submitter = event.submitter;
+          if (submitter && submitter.dataset.cashIncomeDelete && !confirm("Удалить поступление?")) {{
+            event.preventDefault();
+            return;
+          }}
           isSubmitting = true;
           incomeForm.querySelectorAll("button").forEach((button) => {{
             button.disabled = true;
-            button.textContent = "Сохраняем...";
           }});
+          if (submitter) submitter.textContent = submitter.dataset.cashIncomeDelete ? "Удаляем..." : "Сохраняем...";
         }});
         syncAdminProject();
         try {{
@@ -15114,7 +15212,7 @@ def app(environ, start_response):
         return [html.encode("utf-8")]
 
     if path == "/cashoperations" and method == "GET":
-        selected_cashbox = query.get("cashbox", ["denis"])[0].strip() or "denis"
+        selected_cashbox = query.get("cashbox", [""])[0].strip()
         flash_message = query.get("flash", [""])[0].strip()
         success = query.get("ok", ["0"])[0] == "1"
         body = render_cashoperations_body(storage, current_owner, current_user, selected_cashbox, flash_message, success)
@@ -15157,6 +15255,36 @@ def app(environ, start_response):
             cashbox_marker = f"[{cashbox_labels.get(selected_cashbox, 'Касса')}]"
             source_marker = f"[Источник: {source_label}]"
             normalized_comment = " ".join(part for part in (cashbox_marker, source_marker, comment) if part)
+            income_id = 0
+            try:
+                income_id = int(form.get("income_id", "0") or "0")
+            except ValueError:
+                income_id = 0
+            if income_id:
+                entries = storage.list_expense_entries(current_owner)
+                existing_entry = next((entry for entry in entries if entry.id == income_id), None)
+                if existing_entry is None or existing_entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE or (existing_entry.payment_source or "bank") != "bank":
+                    raise ValueError("Поступление не найдено")
+                existing_cashbox = cashbox_code_from_entry(existing_entry, cashboxes)
+                if existing_cashbox not in allowed_codes:
+                    raise ValueError("Нет прав на редактирование этой кассы")
+                selected_cashbox = existing_cashbox or selected_cashbox
+                cashbox_marker = f"[{cashbox_labels.get(selected_cashbox, 'Касса')}]"
+                normalized_comment = " ".join(part for part in (cashbox_marker, source_marker, comment) if part)
+                storage.update_expense_entry(
+                    current_owner,
+                    income_id,
+                    expense_date,
+                    "admin",
+                    CASH_WITHDRAWAL_CATEGORY_CODE,
+                    f"Пополнение кассы: {source_label}",
+                    amount,
+                    normalized_comment,
+                    "bank",
+                    False,
+                )
+                flash = "Поступление обновлено."
+                return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
             storage.add_expense_entry(
                 current_owner,
                 expense_date,
@@ -15172,6 +15300,31 @@ def app(environ, start_response):
                 client_request_key=form.get("request_key", ""),
             )
             flash = "Поступление добавлено в кассу."
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
+        except ValueError as exc:
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
+
+    if path == "/cashoperations/income/delete" and method == "POST":
+        form = read_post_data(environ)
+        cashboxes = storage.list_cashbox_directory(current_owner)
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        if not cash_access or not cash_access["enabled"] or not cash_access["can_add_expense"]:
+            return redirect(start_response, "/cashoperations?flash=Нет прав на удаление поступлений")
+        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
+        try:
+            income_id = int(form.get("income_id", "0") or "0")
+            entries = storage.list_expense_entries(current_owner)
+            existing_entry = next((entry for entry in entries if entry.id == income_id), None)
+            if existing_entry is None or existing_entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE or (existing_entry.payment_source or "bank") != "bank":
+                raise ValueError("Поступление не найдено")
+            existing_cashbox = cashbox_code_from_entry(existing_entry, cashboxes)
+            if existing_cashbox not in allowed_codes:
+                raise ValueError("Нет прав на удаление этой кассы")
+            selected_cashbox = existing_cashbox
+            if not storage.delete_expense_entry(current_owner, income_id):
+                raise ValueError("Поступление не найдено")
+            flash = "Поступление удалено."
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
