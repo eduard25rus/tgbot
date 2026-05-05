@@ -1875,7 +1875,15 @@ def resolve_jurisprudence_object_record(storage: Storage, owner_chat_id: int, ob
     for item in candidates:
         item_key = compact_object_match_key(item.name)
         item_short_key = compact_object_match_key(quoted_object_part(item.name))
-        if any(key and (key == item_key or key == item_short_key or key in item_key) for key in normalized_keys):
+        if any(
+            key and (
+                key == item_key
+                or key == item_short_key
+                or key in item_key
+                or (item_key and item_key in key)
+            )
+            for key in normalized_keys
+        ):
             return item
     return None
 
@@ -1900,7 +1908,15 @@ def resolve_contract_object_match(storage: Storage, owner_chat_id: int, object_l
         item_name = (item.object_name.strip() or item.title.strip() or "").strip()
         item_key = compact_object_match_key(item_name)
         item_short_key = compact_object_match_key(quoted_object_part(item_name))
-        if any(key and (key == item_key or key == item_short_key or key in item_key) for key in normalized_keys):
+        if any(
+            key and (
+                key == item_key
+                or key == item_short_key
+                or key in item_key
+                or (item_key and item_key in key)
+            )
+            for key in normalized_keys
+        ):
             return item
     return None
 
@@ -2116,7 +2132,7 @@ def render_jurisprudence_letter_object_cell(storage: Storage, owner_chat_id: int
     customer_html = escape(customer) if customer else "Заказчик не указан"
     return f"""
     <div class="timeline-title">{escape(object_name)}</div>
-    <div class="contract-table-subtle">Заказчик: {customer_html}</div>
+    <div class="contract-table-subtle">{customer_html}</div>
     """
 
 
