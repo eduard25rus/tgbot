@@ -11572,6 +11572,18 @@ def cashbox_code_from_text(title: str, comment: str = "") -> str:
     return ""
 
 
+def cashbox_code_from_entry(entry, cashboxes: list[dict]) -> str:
+    static_code = cashbox_code_from_text(entry.title, entry.comment)
+    if static_code:
+        return static_code
+    haystack = f"{entry.title} {entry.comment}".casefold()
+    for cashbox in cashboxes:
+        label = str(cashbox.get("label", "")).strip()
+        if label and label.casefold() in haystack:
+            return str(cashbox.get("code", ""))
+    return ""
+
+
 def cash_recipient_label(title: str, comment: str = "") -> str:
     code = cashbox_code_from_text(title, comment)
     return cashbox_label(code) if code else "Касса"
@@ -11674,8 +11686,26 @@ def render_cashoperations_body(
     flash_message: str = "",
     success: bool = False,
 ) -> str:
-    if selected_cashbox not in {code for code, _label in CASHBOX_OPTIONS}:
-        selected_cashbox = "denis"
+    cashboxes = storage.list_cashbox_directory(owner_chat_id)
+    cashbox_labels = {item["code"]: item["label"] for item in cashboxes}
+    cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"])) if current_user else None
+    if not cash_access or not cash_access["enabled"]:
+        return """
+        <section class="cash-mobile">
+          <section class="cash-mobile-panel">
+            <h2>Доступ к кассе закрыт</h2>
+            <div class="cash-mobile-sub">Администратор должен включить мобильную кассу в разделе «Доступы».</div>
+          </section>
+        </section>
+        """
+    allowed_cashboxes = cashboxes if cash_access["can_view_all_cashboxes"] else [
+        item for item in cashboxes if item["code"] in set(cash_access["allowed_cashbox_codes"])
+    ]
+    if not allowed_cashboxes:
+        allowed_cashboxes = [item for item in cashboxes if item["code"] == cash_access["default_cashbox_code"]]
+    allowed_codes = {item["code"] for item in allowed_cashboxes}
+    if selected_cashbox not in allowed_codes:
+        selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (allowed_cashboxes[0]["code"] if allowed_cashboxes else "")
     entries = storage.list_expense_entries(owner_chat_id)
     today = datetime.now(VLADIVOSTOK_TZ).date()
     project_options_list = expense_project_options(storage, owner_chat_id, entries)
@@ -11699,14 +11729,14 @@ def render_cashoperations_body(
         for entry in entries
         if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
         and (entry.payment_source or "bank") == "bank"
-        and cash_operation_scope(entry) == selected_cashbox
+        and cashbox_code_from_entry(entry, cashboxes) == selected_cashbox
     ]
     cash_expense_entries = [
         entry
         for entry in entries
         if (entry.payment_source or "bank") == "cash"
         and entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE
-        and cash_operation_scope(entry) == selected_cashbox
+        and cashbox_code_from_entry(entry, cashboxes) == selected_cashbox
     ]
     income_total = sum(entry.amount for entry in cash_income_entries)
     expense_total = sum(entry.amount for entry in cash_expense_entries)
@@ -11721,7 +11751,7 @@ def render_cashoperations_body(
             entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
             or (entry.payment_source or "bank") == "cash"
         )
-        and not cash_operation_scope(entry)
+        and not cashbox_code_from_entry(entry, cashboxes)
     ]
 
     operations = [
@@ -11757,8 +11787,8 @@ def render_cashoperations_body(
     ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
 
     cashbox_tabs = "".join(
-        f'<a class="cash-mobile-tab{" active" if code == selected_cashbox else ""}" href="/cashoperations?cashbox={code}">{escape(label)}</a>'
-        for code, label in CASHBOX_OPTIONS
+        f'<a class="cash-mobile-tab{" active" if item["code"] == selected_cashbox else ""}" href="/cashoperations?cashbox={item["code"]}">{escape(item["label"])}</a>'
+        for item in allowed_cashboxes
     )
     flash_html = f'<div class="cash-mobile-flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     warnings = []
@@ -11776,7 +11806,7 @@ def render_cashoperations_body(
             f'разница {escape(format_amount(latest_reconciliation["difference"]))}</div>'
         )
 
-    can_edit = has_permission(current_user, "expenses", "edit")
+    can_edit = bool(cash_access["can_add_expense"])
     expense_screen = '<div class="cash-mobile-empty">Нет прав на добавление расходов.</div>'
     if can_edit:
         expense_screen = f"""
@@ -11807,7 +11837,8 @@ def render_cashoperations_body(
         </section>
         """
 
-    reconcile_screen = f"""
+    reconcile_screen = (
+    f"""
     <section class="cash-mobile-panel">
       <div class="cash-mobile-section-head"><h2>Сверить кассу</h2></div>
       <form class="cash-mobile-form" method="post" action="/cashoperations/reconcile">
@@ -11826,6 +11857,9 @@ def render_cashoperations_body(
       {latest_reconciliation_html}
     </section>
     """
+    if cash_access["can_reconcile"]
+    else '<section class="cash-mobile-panel"><h2>Сверка недоступна</h2><div class="cash-mobile-sub">Администратор не включил право сверки этой кассы.</div></section>'
+    )
 
     return f"""
     <style>
@@ -12060,7 +12094,7 @@ def render_cashoperations_body(
       {flash_html}
       <section id="cashScreenHome" class="cash-mobile-screen active">
         <section class="cash-mobile-panel">
-          <div class="cash-mobile-sub">{escape(cashbox_label(selected_cashbox))}</div>
+        <div class="cash-mobile-sub">{escape(cashbox_labels.get(selected_cashbox, "Касса"))}</div>
           <div class="cash-mobile-balance">{escape(format_amount(balance))}</div>
           <div class="cash-mobile-metrics">
             <div class="cash-mobile-metric"><span>Поступило сегодня</span><b>{escape(format_amount(today_income))}</b></div>
@@ -13268,6 +13302,8 @@ def render_access_section(
     success: bool = False,
 ) -> str:
     users = storage.list_web_users(owner_chat_id)
+    cashboxes = storage.list_cashbox_directory(owner_chat_id)
+    mobile_cash_access = storage.list_mobile_cash_access(owner_chat_id)
     base_setup_url = f"{base_url.rstrip('/')}/setup-password?token="
     stats = f"""
     <section class="stats">
@@ -13399,9 +13435,98 @@ def render_access_section(
     if flash_message:
         flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>'
 
+    cash_access_cards = []
+    cashbox_select_options_cache = {
+        user_access["user_id"]: "".join(
+            f'<option value="{cashbox["code"]}"{" selected" if cashbox["code"] == user_access["default_cashbox_code"] else ""}>{escape(cashbox["label"])}</option>'
+            for cashbox in cashboxes
+        )
+        for user_access in mobile_cash_access
+    }
+    for user_access in mobile_cash_access:
+        user = user_access["user"]
+        allowed_codes = set(user_access["allowed_cashbox_codes"])
+        cashbox_checks = "".join(
+            f"""
+            <label>
+              <input type="checkbox" name="cashbox_{escape(cashbox["code"])}" value="1" {"checked" if user_access["can_view_all_cashboxes"] or cashbox["code"] in allowed_codes else ""}>
+              {escape(cashbox["label"])}
+            </label>
+            """
+            for cashbox in cashboxes
+        )
+        cash_access_cards.append(
+            f"""
+            <article class="user-card">
+              <form class="form-grid" method="post" action="/access/cash/users/{user["id"]}/update?owner={owner_chat_id}">
+                <div class="user-head">
+                  <div>
+                    <div class="timeline-title">{escape(user["full_name"])}</div>
+                    <div class="user-meta">Логин: {escape(user["login"])}<br>Пароль: хранится защищенно, можно сбросить в карточке пользователя выше.</div>
+                  </div>
+                  <div class="badge-row">
+                    <span class="badge{" danger" if not user_access["enabled"] else ""}">{"Касса включена" if user_access["enabled"] else "Касса отключена"}</span>
+                    <span class="badge">{escape(user_access["role"])}</span>
+                  </div>
+                </div>
+                <label class="advance-toggle">
+                  <input class="toggle-checkbox" type="checkbox" name="enabled" value="1" {"checked" if user_access["enabled"] else ""}> Разрешить вход в мобильную кассу
+                </label>
+                <div class="field">
+                  <label>Роль в кассе</label>
+                  <select name="role">
+                    <option value="owner"{" selected" if user_access["role"] == "owner" else ""}>owner / admin</option>
+                    <option value="manager"{" selected" if user_access["role"] == "manager" else ""}>manager</option>
+                    <option value="limited"{" selected" if user_access["role"] == "limited" else ""}>limited</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Касса по умолчанию</label>
+                  <select name="default_cashbox_code">{cashbox_select_options_cache[user_access["user_id"]]}</select>
+                </div>
+                <div class="permission-box">
+                  <strong>Доступные кассы</strong>
+                  <div class="check-row">{cashbox_checks}</div>
+                </div>
+                <div class="permission-box">
+                  <strong>Права в приложении</strong>
+                  <div class="check-row">
+                    <label><input type="checkbox" name="can_view_all_cashboxes" value="1" {"checked" if user_access["can_view_all_cashboxes"] else ""}> Видит все кассы</label>
+                    <label><input type="checkbox" name="can_add_expense" value="1" {"checked" if user_access["can_add_expense"] else ""}> Может добавлять расходы</label>
+                    <label><input type="checkbox" name="can_reconcile" value="1" {"checked" if user_access["can_reconcile"] else ""}> Может сверять кассу</label>
+                  </div>
+                </div>
+                <button class="submit-btn" type="submit">Сохранить кассовый доступ</button>
+              </form>
+            </article>
+            """
+        )
+
+    cash_settings_html = f"""
+    <section class="card panel" id="cash-app-settings">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Настройка веб-приложения касс</h2>
+          <div class="panel-sub">Кто входит в мобильную кассу, какую кассу видит и какие действия может выполнять.</div>
+        </div>
+        <a class="secondary-btn" href="/cashoperations" target="_blank" rel="noopener">Открыть кассу</a>
+      </div>
+      <div class="access-stack">{''.join(cash_access_cards) or '<div class="contract-meta">Пользователей пока нет.</div>'}</div>
+      <div class="settings-divider"></div>
+      <form class="form-grid" method="post" action="/access/cashboxes/new?owner={owner_chat_id}">
+        <div class="field">
+          <label>Добавить кассу сотрудника</label>
+          <input type="text" name="label" placeholder="Например, Касса Ильи">
+        </div>
+        <button class="secondary-btn" type="submit">Добавить кассу</button>
+      </form>
+    </section>
+    """
+
     return f"""
     {stats}
     {flash_html}
+    {cash_settings_html}
     <section class="grid">
       <section class="card panel">
         <div class="panel-head">
@@ -14455,9 +14580,6 @@ def app(environ, start_response):
         return [html.encode("utf-8")]
 
     if path == "/cashoperations" and method == "GET":
-        denied = guard("expenses", "view")
-        if denied:
-            return denied
         selected_cashbox = query.get("cashbox", ["denis"])[0].strip() or "denis"
         flash_message = query.get("flash", [""])[0].strip()
         success = query.get("ok", ["0"])[0] == "1"
@@ -14467,13 +14589,16 @@ def app(environ, start_response):
         return [html.encode("utf-8")]
 
     if path == "/cashoperations/expense" and method == "POST":
-        denied = guard("expenses", "edit")
-        if denied:
-            return denied
         form = read_post_data(environ)
+        cashboxes = storage.list_cashbox_directory(current_owner)
+        cashbox_labels = {item["code"]: item["label"] for item in cashboxes}
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        if not cash_access or not cash_access["enabled"] or not cash_access["can_add_expense"]:
+            return redirect(start_response, "/cashoperations?flash=Нет прав на добавление расходов")
         selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
-        if selected_cashbox not in {code for code, _label in CASHBOX_OPTIONS}:
-            selected_cashbox = "denis"
+        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        if selected_cashbox not in allowed_codes:
+            selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (next(iter(allowed_codes), ""))
         try:
             expense_date_raw = form.get("expense_date", "").strip()
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
@@ -14498,7 +14623,7 @@ def app(environ, start_response):
             if not title:
                 raise ValueError("Укажите наименование траты")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
-            cashbox_marker = f"[{cashbox_label(selected_cashbox)}]"
+            cashbox_marker = f"[{cashbox_labels.get(selected_cashbox, 'Касса')}]"
             normalized_comment = " ".join(part for part in (cashbox_marker, comment) if part)
             storage.add_expense_entry(
                 current_owner,
@@ -14519,13 +14644,15 @@ def app(environ, start_response):
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
 
     if path == "/cashoperations/reconcile" and method == "POST":
-        denied = guard("expenses", "view")
-        if denied:
-            return denied
         form = read_post_data(environ)
+        cashboxes = storage.list_cashbox_directory(current_owner)
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        if not cash_access or not cash_access["enabled"] or not cash_access["can_reconcile"]:
+            return redirect(start_response, "/cashoperations?flash=Нет прав на сверку кассы")
         selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
-        if selected_cashbox not in {code for code, _label in CASHBOX_OPTIONS}:
-            selected_cashbox = "denis"
+        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        if selected_cashbox not in allowed_codes:
+            selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (next(iter(allowed_codes), ""))
         try:
             actual_balance = parse_amount(form.get("actual_balance", "").strip())
             entries = storage.list_expense_entries(current_owner)
@@ -14534,14 +14661,14 @@ def app(environ, start_response):
                 for entry in entries
                 if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
                 and (entry.payment_source or "bank") == "bank"
-                and cash_operation_scope(entry) == selected_cashbox
+                and cashbox_code_from_entry(entry, cashboxes) == selected_cashbox
             ]
             cash_expense_entries = [
                 entry
                 for entry in entries
                 if (entry.payment_source or "bank") == "cash"
                 and entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE
-                and cash_operation_scope(entry) == selected_cashbox
+                and cashbox_code_from_entry(entry, cashboxes) == selected_cashbox
             ]
             crm_balance = sum(entry.amount for entry in cash_income_entries) - sum(entry.amount for entry in cash_expense_entries)
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
@@ -16970,6 +17097,55 @@ def app(environ, start_response):
             return redirect(start_response, f"/access?owner={current_owner}")
         except Exception as exc:
             body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось удалить пользователя: {exc}")
+        html = layout("Доступы", body, owners, current_owner, "access", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/access/cashboxes/new" and method == "POST":
+        denied = guard("access", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        try:
+            created_code = storage.add_cashbox_directory_item(current_owner, form.get("label", ""))
+            if not created_code:
+                raise ValueError("Укажите название кассы")
+            return redirect(start_response, f"/access?owner={current_owner}#cash-app-settings")
+        except Exception as exc:
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось добавить кассу: {exc}")
+        html = layout("Доступы", body, owners, current_owner, "access", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path.startswith("/access/cash/users/") and path.endswith("/update") and method == "POST":
+        denied = guard("access", "edit")
+        if denied:
+            return denied
+        try:
+            user_id = int(path.split("/")[4])
+            form = read_post_data(environ)
+            cashboxes = storage.list_cashbox_directory(current_owner)
+            allowed_cashbox_codes = [
+                cashbox["code"]
+                for cashbox in cashboxes
+                if form.get(f"cashbox_{cashbox['code']}") == "1"
+            ]
+            updated = storage.update_mobile_cash_access(
+                current_owner,
+                user_id,
+                form.get("enabled") == "1",
+                form.get("role", "limited"),
+                form.get("default_cashbox_code", ""),
+                allowed_cashbox_codes,
+                form.get("can_view_all_cashboxes") == "1",
+                form.get("can_add_expense") == "1",
+                form.get("can_reconcile") == "1",
+            )
+            if not updated:
+                raise ValueError("Пользователь не найден")
+            return redirect(start_response, f"/access?owner={current_owner}#cash-app-settings")
+        except Exception as exc:
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось обновить кассовый доступ: {exc}")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]

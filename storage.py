@@ -939,6 +939,32 @@ class Storage:
                     comment TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS cashbox_directory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    code TEXT NOT NULL DEFAULT '',
+                    label TEXT NOT NULL DEFAULT '',
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, code)
+                );
+
+                CREATE TABLE IF NOT EXISTS mobile_cash_access (
+                    user_id INTEGER PRIMARY KEY,
+                    owner_chat_id INTEGER NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    role TEXT NOT NULL DEFAULT 'limited',
+                    default_cashbox_code TEXT NOT NULL DEFAULT '',
+                    allowed_cashbox_codes TEXT NOT NULL DEFAULT '',
+                    can_view_all_cashboxes INTEGER NOT NULL DEFAULT 0,
+                    can_add_expense INTEGER NOT NULL DEFAULT 0,
+                    can_reconcile INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
+                );
                 """
             )
             columns = {
@@ -1433,6 +1459,7 @@ class Storage:
             )
             for owner_chat_id in owner_ids:
                 self._ensure_default_web_admin(conn, owner_chat_id)
+                self._ensure_default_cashboxes(conn, owner_chat_id)
 
     def register_chat(self, chat_id: int) -> None:
         with self.connection() as conn:
@@ -1448,6 +1475,167 @@ class Storage:
     def ensure_default_web_admin(self, owner_chat_id: int) -> None:
         with self.connection() as conn:
             self._ensure_default_web_admin(conn, owner_chat_id)
+            self._ensure_default_cashboxes(conn, owner_chat_id)
+
+    def list_cashbox_directory(self, owner_chat_id: int) -> list[dict]:
+        with self.connection() as conn:
+            self._ensure_default_cashboxes(conn, owner_chat_id)
+            rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, code, label, sort_order, is_active, created_at, updated_at
+                FROM cashbox_directory
+                WHERE owner_chat_id = ? AND is_active = 1
+                ORDER BY sort_order ASC, LOWER(label) ASC, id ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [
+            {
+                "id": int(row["id"]),
+                "owner_chat_id": int(row["owner_chat_id"]),
+                "code": row["code"],
+                "label": row["label"],
+                "sort_order": int(row["sort_order"]),
+                "is_active": bool(row["is_active"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def add_cashbox_directory_item(self, owner_chat_id: int, label: str) -> str | None:
+        cleaned_label = label.strip()
+        if not cleaned_label:
+            return None
+        code_base = "cashbox_" + hashlib.sha1(cleaned_label.lower().encode("utf-8")).hexdigest()[:10]
+        now = datetime.utcnow().isoformat()
+        with self.connection() as conn:
+            self._ensure_default_cashboxes(conn, owner_chat_id)
+            code = code_base
+            suffix = 2
+            while conn.execute(
+                "SELECT 1 FROM cashbox_directory WHERE owner_chat_id = ? AND code = ?",
+                (owner_chat_id, code),
+            ).fetchone():
+                code = f"{code_base}_{suffix}"
+                suffix += 1
+            max_sort = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) AS max_sort FROM cashbox_directory WHERE owner_chat_id = ?",
+                (owner_chat_id,),
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO cashbox_directory (
+                    owner_chat_id, code, label, sort_order, is_active, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 1, ?, ?)
+                """,
+                (owner_chat_id, code, cleaned_label, int(max_sort["max_sort"] or 0) + 10, now, now),
+            )
+        return code
+
+    def list_mobile_cash_access(self, owner_chat_id: int) -> list[dict]:
+        users = self.list_web_users(owner_chat_id)
+        with self.connection() as conn:
+            self._ensure_default_cashboxes(conn, owner_chat_id)
+            rows = conn.execute(
+                """
+                SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
+                       allowed_cashbox_codes, can_view_all_cashboxes, can_add_expense,
+                       can_reconcile, updated_at
+                FROM mobile_cash_access
+                WHERE owner_chat_id = ? AND user_id IN (
+                    SELECT id FROM web_users WHERE owner_chat_id = ?
+                )
+                """,
+                (owner_chat_id, owner_chat_id),
+            ).fetchall()
+        access_by_user = {int(row["user_id"]): self._mobile_cash_access_from_row(row) for row in rows}
+        result = []
+        for user in users:
+            access = access_by_user.get(user["id"]) or self._default_mobile_cash_access_payload(owner_chat_id, user)
+            result.append({**access, "user": user})
+        return result
+
+    def get_mobile_cash_access_for_user(self, user_id: int) -> dict | None:
+        user = self.get_web_user_by_id(user_id)
+        if user is None:
+            return None
+        with self.connection() as conn:
+            self._ensure_default_cashboxes(conn, int(user["owner_chat_id"]))
+            row = conn.execute(
+                """
+                SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
+                       allowed_cashbox_codes, can_view_all_cashboxes, can_add_expense,
+                       can_reconcile, updated_at
+                FROM mobile_cash_access
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        access = self._mobile_cash_access_from_row(row) if row else self._default_mobile_cash_access_payload(int(user["owner_chat_id"]), user)
+        return {**access, "user": user}
+
+    def update_mobile_cash_access(
+        self,
+        owner_chat_id: int,
+        user_id: int,
+        enabled: bool,
+        role: str,
+        default_cashbox_code: str,
+        allowed_cashbox_codes: list[str],
+        can_view_all_cashboxes: bool,
+        can_add_expense: bool,
+        can_reconcile: bool,
+    ) -> bool:
+        user = self.get_web_user_by_id(user_id)
+        if user is None or int(user["owner_chat_id"]) != owner_chat_id:
+            return False
+        cashboxes = self.list_cashbox_directory(owner_chat_id)
+        known_codes = {item["code"] for item in cashboxes}
+        if default_cashbox_code not in known_codes:
+            default_cashbox_code = cashboxes[0]["code"] if cashboxes else ""
+        normalized_allowed = [code for code in allowed_cashbox_codes if code in known_codes]
+        if default_cashbox_code and default_cashbox_code not in normalized_allowed:
+            normalized_allowed.append(default_cashbox_code)
+        if can_view_all_cashboxes:
+            normalized_allowed = [item["code"] for item in cashboxes]
+        if role not in {"owner", "manager", "limited"}:
+            role = "limited"
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO mobile_cash_access (
+                    user_id, owner_chat_id, enabled, role, default_cashbox_code,
+                    allowed_cashbox_codes, can_view_all_cashboxes, can_add_expense,
+                    can_reconcile, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    owner_chat_id = excluded.owner_chat_id,
+                    enabled = excluded.enabled,
+                    role = excluded.role,
+                    default_cashbox_code = excluded.default_cashbox_code,
+                    allowed_cashbox_codes = excluded.allowed_cashbox_codes,
+                    can_view_all_cashboxes = excluded.can_view_all_cashboxes,
+                    can_add_expense = excluded.can_add_expense,
+                    can_reconcile = excluded.can_reconcile,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    user_id,
+                    owner_chat_id,
+                    1 if enabled else 0,
+                    role,
+                    default_cashbox_code,
+                    ",".join(normalized_allowed),
+                    1 if can_view_all_cashboxes else 0,
+                    1 if can_add_expense else 0,
+                    1 if can_reconcile else 0,
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+        return True
 
     def list_web_users(self, owner_chat_id: int) -> list[dict]:
         with self.connection() as conn:
@@ -6227,6 +6415,91 @@ class Storage:
                     1 if values["can_edit"] else 0,
                 ),
             )
+
+    def _ensure_default_cashboxes(self, conn: sqlite3.Connection, owner_chat_id: int) -> None:
+        now = datetime.utcnow().isoformat()
+        defaults = (
+            ("eduard", "Касса Эдуарда"),
+            ("denis", "Касса Дениса"),
+        )
+        for index, (code, label) in enumerate(defaults, start=1):
+            row = conn.execute(
+                """
+                SELECT id
+                FROM cashbox_directory
+                WHERE owner_chat_id = ? AND code = ?
+                """,
+                (owner_chat_id, code),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO cashbox_directory (
+                        owner_chat_id, code, label, sort_order, is_active, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (owner_chat_id, code, label, index * 10, now, now),
+                )
+
+    @staticmethod
+    def _split_cashbox_codes(raw: str) -> list[str]:
+        return [item.strip() for item in raw.split(",") if item.strip()]
+
+    def _default_mobile_cash_access_payload(self, owner_chat_id: int, user: dict) -> dict:
+        login_name = f"{user.get('login', '')} {user.get('full_name', '')}".casefold()
+        if user.get("is_super_admin") or "эдуард" in login_name or "eduard" in login_name or "bigboss" in login_name:
+            return {
+                "user_id": int(user["id"]),
+                "owner_chat_id": owner_chat_id,
+                "enabled": True,
+                "role": "owner",
+                "default_cashbox_code": "eduard",
+                "allowed_cashbox_codes": ["eduard", "denis"],
+                "can_view_all_cashboxes": True,
+                "can_add_expense": True,
+                "can_reconcile": True,
+                "updated_at": "",
+            }
+        if "денис" in login_name or "denis" in login_name or "учайкин" in login_name:
+            return {
+                "user_id": int(user["id"]),
+                "owner_chat_id": owner_chat_id,
+                "enabled": True,
+                "role": "manager",
+                "default_cashbox_code": "denis",
+                "allowed_cashbox_codes": ["denis"],
+                "can_view_all_cashboxes": False,
+                "can_add_expense": True,
+                "can_reconcile": True,
+                "updated_at": "",
+            }
+        return {
+            "user_id": int(user["id"]),
+            "owner_chat_id": owner_chat_id,
+            "enabled": False,
+            "role": "limited",
+            "default_cashbox_code": "denis",
+            "allowed_cashbox_codes": [],
+            "can_view_all_cashboxes": False,
+            "can_add_expense": False,
+            "can_reconcile": False,
+            "updated_at": "",
+        }
+
+    def _mobile_cash_access_from_row(self, row: sqlite3.Row) -> dict:
+        return {
+            "user_id": int(row["user_id"]),
+            "owner_chat_id": int(row["owner_chat_id"]),
+            "enabled": bool(row["enabled"]),
+            "role": row["role"],
+            "default_cashbox_code": row["default_cashbox_code"],
+            "allowed_cashbox_codes": self._split_cashbox_codes(row["allowed_cashbox_codes"]),
+            "can_view_all_cashboxes": bool(row["can_view_all_cashboxes"]),
+            "can_add_expense": bool(row["can_add_expense"]),
+            "can_reconcile": bool(row["can_reconcile"]),
+            "updated_at": row["updated_at"],
+        }
 
     def _permissions_payload(
         self,
