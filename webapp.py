@@ -12728,8 +12728,8 @@ def render_expenses_section(
     anchor_day = today
     day_window = [anchor_day - timedelta(days=offset) for offset in range(20, -1, -1)]
     daily_totals = {day: sum(entry.amount for entry in source_entries if entry.expense_date == day) for day in day_window}
-    active_selected_day = selected_day if selected_day in day_window else anchor_day
-    initial_day_index = day_window.index(active_selected_day)
+    active_selected_day = selected_day if selected_day in day_window else None
+    initial_day_index = day_window.index(active_selected_day) if active_selected_day else day_window.index(anchor_day)
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     project_options = "".join(
         f'<option value="{code}"{" selected" if code == project_filter else ""}>{escape(label)}</option>'
