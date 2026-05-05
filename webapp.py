@@ -6148,10 +6148,10 @@ def layout(
     .directory-edit-menu summary::-webkit-details-marker {{
       display: none;
     }}
-    .directory-edit-menu .contract-table-link {{
-      font-weight: 800;
-      text-decoration-thickness: 1px;
-      text-underline-offset: 4px;
+    .directory-title-link {{
+      color: inherit;
+      font: inherit;
+      text-decoration: none;
     }}
     .directory-edit-form {{
       min-width: min(520px, 84vw);
@@ -8148,7 +8148,7 @@ def render_directories_section(
             <div class="timeline-title">
               {f'''
               <details class="status-menu directory-edit-menu">
-                <summary><span class="contract-table-link">{escape(object_name)}</span></summary>
+                <summary><span class="directory-title-link">{escape(object_name)}</span></summary>
                 <div class="status-popover" style="min-width:420px;">
                   <form class="form-grid directory-edit-form" method="post" action="/directories/objects/update?owner={owner_chat_id}">
                     <input type="hidden" name="old_name" value="{escape(object_name)}">
@@ -8198,7 +8198,7 @@ def render_directories_section(
             <div class="timeline-title">
               {f'''
               <details class="status-menu directory-edit-menu">
-                <summary><span class="contract-table-link">{escape(employee.full_name)}</span></summary>
+                <summary><span class="directory-title-link">{escape(employee.full_name)}</span></summary>
                 <div class="status-popover" style="min-width:520px;">
                   <form class="form-grid directory-edit-form" method="post" action="/directories/employees/{employee.id}/update?owner={owner_chat_id}">
                     <div class="field">
