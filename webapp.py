@@ -5427,26 +5427,27 @@ def layout(
     }}
     .jurisprudence-letters-table {{
       table-layout: fixed;
+      width: 100%;
     }}
-    .jurisprudence-letters-table th:nth-child(1),
-    .jurisprudence-letters-table td:nth-child(1) {{
-      width: 120px;
+    .jurisprudence-letters-table .date-col {{
+      width: 110px;
     }}
-    .jurisprudence-letters-table th:nth-child(2),
-    .jurisprudence-letters-table td:nth-child(2) {{
-      width: 160px;
+    .jurisprudence-letters-table .type-col {{
+      width: 150px;
     }}
-    .jurisprudence-letters-table th:nth-child(3),
-    .jurisprudence-letters-table td:nth-child(3) {{
+    .jurisprudence-letters-table .object-col {{
       width: 230px;
     }}
-    .jurisprudence-letters-table th:nth-child(5),
-    .jurisprudence-letters-table td:nth-child(5) {{
-      width: 220px;
+    .jurisprudence-letters-table .files-col {{
+      width: 210px;
     }}
-    .jurisprudence-letters-table th:nth-child(6),
-    .jurisprudence-letters-table td:nth-child(6) {{
-      width: 150px;
+    .jurisprudence-letters-table .author-col {{
+      width: 145px;
+    }}
+    .jurisprudence-letters-table th:nth-child(-n+3),
+    .jurisprudence-letters-table td:nth-child(-n+3) {{
+      padding-left: 6px;
+      padding-right: 6px;
     }}
     .jurisprudence-object-cell .timeline-title,
     .jurisprudence-object-cell .contract-table-subtle {{
@@ -8028,6 +8029,14 @@ def render_jurisprudence_letters_section(
         </div>
       </form>
       <table class="table contract-table jurisprudence-letters-table">
+        <colgroup>
+          <col class="date-col">
+          <col class="type-col">
+          <col class="object-col">
+          <col>
+          <col class="files-col">
+          <col class="author-col">
+        </colgroup>
         <thead>
           <tr>
             <th class="nowrap">Дата</th>
