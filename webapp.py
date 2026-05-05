@@ -11434,6 +11434,11 @@ EXPENSE_STATUS_META = {
     "closed": ("В архиве", "chip ok"),
 }
 
+EXPENSE_PAYMENT_SOURCE_META = {
+    "bank": "Расчетный счет",
+    "cash": "Касса",
+}
+
 
 def finance_query_suffix(owner_chat_id: int, active_tab: str = "active", kind_filter: str = "") -> str:
     parts = [f"owner={owner_chat_id}"]
@@ -11527,6 +11532,17 @@ def expense_category_label(code: str, category_labels: dict[str, str] | None = N
     return EXPENSE_CATEGORY_META.get(code, "Прочее")
 
 
+def expense_payment_source_label(code: str) -> str:
+    return EXPENSE_PAYMENT_SOURCE_META.get(code, EXPENSE_PAYMENT_SOURCE_META["bank"])
+
+
+def expense_payment_source_options(selected_source: str = "bank") -> str:
+    return "".join(
+        f'<option value="{code}"{" selected" if code == selected_source else ""}>{escape(label)}</option>'
+        for code, label in EXPENSE_PAYMENT_SOURCE_META.items()
+    )
+
+
 def expense_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses") -> str:
     label, css = EXPENSE_STATUS_META.get(entry.status, EXPENSE_STATUS_META["active"])
     if not has_permission(current_user, "expenses", "edit"):
@@ -11578,6 +11594,10 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
           <div class="field">
             <label>Группа</label>
             <select name="category_code">{category_options}</select>
+          </div>
+          <div class="field">
+            <label>Источник оплаты</label>
+            <select name="payment_source">{expense_payment_source_options(entry.payment_source or "bank")}</select>
           </div>
           <div class="field span-2">
             <label>Наименование траты</label>
@@ -12857,27 +12877,79 @@ def render_expenses_section(
         """
         for day in day_window
     )
-    rows_html = "".join(
-        f"""
-        <tr>
-          <td class="nowrap">{format_date(entry.expense_date)}</td>
-          <td><span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span></td>
-          <td>
-            {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter)}
-            <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_category_label(entry.category_code, category_labels))}</div>
-            {f'<div class="chip warn expenses-adjustment-chip">Требует корректировки</div>' if entry.needs_adjustment else ''}
-          </td>
-          <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
-          <td>{escape(entry.comment) if entry.comment else "Без комментария"}</td>
-          <td class="nowrap">
-            <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
-              {escape(entry.created_by_name or "Автор неизвестен")}
-            </span>
-          </td>
-        </tr>
+    def render_expense_rows(row_entries) -> str:
+        return "".join(
+            f"""
+            <tr>
+              <td class="nowrap">{format_date(entry.expense_date)}</td>
+              <td><span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span></td>
+              <td>
+                {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter)}
+                <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_category_label(entry.category_code, category_labels))}</div>
+                <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_payment_source_label(entry.payment_source))}</div>
+                {f'<div class="chip warn expenses-adjustment-chip">Требует корректировки</div>' if entry.needs_adjustment else ''}
+              </td>
+              <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+              <td>{escape(entry.comment) if entry.comment else "Без комментария"}</td>
+              <td class="nowrap">
+                <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
+                  {escape(entry.created_by_name or "Автор неизвестен")}
+                </span>
+              </td>
+            </tr>
+            """
+            for entry in row_entries
+        )
+
+    def render_expenses_table(row_entries, empty_text: str) -> str:
+        rows_html = render_expense_rows(row_entries)
+        return f"""
+        <div class="expenses-table-wrap">
+          <table class="table contract-table">
+            <thead>
+              <tr>
+                <th class="nowrap">Дата</th>
+                <th>Объект</th>
+                <th>Наименование</th>
+                <th class="nowrap">Сумма</th>
+                <th>Комментарий</th>
+                <th>Добавил</th>
+              </tr>
+            </thead>
+            <tbody>{rows_html or f'<tr><td colspan="6">{escape(empty_text)}</td></tr>'}</tbody>
+          </table>
+        </div>
         """
-        for entry in filtered_entries
-    )
+
+    if selected_day is not None:
+        bank_entries = [entry for entry in filtered_entries if (entry.payment_source or "bank") == "bank"]
+        cash_entries = [entry for entry in filtered_entries if (entry.payment_source or "bank") == "cash"]
+        bank_total = sum(entry.amount for entry in bank_entries)
+        cash_total = sum(entry.amount for entry in cash_entries)
+        registry_tables_html = f"""
+        <div style="margin-top:18px;">
+          <div class="panel-head" style="margin-bottom:10px;">
+            <div>
+              <h3 class="panel-title">Расчетный счет</h3>
+              <div class="panel-sub">Расходы за {escape(format_date(selected_day))} по банковской выписке и безналичным платежам.</div>
+            </div>
+            <span class="chip">{escape(format_amount(bank_total))}</span>
+          </div>
+          {render_expenses_table(bank_entries, "По расчетному счету за выбранный день расходов нет.")}
+        </div>
+        <div style="margin-top:22px;">
+          <div class="panel-head" style="margin-bottom:10px;">
+            <div>
+              <h3 class="panel-title">Касса</h3>
+              <div class="panel-sub">Наличные расходы за {escape(format_date(selected_day))}, внесенные вручную или из отдельной формы.</div>
+            </div>
+            <span class="chip">{escape(format_amount(cash_total))}</span>
+          </div>
+          {render_expenses_table(cash_entries, "По кассе за выбранный день расходов нет.")}
+        </div>
+        """
+    else:
+        registry_tables_html = render_expenses_table(filtered_entries, "Пока нет расходов в этом срезе.")
     add_section = ""
     if has_permission(current_user, "expenses", "edit") and active_tab != "archive":
         add_section = f"""
@@ -12927,6 +12999,12 @@ def render_expenses_section(
             <div class="field">
               <label>Сумма, ₽</label>
               <input type="text" name="amount" data-money-input="1" placeholder="Например, 125000" required>
+            </div>
+            <div class="field">
+              <label>Источник оплаты</label>
+              <select name="payment_source">
+                {expense_payment_source_options("cash")}
+              </select>
             </div>
             <div class="field span-2">
               <label>Комментарий</label>
@@ -13009,21 +13087,7 @@ def render_expenses_section(
         </div>
       </form>
       {flash_html}
-      <div class="expenses-table-wrap">
-        <table class="table contract-table">
-          <thead>
-            <tr>
-              <th class="nowrap">Дата</th>
-              <th>Объект</th>
-              <th>Наименование</th>
-              <th class="nowrap">Сумма</th>
-              <th>Комментарий</th>
-              <th>Добавил</th>
-            </tr>
-          </thead>
-          <tbody>{rows_html or '<tr><td colspan="6">Пока нет расходов в этом срезе.</td></tr>'}</tbody>
-        </table>
-      </div>
+      {registry_tables_html}
     </section>
     {add_section}
     """
@@ -17957,6 +18021,7 @@ def app(environ, start_response):
                         recipient,
                         amount,
                         " | ".join(comment_parts),
+                        "bank",
                         True,
                         (current_user or {}).get("id"),
                         actor_name,
@@ -17998,6 +18063,7 @@ def app(environ, start_response):
             title = form.get("title", "").strip()
             amount = parse_amount(form.get("amount", "").strip())
             comment = form.get("comment", "").strip()
+            payment_source = form.get("payment_source", "cash").strip() or "cash"
             needs_adjustment = form.get("needs_adjustment", "").strip() == "1"
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
@@ -18008,10 +18074,12 @@ def app(environ, start_response):
                 raise ValueError("Выберите объект")
             if category_code not in category_codes:
                 raise ValueError("Выберите группу расхода")
+            if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
+                raise ValueError("Выберите источник оплаты")
             if not title:
                 raise ValueError("Укажите наименование траты")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
-            storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, needs_adjustment, (current_user or {}).get("id"), actor_name)
+            storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day)
             html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
@@ -18042,6 +18110,7 @@ def app(environ, start_response):
             title = form.get("title", "").strip()
             amount = parse_amount(form.get("amount", "").strip())
             comment = form.get("comment", "").strip()
+            payment_source = form.get("payment_source", "bank").strip() or "bank"
             needs_adjustment = form.get("needs_adjustment", "").strip() == "1"
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
@@ -18052,9 +18121,11 @@ def app(environ, start_response):
                 raise ValueError("Выберите объект")
             if category_code not in category_codes:
                 raise ValueError("Выберите группу расхода")
+            if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
+                raise ValueError("Выберите источник оплаты")
             if not title:
                 raise ValueError("Укажите наименование траты")
-            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, needs_adjustment)
+            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day)
             html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)

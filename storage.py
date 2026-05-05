@@ -358,6 +358,7 @@ class ExpenseEntry:
     title: str
     amount: float
     comment: str
+    payment_source: str
     needs_adjustment: bool
     status: str
     created_by_user_id: Optional[int]
@@ -897,6 +898,7 @@ class Storage:
                     title TEXT NOT NULL DEFAULT '',
                     amount REAL NOT NULL DEFAULT 0,
                     comment TEXT NOT NULL DEFAULT '',
+                    payment_source TEXT NOT NULL DEFAULT 'bank',
                     needs_adjustment INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'active',
                     created_by_user_id INTEGER,
@@ -1121,6 +1123,7 @@ class Storage:
                 ("title", "TEXT NOT NULL DEFAULT ''"),
                 ("amount", "REAL NOT NULL DEFAULT 0"),
                 ("comment", "TEXT NOT NULL DEFAULT ''"),
+                ("payment_source", "TEXT NOT NULL DEFAULT 'bank'"),
                 ("status", "TEXT NOT NULL DEFAULT 'active'"),
                 ("created_by_user_id", "INTEGER"),
                 ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
@@ -5278,7 +5281,7 @@ class Storage:
                 """
                 SELECT
                     id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
-                    needs_adjustment,
+                    payment_source, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
                     import_counterparty_account, raw_import_text
@@ -5299,6 +5302,7 @@ class Storage:
         title: str,
         amount: float,
         comment: str,
+        payment_source: str,
         needs_adjustment: bool,
         created_by_user_id: int | None,
         created_by_name: str,
@@ -5315,12 +5319,12 @@ class Storage:
                 """
                 INSERT INTO expense_entries (
                     owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
-                    needs_adjustment,
+                    payment_source, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
                     import_counterparty_account, raw_import_text
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -5330,6 +5334,7 @@ class Storage:
                     title.strip(),
                     amount,
                     comment.strip(),
+                    payment_source.strip() or "bank",
                     1 if needs_adjustment else 0,
                     created_by_user_id,
                     created_by_name.strip(),
@@ -5382,6 +5387,7 @@ class Storage:
         title: str,
         amount: float,
         comment: str,
+        payment_source: str,
         needs_adjustment: bool,
     ) -> bool:
         with self.connection() as conn:
@@ -5395,6 +5401,7 @@ class Storage:
                     title = ?,
                     amount = ?,
                     comment = ?,
+                    payment_source = ?,
                     needs_adjustment = ?,
                     updated_at = ?
                 WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
@@ -5406,6 +5413,7 @@ class Storage:
                     title.strip(),
                     amount,
                     comment.strip(),
+                    payment_source.strip() or "bank",
                     1 if needs_adjustment else 0,
                     datetime.utcnow().isoformat(),
                     entry_id,
@@ -5852,6 +5860,7 @@ class Storage:
             title=row["title"] or "",
             amount=float(row["amount"]) if row["amount"] is not None else 0.0,
             comment=row["comment"] or "",
+            payment_source=row["payment_source"] if "payment_source" in row.keys() else "bank",
             needs_adjustment=bool(row["needs_adjustment"]) if "needs_adjustment" in row.keys() else False,
             status=row["status"] or "active",
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
