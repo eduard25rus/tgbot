@@ -11817,11 +11817,11 @@ def render_cashoperations_body(
             <label>Сумма
               <input type="text" name="amount" inputmode="decimal" placeholder="0" required>
             </label>
-            <label>Объект
-              <select name="project_code" required>{project_options}</select>
-            </label>
             <label>Статья расхода
-              <select name="category_code" required>{category_options}</select>
+              <select name="category_code" data-cash-category required>{category_options}</select>
+            </label>
+            <label>Объект
+              <select name="project_code" data-cash-project required>{project_options}</select>
             </label>
             <label>Наименование
               <input type="text" name="title" placeholder="Например, материалы / доставка" required>
@@ -12041,6 +12041,10 @@ def render_cashoperations_body(
         color: var(--ink);
         background: #fff;
       }}
+      .cash-mobile-form select:disabled {{
+        background: #eef2ed;
+        color: var(--muted);
+      }}
       .cash-mobile-form textarea {{
         min-height: 86px;
         resize: vertical;
@@ -12147,6 +12151,18 @@ def render_cashoperations_body(
         document.querySelectorAll("[data-cash-screen]").forEach((button) => {{
           button.addEventListener("click", () => show(button.dataset.cashScreen));
         }});
+        const categorySelect = document.querySelector("[data-cash-category]");
+        const projectSelect = document.querySelector("[data-cash-project]");
+        function syncAdminProject() {{
+          if (!categorySelect || !projectSelect) return;
+          const isAdmin = categorySelect.value === "admin";
+          if (isAdmin) {{
+            projectSelect.value = "admin";
+          }}
+          projectSelect.disabled = isAdmin;
+        }}
+        categorySelect && categorySelect.addEventListener("change", syncAdminProject);
+        syncAdminProject();
       }})();
     </script>
     """
@@ -12157,7 +12173,7 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
     logout_html = ""
     if current_user:
         user_label = (current_user.get("full_name") or current_user.get("login") or "").strip()
-        logout_html = '<a class="cash-shell-logout" href="/logout">Выйти</a>'
+        logout_html = '<a class="cash-shell-logout" href="/cashoperations/logout">Выйти</a>'
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -13484,6 +13500,15 @@ def render_access_section(
                   <label>Касса по умолчанию</label>
                   <select name="default_cashbox_code">{cashbox_select_options_cache[user_access["user_id"]]}</select>
                 </div>
+                <div class="field">
+                  <label>Резервный логин для входа в кассу</label>
+                  <input type="text" name="preview_login" value="{escape(user_access["preview_login"])}" placeholder="{escape(user["login"])}">
+                </div>
+                <div class="field">
+                  <label>Новый резервный пароль</label>
+                  <input type="text" name="preview_password" placeholder="Оставьте пустым, если менять не нужно">
+                  <div class="field-hint">Сейчас: {"задан" if user_access["preview_password_hash"] else "не задан"}. Работает только для мобильной кассы.</div>
+                </div>
                 <div class="permission-box">
                   <strong>Доступные кассы</strong>
                   <div class="check-row">{cashbox_checks}</div>
@@ -14507,6 +14532,19 @@ def app(environ, start_response):
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
+    if path == "/cashoperations/logout":
+        if cookies.get(SESSION_COOKIE):
+            storage.delete_web_session(cookies.get(SESSION_COOKIE, ""))
+        return redirect_with_cookies(
+            start_response,
+            "/cashoperations/login",
+            [
+                f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax",
+                f"{PREVIEW_ROLE_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax",
+                f"{PREVIEW_THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax",
+            ],
+        )
+
     if path == "/logout":
         if cookies.get(SESSION_COOKIE):
             storage.delete_web_session(cookies.get(SESSION_COOKIE, ""))
@@ -14549,14 +14587,29 @@ def app(environ, start_response):
     if path == "/cashoperations/login" and method == "POST":
         form = read_post_data(environ)
         login = form.get("login", "")
+        password = form.get("password", "")
         user = storage.get_web_user_by_login(login)
-        if user is None or not user["is_active"] or not verify_password(form.get("password", ""), user.get("password_hash", "")):
+        if user is None or not user["is_active"] or not verify_password(password, user.get("password_hash", "")):
+            preview_user = storage.get_web_user_by_cash_preview_login(login)
+            preview_hash = storage.get_cash_preview_password_hash(preview_user["id"]) if preview_user else ""
+            if preview_user is not None and preview_user["is_active"] and verify_password(password, preview_hash):
+                user = preview_user
+            else:
+                user = None
+        if user is None:
             html = render_cashoperations_login_page("Неверный логин или пароль.", login)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         token = secrets.token_urlsafe(32)
         storage.create_web_session(user["id"], token)
         return redirect_with_cookie(start_response, "/cashoperations", token)
+
+    if path == "/cashoperations/login" and method == "GET":
+        if current_user is not None:
+            return redirect(start_response, "/cashoperations")
+        html = render_cashoperations_login_page()
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
 
     if path == "/cashoperations" and method == "GET" and current_user is None:
         html = render_cashoperations_login_page()
@@ -14607,6 +14660,8 @@ def app(environ, start_response):
             amount = parse_amount(form.get("amount", "").strip())
             project_code = form.get("project_code", "").strip()
             category_code = form.get("category_code", "").strip()
+            if category_code == "admin":
+                project_code = "admin"
             title = form.get("title", "").strip()
             comment = form.get("comment", "").strip()
             entries = storage.list_expense_entries(current_owner)
@@ -17137,6 +17192,8 @@ def app(environ, start_response):
                 form.get("role", "limited"),
                 form.get("default_cashbox_code", ""),
                 allowed_cashbox_codes,
+                form.get("preview_login", ""),
+                hash_password(form.get("preview_password", "").strip()) if form.get("preview_password", "").strip() else None,
                 form.get("can_view_all_cashboxes") == "1",
                 form.get("can_add_expense") == "1",
                 form.get("can_reconcile") == "1",

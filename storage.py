@@ -959,6 +959,8 @@ class Storage:
                     role TEXT NOT NULL DEFAULT 'limited',
                     default_cashbox_code TEXT NOT NULL DEFAULT '',
                     allowed_cashbox_codes TEXT NOT NULL DEFAULT '',
+                    preview_login TEXT NOT NULL DEFAULT '',
+                    preview_password_hash TEXT NOT NULL DEFAULT '',
                     can_view_all_cashboxes INTEGER NOT NULL DEFAULT 0,
                     can_add_expense INTEGER NOT NULL DEFAULT 0,
                     can_reconcile INTEGER NOT NULL DEFAULT 0,
@@ -991,6 +993,13 @@ class Storage:
             expense_category_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(expense_categories)").fetchall()
             }
+            mobile_cash_access_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(mobile_cash_access)").fetchall()
+            }
+            if "preview_login" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN preview_login TEXT NOT NULL DEFAULT ''")
+            if "preview_password_hash" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN preview_password_hash TEXT NOT NULL DEFAULT ''")
             if "needs_adjustment" not in expense_columns:
                 conn.execute("ALTER TABLE expense_entries ADD COLUMN needs_adjustment INTEGER NOT NULL DEFAULT 0")
             legal_letter_columns = {
@@ -1541,7 +1550,8 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
-                       allowed_cashbox_codes, can_view_all_cashboxes, can_add_expense,
+                       allowed_cashbox_codes, preview_login, preview_password_hash,
+                       can_view_all_cashboxes, can_add_expense,
                        can_reconcile, updated_at
                 FROM mobile_cash_access
                 WHERE owner_chat_id = ? AND user_id IN (
@@ -1566,7 +1576,8 @@ class Storage:
             row = conn.execute(
                 """
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
-                       allowed_cashbox_codes, can_view_all_cashboxes, can_add_expense,
+                       allowed_cashbox_codes, preview_login, preview_password_hash,
+                       can_view_all_cashboxes, can_add_expense,
                        can_reconcile, updated_at
                 FROM mobile_cash_access
                 WHERE user_id = ?
@@ -1584,6 +1595,8 @@ class Storage:
         role: str,
         default_cashbox_code: str,
         allowed_cashbox_codes: list[str],
+        preview_login: str,
+        preview_password_hash: str | None,
         can_view_all_cashboxes: bool,
         can_add_expense: bool,
         can_reconcile: bool,
@@ -1602,21 +1615,36 @@ class Storage:
             normalized_allowed = [item["code"] for item in cashboxes]
         if role not in {"owner", "manager", "limited"}:
             role = "limited"
+        cleaned_preview_login = preview_login.strip().lower()
+        if not cleaned_preview_login:
+            cleaned_preview_login = user.get("login", "").strip().lower()
         with self.connection() as conn:
+            existing = conn.execute(
+                "SELECT preview_password_hash FROM mobile_cash_access WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            stored_preview_password_hash = (
+                preview_password_hash
+                if preview_password_hash is not None
+                else (existing["preview_password_hash"] if existing else "")
+            )
             conn.execute(
                 """
                 INSERT INTO mobile_cash_access (
                     user_id, owner_chat_id, enabled, role, default_cashbox_code,
-                    allowed_cashbox_codes, can_view_all_cashboxes, can_add_expense,
+                    allowed_cashbox_codes, preview_login, preview_password_hash,
+                    can_view_all_cashboxes, can_add_expense,
                     can_reconcile, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     owner_chat_id = excluded.owner_chat_id,
                     enabled = excluded.enabled,
                     role = excluded.role,
                     default_cashbox_code = excluded.default_cashbox_code,
                     allowed_cashbox_codes = excluded.allowed_cashbox_codes,
+                    preview_login = excluded.preview_login,
+                    preview_password_hash = excluded.preview_password_hash,
                     can_view_all_cashboxes = excluded.can_view_all_cashboxes,
                     can_add_expense = excluded.can_add_expense,
                     can_reconcile = excluded.can_reconcile,
@@ -1629,6 +1657,8 @@ class Storage:
                     role,
                     default_cashbox_code,
                     ",".join(normalized_allowed),
+                    cleaned_preview_login,
+                    stored_preview_password_hash,
                     1 if can_view_all_cashboxes else 0,
                     1 if can_add_expense else 0,
                     1 if can_reconcile else 0,
@@ -1636,6 +1666,36 @@ class Storage:
                 ),
             )
         return True
+
+    def get_web_user_by_cash_preview_login(self, login: str) -> dict | None:
+        normalized = login.strip().lower()
+        if not normalized:
+            return None
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT user_id
+                FROM mobile_cash_access
+                WHERE enabled = 1
+                  AND preview_login = ?
+                  AND preview_password_hash != ''
+                  AND user_id IN (SELECT id FROM web_users WHERE is_active = 1)
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (normalized,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self.get_web_user_by_id(int(row["user_id"]))
+
+    def get_cash_preview_password_hash(self, user_id: int) -> str:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT preview_password_hash FROM mobile_cash_access WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        return row["preview_password_hash"] if row else ""
 
     def list_web_users(self, owner_chat_id: int) -> list[dict]:
         with self.connection() as conn:
@@ -6456,6 +6516,8 @@ class Storage:
                 "role": "owner",
                 "default_cashbox_code": "eduard",
                 "allowed_cashbox_codes": ["eduard", "denis"],
+                "preview_login": "eduard",
+                "preview_password_hash": "",
                 "can_view_all_cashboxes": True,
                 "can_add_expense": True,
                 "can_reconcile": True,
@@ -6469,6 +6531,8 @@ class Storage:
                 "role": "manager",
                 "default_cashbox_code": "denis",
                 "allowed_cashbox_codes": ["denis"],
+                "preview_login": "denis",
+                "preview_password_hash": "",
                 "can_view_all_cashboxes": False,
                 "can_add_expense": True,
                 "can_reconcile": True,
@@ -6481,6 +6545,8 @@ class Storage:
             "role": "limited",
             "default_cashbox_code": "denis",
             "allowed_cashbox_codes": [],
+            "preview_login": user.get("login", ""),
+            "preview_password_hash": "",
             "can_view_all_cashboxes": False,
             "can_add_expense": False,
             "can_reconcile": False,
@@ -6495,6 +6561,8 @@ class Storage:
             "role": row["role"],
             "default_cashbox_code": row["default_cashbox_code"],
             "allowed_cashbox_codes": self._split_cashbox_codes(row["allowed_cashbox_codes"]),
+            "preview_login": row["preview_login"],
+            "preview_password_hash": row["preview_password_hash"],
             "can_view_all_cashboxes": bool(row["can_view_all_cashboxes"]),
             "can_add_expense": bool(row["can_add_expense"]),
             "can_reconcile": bool(row["can_reconcile"]),
