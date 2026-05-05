@@ -5916,6 +5916,9 @@ def layout(
     .signed-date-field.is-hidden {{
       display: none;
     }}
+    .employee-termination-field.is-hidden {{
+      display: none;
+    }}
     .action-row {{
       display: flex;
       gap: 10px;
@@ -7442,6 +7445,26 @@ function initExpensesDayCarousel() {{
 }}
 
 document.addEventListener("change", (event) => {{
+  const employeeStatusSelect = event.target.closest('.employee-status-select');
+  if (employeeStatusSelect) {{
+    const form = employeeStatusSelect.closest('form');
+    const dateField = form ? form.querySelector('.employee-termination-field') : null;
+    const dateInput = form ? form.querySelector('input[name="terminated_date"]') : null;
+    const isFired = employeeStatusSelect.value === "0";
+    if (dateField) {{
+      dateField.classList.toggle("is-hidden", !isFired);
+    }}
+    if (dateInput) {{
+      dateInput.required = isFired;
+      if (isFired && !dateInput.value) {{
+        dateInput.value = new Date().toISOString().slice(0, 10);
+      }}
+      if (!isFired) {{
+        dateInput.value = "";
+      }}
+    }}
+    return;
+  }}
   const payrollMonthRemove = event.target.closest('.js-payroll-month-remove');
   if (payrollMonthRemove) {{
     updatePayrollMonthRemoveToolbar();
@@ -8217,6 +8240,42 @@ def render_directories_section(
             for group_code, label in employee_groups.items()
         )
 
+    today_iso = datetime.now(VLADIVOSTOK_TZ).date().isoformat()
+
+    def render_employee_status_control(employee) -> str:
+        date_value = employee.terminated_date.isoformat() if employee.terminated_date else today_iso
+        date_note = (
+            f'<div class="contract-table-subtle" style="text-align:center;">с {format_date(employee.terminated_date)}</div>'
+            if employee.terminated_date else ""
+        )
+        if not can_edit:
+            return f'<span class="chip{" ok" if employee.is_active else " danger"}">{"Активен" if employee.is_active else "Уволен"}</span>{date_note}'
+        return f"""
+        <details class="status-menu directory-edit-menu">
+          <summary>
+            <span class="chip{" ok" if employee.is_active else " danger"}">{"Активен" if employee.is_active else "Уволен"}</span>
+            {date_note}
+          </summary>
+          <form class="status-popover directory-edit-form" method="post" action="/directories/employees/{employee.id}/update?owner={owner_chat_id}&employee_group={active_employee_group}">
+            <input type="hidden" name="full_name" value="{escape(employee.full_name)}">
+            <input type="hidden" name="role_title" value="{escape(employee.role_title)}">
+            <input type="hidden" name="employee_group" value="{escape(employee.employee_group)}">
+            <div class="field">
+              <label>Статус</label>
+              <select class="employee-status-select" name="is_active">
+                <option value="1" {"selected" if employee.is_active else ""}>Активен</option>
+                <option value="0" {"selected" if not employee.is_active else ""}>Уволен</option>
+              </select>
+            </div>
+            <div class="field employee-termination-field{" is-hidden" if employee.is_active else ""}">
+              <label>Дата увольнения</label>
+              <input type="date" name="terminated_date" value="{date_value}" {"required" if not employee.is_active else ""}>
+            </div>
+            <button class="submit-btn" type="submit">Сохранить статус</button>
+          </form>
+        </details>
+        """
+
     employee_rows = "".join(
         f"""
         <tr>
@@ -8244,10 +8303,14 @@ def render_directories_section(
                     </div>
                     <div class="field">
                       <label>Статус</label>
-                      <select name="is_active">
+                      <select class="employee-status-select" name="is_active">
                         <option value="1" {"selected" if employee.is_active else ""}>Активен</option>
                         <option value="0" {"selected" if not employee.is_active else ""}>Уволен</option>
                       </select>
+                    </div>
+                    <div class="field employee-termination-field{" is-hidden" if employee.is_active else ""}">
+                      <label>Дата увольнения</label>
+                      <input type="date" name="terminated_date" value="{employee.terminated_date.isoformat() if employee.terminated_date else today_iso}" {"required" if not employee.is_active else ""}>
                     </div>
                     <button class="submit-btn" type="submit">Сохранить сотрудника</button>
                   </form>
@@ -8257,7 +8320,7 @@ def render_directories_section(
             </div>
           </td>
           <td>{escape(employee.role_title or "Без должности")}</td>
-          <td><span class="chip{" ok" if employee.is_active else " danger"}">{"Активен" if employee.is_active else "Уволен"}</span></td>
+          <td style="text-align:center;">{render_employee_status_control(employee)}</td>
         </tr>
         """
         for index, employee in enumerate(visible_employees, start=1)
@@ -13999,11 +14062,17 @@ def app(environ, start_response):
             role_title = form.get("role_title", "").strip()
             employee_group = form.get("employee_group", active_employee_group).strip()
             is_active = form.get("is_active") == "1"
+            terminated_date_raw = form.get("terminated_date", "").strip()
+            terminated_date = None
+            if not is_active:
+                if not terminated_date_raw:
+                    raise ValueError("Укажите дату увольнения")
+                terminated_date = parse_date(terminated_date_raw)
             if not full_name:
                 raise ValueError("Укажите ФИО сотрудника")
             if not role_title:
                 raise ValueError("Укажите должность")
-            if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, employee_group, is_active):
+            if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, employee_group, is_active, terminated_date):
                 raise ValueError("Сотрудник не найден")
             return redirect(start_response, f"/directories?owner={current_owner}&employee_group={employee_group}#directory-employees")
         except Exception as exc:
