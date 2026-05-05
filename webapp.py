@@ -8121,9 +8121,15 @@ def render_directories_section(
     storage: Storage,
     owner_chat_id: int,
     current_user: dict | None,
+    active_employee_group: str = "admin",
     flash_message: str = "",
     success: bool = False,
 ) -> str:
+    employee_groups = {
+        "admin": "Административные",
+        "builders": "Строители",
+    }
+    active_employee_group = active_employee_group if active_employee_group in employee_groups else "admin"
     can_edit = has_permission(current_user, "directories", "edit")
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     contracts = storage.list_contracts(owner_chat_id)
@@ -8191,16 +8197,37 @@ def render_directories_section(
         """
 
     employees = storage.list_payroll_employees(owner_chat_id)
+    employee_group_counts = {
+        group_code: sum(1 for employee in employees if employee.employee_group == group_code)
+        for group_code in employee_groups
+    }
+    employee_group_tabs = "".join(
+        f"""
+        <a class="tab-btn{" active" if active_employee_group == group_code else ""}" href="/directories?owner={owner_chat_id}&employee_group={group_code}#directory-employees">
+          {escape(label)}
+          <span class="tab-count">{employee_group_counts.get(group_code, 0)}</span>
+        </a>
+        """
+        for group_code, label in employee_groups.items()
+    )
+    visible_employees = [employee for employee in employees if employee.employee_group == active_employee_group]
+    def employee_group_options(selected_group: str) -> str:
+        return "".join(
+            f'<option value="{group_code}" {"selected" if selected_group == group_code else ""}>{escape(label)}</option>'
+            for group_code, label in employee_groups.items()
+        )
+
     employee_rows = "".join(
         f"""
         <tr>
+          <td class="nowrap">{index}</td>
           <td>
             <div class="timeline-title">
               {f'''
               <details class="status-menu directory-edit-menu">
                 <summary><span class="directory-title-link">{escape(employee.full_name)}</span></summary>
                 <div class="status-popover" style="min-width:520px;">
-                  <form class="form-grid directory-edit-form" method="post" action="/directories/employees/{employee.id}/update?owner={owner_chat_id}">
+                  <form class="form-grid directory-edit-form" method="post" action="/directories/employees/{employee.id}/update?owner={owner_chat_id}&employee_group={active_employee_group}">
                     <div class="field">
                       <label>ФИО</label>
                       <input type="text" name="full_name" value="{escape(employee.full_name)}" required>
@@ -8209,29 +8236,39 @@ def render_directories_section(
                       <label>Должность</label>
                       <input type="text" name="role_title" value="{escape(employee.role_title)}" required>
                     </div>
-                    <label class="advance-toggle" style="align-self:end;">
-                      <input class="toggle-checkbox" type="checkbox" name="is_active" value="1" {"checked" if employee.is_active else ""}> Активен
-                    </label>
+                    <div class="field">
+                      <label>Группа</label>
+                      <select name="employee_group">
+                        {employee_group_options(employee.employee_group)}
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label>Статус</label>
+                      <select name="is_active">
+                        <option value="1" {"selected" if employee.is_active else ""}>Активен</option>
+                        <option value="0" {"selected" if not employee.is_active else ""}>Уволен</option>
+                      </select>
+                    </div>
                     <button class="submit-btn" type="submit">Сохранить сотрудника</button>
                   </form>
                 </div>
               </details>
               ''' if can_edit else escape(employee.full_name)}
             </div>
-            <div class="contract-table-subtle">{escape(employee.role_title or "Без должности")}</div>
           </td>
-          <td><span class="chip{" ok" if employee.is_active else ""}">{"Активен" if employee.is_active else "Неактивен"}</span></td>
+          <td>{escape(employee.role_title or "Без должности")}</td>
+          <td><span class="chip{" ok" if employee.is_active else " danger"}">{"Активен" if employee.is_active else "Уволен"}</span></td>
         </tr>
         """
-        for employee in employees
-    ) or '<tr><td colspan="2">Сотрудников пока нет.</td></tr>'
+        for index, employee in enumerate(visible_employees, start=1)
+    ) or '<tr><td colspan="4">Сотрудников в этой группе пока нет.</td></tr>'
     add_employee_block = ""
     if can_edit:
         add_employee_block = f"""
         <details class="status-menu">
           <summary><span class="secondary-btn">Добавить сотрудника</span></summary>
           <div class="status-popover align-right" style="min-width:520px;">
-            <form class="form-grid" method="post" action="/directories/employees/new?owner={owner_chat_id}">
+            <form class="form-grid" method="post" action="/directories/employees/new?owner={owner_chat_id}&employee_group={active_employee_group}">
               <div class="field">
                 <label>ФИО</label>
                 <input type="text" name="full_name" placeholder="Имя сотрудника" required>
@@ -8239,6 +8276,12 @@ def render_directories_section(
               <div class="field">
                 <label>Должность / роль</label>
                 <input type="text" name="role_title" placeholder="Например, юрист / прораб / снабженец" required>
+              </div>
+              <div class="field">
+                <label>Группа</label>
+                <select name="employee_group">
+                  {employee_group_options(active_employee_group)}
+                </select>
               </div>
               <button class="submit-btn" type="submit">Добавить сотрудника</button>
             </form>
@@ -8266,7 +8309,7 @@ def render_directories_section(
         <tbody>{object_rows}</tbody>
       </table>
     </section>
-    <section class="card panel">
+    <section class="card panel" id="directory-employees">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Справочник сотрудников</h2>
@@ -8274,10 +8317,15 @@ def render_directories_section(
         </div>
         {add_employee_block}
       </div>
+      <div class="tab-row" style="justify-content:flex-start; margin: 6px 0 18px;">
+        {employee_group_tabs}
+      </div>
       <table class="table contract-table">
         <thead>
           <tr>
+            <th class="nowrap">№</th>
             <th>Сотрудник</th>
+            <th>Должность</th>
             <th class="nowrap">Статус</th>
           </tr>
         </thead>
@@ -13865,7 +13913,8 @@ def app(environ, start_response):
         denied = guard("directories", "view")
         if denied:
             return denied
-        body = render_directories_section(storage, current_owner, current_user)
+        active_employee_group = query.get("employee_group", ["admin"])[0]
+        body = render_directories_section(storage, current_owner, current_user, active_employee_group)
         html = layout("Справочники", body, owners, current_owner, "directories", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -13889,7 +13938,7 @@ def app(environ, start_response):
                 raise ValueError("Не удалось сохранить объект")
             return redirect(start_response, f"/directories?owner={current_owner}")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, f"Не удалось добавить объект: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось добавить объект: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -13908,7 +13957,7 @@ def app(environ, start_response):
                 raise ValueError("Объект не найден или уже существует")
             return redirect(start_response, f"/directories?owner={current_owner}")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, f"Не удалось обновить объект: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось обновить объект: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -13917,18 +13966,20 @@ def app(environ, start_response):
         denied = guard("directories", "edit")
         if denied:
             return denied
+        active_employee_group = query.get("employee_group", ["admin"])[0]
         form = read_post_data(environ)
         try:
             full_name = form.get("full_name", "").strip()
             role_title = form.get("role_title", "").strip()
+            employee_group = form.get("employee_group", active_employee_group).strip()
             if not full_name:
                 raise ValueError("Укажите ФИО сотрудника")
             if not role_title:
                 raise ValueError("Укажите должность")
-            storage.add_payroll_employee(current_owner, full_name, role_title)
-            return redirect(start_response, f"/directories?owner={current_owner}")
+            storage.add_payroll_employee(current_owner, full_name, role_title, employee_group)
+            return redirect(start_response, f"/directories?owner={current_owner}&employee_group={employee_group}#directory-employees")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, f"Не удалось добавить сотрудника: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, active_employee_group, f"Не удалось добавить сотрудника: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -13941,20 +13992,22 @@ def app(environ, start_response):
             employee_id = int(path.split("/")[3])
         except (ValueError, IndexError):
             employee_id = -1
+        active_employee_group = query.get("employee_group", ["admin"])[0]
         form = read_post_data(environ)
         try:
             full_name = form.get("full_name", "").strip()
             role_title = form.get("role_title", "").strip()
+            employee_group = form.get("employee_group", active_employee_group).strip()
             is_active = form.get("is_active") == "1"
             if not full_name:
                 raise ValueError("Укажите ФИО сотрудника")
             if not role_title:
                 raise ValueError("Укажите должность")
-            if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, is_active):
+            if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, employee_group, is_active):
                 raise ValueError("Сотрудник не найден")
-            return redirect(start_response, f"/directories?owner={current_owner}")
+            return redirect(start_response, f"/directories?owner={current_owner}&employee_group={employee_group}#directory-employees")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, f"Не удалось обновить сотрудника: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, active_employee_group, f"Не удалось обновить сотрудника: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]

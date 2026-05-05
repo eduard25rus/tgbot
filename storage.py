@@ -253,6 +253,7 @@ class PayrollEmployee:
     owner_chat_id: int
     full_name: str
     role_title: str
+    employee_group: str
     is_active: bool
     created_at: datetime
 
@@ -771,6 +772,7 @@ class Storage:
                     owner_chat_id INTEGER NOT NULL,
                     full_name TEXT NOT NULL,
                     role_title TEXT NOT NULL DEFAULT '',
+                    employee_group TEXT NOT NULL DEFAULT 'admin',
                     is_active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     UNIQUE(owner_chat_id, full_name, role_title)
@@ -865,6 +867,9 @@ class Storage:
             }
             payroll_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(payroll_entries)").fetchall()
+            }
+            payroll_employee_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(payroll_employees)").fetchall()
             }
             payable_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(payables)").fetchall()
@@ -990,6 +995,16 @@ class Storage:
             for column_name, column_def in payroll_alters:
                 if column_name not in payroll_columns:
                     conn.execute(f"ALTER TABLE payroll_entries ADD COLUMN {column_name} {column_def}")
+            if "employee_group" not in payroll_employee_columns:
+                conn.execute("ALTER TABLE payroll_employees ADD COLUMN employee_group TEXT NOT NULL DEFAULT 'admin'")
+                conn.execute(
+                    """
+                    UPDATE payroll_employees
+                    SET employee_group = 'builders'
+                    WHERE full_name = 'Хасан'
+                       OR full_name LIKE 'Алимов Анвар%'
+                    """
+                )
             if "deleted_at" not in payable_columns:
                 conn.execute("ALTER TABLE payables ADD COLUMN deleted_at TEXT")
             finance_alters = [
@@ -4204,31 +4219,32 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, full_name, role_title, is_active, created_at
+                SELECT id, owner_chat_id, full_name, role_title, employee_group, is_active, created_at
                 FROM payroll_employees
                 WHERE owner_chat_id = ?
-                ORDER BY is_active DESC, id ASC
+                ORDER BY employee_group ASC, is_active DESC, id ASC
                 """,
                 (owner_chat_id,),
             ).fetchall()
         return [self._payroll_employee_from_row(row) for row in rows]
 
-    def add_payroll_employee(self, owner_chat_id: int, full_name: str, role_title: str) -> int:
+    def add_payroll_employee(self, owner_chat_id: int, full_name: str, role_title: str, employee_group: str = "admin") -> int:
         with self.connection() as conn:
-            return self._ensure_payroll_employee(conn, owner_chat_id, full_name.strip(), role_title.strip())
+            return self._ensure_payroll_employee(conn, owner_chat_id, full_name.strip(), role_title.strip(), employee_group)
 
-    def update_payroll_employee(self, owner_chat_id: int, employee_id: int, full_name: str, role_title: str, is_active: bool) -> bool:
+    def update_payroll_employee(self, owner_chat_id: int, employee_id: int, full_name: str, role_title: str, employee_group: str, is_active: bool) -> bool:
         cleaned_name = full_name.strip()
         if not cleaned_name:
             return False
+        cleaned_group = employee_group if employee_group in {"admin", "builders"} else "admin"
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE payroll_employees
-                SET full_name = ?, role_title = ?, is_active = ?
+                SET full_name = ?, role_title = ?, employee_group = ?, is_active = ?
                 WHERE id = ? AND owner_chat_id = ?
                 """,
-                (cleaned_name, role_title.strip(), 1 if is_active else 0, employee_id, owner_chat_id),
+                (cleaned_name, role_title.strip(), cleaned_group, 1 if is_active else 0, employee_id, owner_chat_id),
             )
             return cursor.rowcount > 0
 
@@ -4370,7 +4386,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, full_name, role_title, is_active, created_at
+                SELECT id, owner_chat_id, full_name, role_title, employee_group, is_active, created_at
                 FROM payroll_employees
                 WHERE owner_chat_id = ?
                   AND is_active = 1
@@ -4521,6 +4537,7 @@ class Storage:
             owner_chat_id=int(row["owner_chat_id"]),
             full_name=row["full_name"],
             role_title=row["role_title"] or "",
+            employee_group=row["employee_group"] if "employee_group" in row.keys() and row["employee_group"] else "admin",
             is_active=bool(row["is_active"]),
             created_at=datetime.fromisoformat(row["created_at"]),
         )
@@ -4550,7 +4567,8 @@ class Storage:
             note=row["note"] or "",
         )
 
-    def _ensure_payroll_employee(self, conn: sqlite3.Connection, owner_chat_id: int, full_name: str, role_title: str) -> int:
+    def _ensure_payroll_employee(self, conn: sqlite3.Connection, owner_chat_id: int, full_name: str, role_title: str, employee_group: str = "admin") -> int:
+        cleaned_group = employee_group if employee_group in {"admin", "builders"} else "admin"
         existing = conn.execute(
             """
             SELECT id
@@ -4564,15 +4582,23 @@ class Storage:
             return int(existing["id"])
         cursor = conn.execute(
             """
-            INSERT INTO payroll_employees (owner_chat_id, full_name, role_title, is_active, created_at)
-            VALUES (?, ?, ?, 1, ?)
+            INSERT INTO payroll_employees (owner_chat_id, full_name, role_title, employee_group, is_active, created_at)
+            VALUES (?, ?, ?, ?, 1, ?)
             """,
-            (owner_chat_id, full_name, role_title, datetime.utcnow().isoformat()),
+            (owner_chat_id, full_name, role_title, cleaned_group, datetime.utcnow().isoformat()),
         )
         return int(cursor.lastrowid)
 
     def _ensure_payroll_hasan(self, conn: sqlite3.Connection, owner_chat_id: int) -> None:
-        employee_id = self._ensure_payroll_employee(conn, owner_chat_id, "Хасан", "")
+        employee_id = self._ensure_payroll_employee(conn, owner_chat_id, "Хасан", "", "builders")
+        conn.execute(
+            """
+            UPDATE payroll_employees
+            SET employee_group = 'builders'
+            WHERE owner_chat_id = ? AND id = ?
+            """,
+            (owner_chat_id, employee_id),
+        )
         for month_key in ("2026-01", "2026-02", "2026-03"):
             month_date = date.fromisoformat(f"{month_key}-01")
             exists = conn.execute(
