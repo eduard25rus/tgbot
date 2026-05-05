@@ -5433,7 +5433,7 @@ def layout(
       width: 150px;
     }}
     .jurisprudence-letters-table .object-col {{
-      width: 230px;
+      width: 205px;
     }}
     .jurisprudence-letters-table .files-col {{
       width: 210px;
@@ -7930,8 +7930,8 @@ def render_jurisprudence_letters_section(
         f"""
         <tr>
           <td style="text-align:center;">
-            <div class="jurisprudence-letter-date">{format_date(letter.letter_date)}</div>
             {f'<div class="jurisprudence-new-badge">NEW</div>' if letter.letter_date == today else ''}
+            <div class="jurisprudence-letter-date">{format_date(letter.letter_date)}</div>
             <span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span>
             <div class="contract-table-subtle">{escape(LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта"))}</div>
           </td>
