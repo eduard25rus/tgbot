@@ -11798,7 +11798,7 @@ def render_cashoperations_body(
             comment = cleaned
 
     def operation_card(kind: str, entry) -> str:
-        title = "Пополнение из банка" if kind == "income" else entry.title
+        title = (entry.title or "Пополнение кассы") if kind == "income" else entry.title
         category = "Вывод в кассу" if kind == "income" else expense_category_label(entry.category_code, category_labels)
         comment = editable_comment(entry)
         if not comment:
@@ -11914,6 +11914,38 @@ def render_cashoperations_body(
             </label>
             <button type="submit" data-cash-expense-submit>Сохранить расход</button>
             <button class="danger" type="submit" formaction="/cashoperations/expense/delete" data-cash-expense-delete hidden>Удалить расход</button>
+          </form>
+        </section>
+        """
+
+    income_screen = '<div class="cash-mobile-empty">Нет прав на добавление поступлений.</div>'
+    if can_edit:
+        income_screen = f"""
+        <section class="cash-mobile-panel">
+          <div class="cash-mobile-section-head"><h2>Добавить поступление</h2></div>
+          <form class="cash-mobile-form" method="post" action="/cashoperations/income">
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <input type="hidden" name="request_key" value="{secrets.token_urlsafe(18)}">
+            <label>Сумма
+              <input type="text" name="amount" inputmode="decimal" placeholder="0" required>
+            </label>
+            <label>Источник
+              <select name="source">
+                <option value="bank">Расчетный счет</option>
+                <option value="owner">Эдуард / владелец</option>
+                <option value="partner">Денис / партнер</option>
+                <option value="loan">Займ</option>
+                <option value="return">Возврат</option>
+                <option value="other">Другое</option>
+              </select>
+            </label>
+            <label>Дата
+              <input type="date" name="expense_date" value="{today.isoformat()}" required>
+            </label>
+            <label>Комментарий
+              <textarea name="comment" placeholder="Откуда поступили деньги"></textarea>
+            </label>
+            <button type="submit">Сохранить поступление</button>
           </form>
         </section>
         """
@@ -12246,9 +12278,9 @@ def render_cashoperations_body(
         </section>
         <div class="cash-mobile-actions">
           <button class="cash-mobile-action primary" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
-          <button class="cash-mobile-action secondary" type="button" data-cash-screen="reconcile">Сверить кассу</button>
+          <button class="cash-mobile-action secondary" type="button" data-cash-screen="income">Добавить поступление</button>
           <button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>
-          <button class="cash-mobile-action" type="button" data-cash-screen="history">Все расходы</button>
+          <button class="cash-mobile-action" type="button" data-cash-screen="reconcile">Сверить кассу</button>
         </div>
         <section class="cash-mobile-panel">
           <div class="cash-mobile-section-head"><h2>Последние операции</h2></div>
@@ -12256,6 +12288,7 @@ def render_cashoperations_body(
         </section>
       </section>
       <section id="cashScreenExpense" class="cash-mobile-screen">{expense_screen}</section>
+      <section id="cashScreenIncome" class="cash-mobile-screen">{income_screen}</section>
       <section id="cashScreenHistory" class="cash-mobile-screen">
         <section class="cash-mobile-panel">
           <div class="cash-mobile-section-head"><h2>История операций</h2></div>
@@ -12275,6 +12308,7 @@ def render_cashoperations_body(
         const screens = {{
           home: document.querySelector("#cashScreenHome"),
           expense: document.querySelector("#cashScreenExpense"),
+          income: document.querySelector("#cashScreenIncome"),
           history: document.querySelector("#cashScreenHistory"),
           reconcile: document.querySelector("#cashScreenReconcile")
         }};
@@ -12286,6 +12320,7 @@ def render_cashoperations_body(
           window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
         const expenseForm = document.querySelector(".cash-mobile-form[action='/cashoperations/expense']");
+        const incomeForm = document.querySelector(".cash-mobile-form[action='/cashoperations/income']");
         const expenseHeading = document.querySelector("[data-cash-expense-title]");
         const expenseSubmit = document.querySelector("[data-cash-expense-submit]");
         const expenseDelete = document.querySelector("[data-cash-expense-delete]");
@@ -12302,6 +12337,9 @@ def render_cashoperations_body(
         const receiptInput = document.querySelector("[data-cash-receipt]");
         const receiptLabel = document.querySelector("[data-cash-receipt-label]");
         let editBackScreen = "history";
+        let formDirty = false;
+        let isSubmitting = false;
+        const loadedAt = Date.now();
         function randomKey() {{
           if (window.crypto && crypto.getRandomValues) {{
             const bytes = new Uint8Array(12);
@@ -12319,6 +12357,24 @@ def render_cashoperations_body(
         }}
         function showEditbar(showBack) {{
           if (editbar) editbar.classList.toggle("is-hidden", !showBack);
+        }}
+        function canRefresh() {{
+          if (isSubmitting) return false;
+          if (expenseIdInput && expenseIdInput.value) return false;
+          if (activeScreenName() === "income") return false;
+          return !(activeScreenName() === "expense" && formDirty);
+        }}
+        function refreshCash(screenName) {{
+          if (!canRefresh()) return false;
+          try {{
+            sessionStorage.setItem("cashNextScreen", screenName || activeScreenName());
+          }} catch (_err) {{}}
+          window.location.reload();
+          return true;
+        }}
+        function refreshIfStale(screenName, minAgeMs) {{
+          if (Date.now() - loadedAt < minAgeMs) return false;
+          return refreshCash(screenName);
         }}
         function syncAdminProject() {{
           if (!categorySelect || !projectSelect) return;
@@ -12348,6 +12404,7 @@ def render_cashoperations_body(
           if (expenseDelete) expenseDelete.hidden = true;
           if (receiptLabel) receiptLabel.textContent = "Выбрать фото чека";
           showEditbar(false);
+          formDirty = false;
           syncAdminProject();
         }}
         function editExpense(button) {{
@@ -12367,6 +12424,7 @@ def render_cashoperations_body(
           if (expenseDelete) expenseDelete.hidden = false;
           if (receiptLabel) receiptLabel.textContent = "Заменить чек";
           showEditbar(true);
+          formDirty = false;
           syncAdminProject();
           show("expense");
         }}
@@ -12374,6 +12432,7 @@ def render_cashoperations_body(
           button.addEventListener("click", () => {{
             clearNotice();
             if (button.dataset.cashNewExpense) resetExpenseForm();
+            if (!button.dataset.cashNewExpense && refreshIfStale(button.dataset.cashScreen, 5000)) return;
             if (button.dataset.cashScreen !== "expense") showEditbar(false);
             show(button.dataset.cashScreen);
           }});
@@ -12389,18 +12448,46 @@ def render_cashoperations_body(
           const file = receiptInput.files && receiptInput.files[0];
           if (receiptLabel) receiptLabel.textContent = file ? file.name : "Выбрать фото чека";
         }});
+        expenseForm && expenseForm.addEventListener("input", () => {{
+          formDirty = true;
+        }});
+        expenseForm && expenseForm.addEventListener("change", () => {{
+          formDirty = true;
+        }});
         expenseForm && expenseForm.addEventListener("submit", (event) => {{
           const submitter = event.submitter;
           if (submitter && submitter.dataset.cashExpenseDelete && !confirm("Удалить расход?")) {{
             event.preventDefault();
             return;
           }}
+          isSubmitting = true;
           expenseForm.querySelectorAll("button").forEach((button) => {{
             button.disabled = true;
           }});
           if (submitter) submitter.textContent = submitter.dataset.cashExpenseDelete ? "Удаляем..." : "Сохраняем...";
         }});
+        incomeForm && incomeForm.addEventListener("submit", () => {{
+          isSubmitting = true;
+          incomeForm.querySelectorAll("button").forEach((button) => {{
+            button.disabled = true;
+            button.textContent = "Сохраняем...";
+          }});
+        }});
         syncAdminProject();
+        try {{
+          const nextScreen = sessionStorage.getItem("cashNextScreen");
+          if (nextScreen && screens[nextScreen]) {{
+            sessionStorage.removeItem("cashNextScreen");
+            show(nextScreen);
+          }}
+        }} catch (_err) {{}}
+        document.addEventListener("visibilitychange", () => {{
+          if (!document.hidden) refreshIfStale(activeScreenName(), 10000);
+        }});
+        window.addEventListener("focus", () => refreshIfStale(activeScreenName(), 10000));
+        setInterval(() => {{
+          if (!document.hidden && activeScreenName() !== "expense") refreshCash(activeScreenName());
+        }}, 30000);
       }})();
     </script>
     """
@@ -14836,7 +14923,10 @@ def app(environ, start_response):
                 user = None
         if user is None:
             html = render_cashoperations_login_page("Неверный логин или пароль.", login)
-            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            start_response("200 OK", [
+                ("Content-Type", "text/html; charset=utf-8"),
+                ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
+            ])
             return [html.encode("utf-8")]
         token = secrets.token_urlsafe(32)
         storage.create_web_session(user["id"], token)
@@ -14846,12 +14936,18 @@ def app(environ, start_response):
         if current_user is not None:
             return redirect(start_response, "/cashoperations")
         html = render_cashoperations_login_page()
-        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        start_response("200 OK", [
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
+        ])
         return [html.encode("utf-8")]
 
     if path == "/cashoperations" and method == "GET" and current_user is None:
         html = render_cashoperations_login_page()
-        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        start_response("200 OK", [
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
+        ])
         return [html.encode("utf-8")]
 
     if current_user is None:
@@ -14876,8 +14972,62 @@ def app(environ, start_response):
         success = query.get("ok", ["0"])[0] == "1"
         body = render_cashoperations_body(storage, current_owner, current_user, selected_cashbox, flash_message, success)
         html = render_cashoperations_standalone_page(body, current_user)
-        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        start_response("200 OK", [
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
+        ])
         return [html.encode("utf-8")]
+
+    if path == "/cashoperations/income" and method == "POST":
+        form = read_post_data(environ)
+        cashboxes = storage.list_cashbox_directory(current_owner)
+        cashbox_labels = {item["code"]: item["label"] for item in cashboxes}
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        if not cash_access or not cash_access["enabled"] or not cash_access["can_add_expense"]:
+            return redirect(start_response, "/cashoperations?flash=Нет прав на добавление поступлений")
+        selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
+        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        if selected_cashbox not in allowed_codes:
+            selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (next(iter(allowed_codes), ""))
+        source_labels = {
+            "bank": "Расчетный счет",
+            "owner": "Эдуард / владелец",
+            "partner": "Денис / партнер",
+            "loan": "Займ",
+            "return": "Возврат",
+            "other": "Другое",
+        }
+        try:
+            expense_date_raw = form.get("expense_date", "").strip()
+            expense_date = parse_date(expense_date_raw) if expense_date_raw else None
+            if expense_date is None:
+                raise ValueError("Укажите дату поступления")
+            amount = parse_amount(form.get("amount", "").strip())
+            source = form.get("source", "other").strip()
+            source_label = source_labels.get(source, "Другое")
+            comment = form.get("comment", "").strip()
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            cashbox_marker = f"[{cashbox_labels.get(selected_cashbox, 'Касса')}]"
+            source_marker = f"[Источник: {source_label}]"
+            normalized_comment = " ".join(part for part in (cashbox_marker, source_marker, comment) if part)
+            storage.add_expense_entry(
+                current_owner,
+                expense_date,
+                "admin",
+                CASH_WITHDRAWAL_CATEGORY_CODE,
+                f"Пополнение кассы: {source_label}",
+                amount,
+                normalized_comment,
+                "bank",
+                False,
+                (current_user or {}).get("id"),
+                actor_name,
+                client_request_key=form.get("request_key", ""),
+            )
+            flash = "Поступление добавлено в кассу."
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
+        except ValueError as exc:
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
 
     if path == "/cashoperations/expense" and method == "POST":
         if "multipart/form-data" in (environ.get("CONTENT_TYPE", "") or ""):
