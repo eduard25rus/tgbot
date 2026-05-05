@@ -926,6 +926,19 @@ class Storage:
                     updated_at TEXT NOT NULL,
                     UNIQUE(owner_chat_id, code)
                 );
+
+                CREATE TABLE IF NOT EXISTS cash_reconciliations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    cashbox_code TEXT NOT NULL DEFAULT '',
+                    user_id INTEGER,
+                    user_name TEXT NOT NULL DEFAULT '',
+                    crm_balance REAL NOT NULL DEFAULT 0,
+                    actual_balance REAL NOT NULL DEFAULT 0,
+                    difference REAL NOT NULL DEFAULT 0,
+                    comment TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             columns = {
@@ -5293,6 +5306,68 @@ class Storage:
                 (owner_chat_id, 1 if include_deleted else 0),
             ).fetchall()
         return [self._expense_entry_from_row(row) for row in rows]
+
+    def add_cash_reconciliation(
+        self,
+        owner_chat_id: int,
+        cashbox_code: str,
+        user_id: int | None,
+        user_name: str,
+        crm_balance: float,
+        actual_balance: float,
+        comment: str,
+    ) -> int:
+        difference = round(actual_balance - crm_balance, 2)
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO cash_reconciliations (
+                    owner_chat_id, cashbox_code, user_id, user_name,
+                    crm_balance, actual_balance, difference, comment, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_chat_id,
+                    cashbox_code.strip(),
+                    user_id,
+                    user_name.strip(),
+                    round(crm_balance, 2),
+                    round(actual_balance, 2),
+                    difference,
+                    comment.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def latest_cash_reconciliation(self, owner_chat_id: int, cashbox_code: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, owner_chat_id, cashbox_code, user_id, user_name,
+                       crm_balance, actual_balance, difference, comment, created_at
+                FROM cash_reconciliations
+                WHERE owner_chat_id = ? AND cashbox_code = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (owner_chat_id, cashbox_code.strip()),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "owner_chat_id": int(row["owner_chat_id"]),
+            "cashbox_code": row["cashbox_code"],
+            "user_id": int(row["user_id"]) if row["user_id"] is not None else None,
+            "user_name": row["user_name"],
+            "crm_balance": float(row["crm_balance"]),
+            "actual_balance": float(row["actual_balance"]),
+            "difference": float(row["difference"]),
+            "comment": row["comment"],
+            "created_at": datetime.fromisoformat(row["created_at"]),
+        }
 
     def add_expense_entry(
         self,

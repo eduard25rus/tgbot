@@ -11692,6 +11692,7 @@ def render_cashoperations_body(
         f'<option value="{code}">{escape(label)}</option>'
         for code, label in category_options_list
     )
+    category_labels = dict(category_options_list)
 
     cash_income_entries = [
         entry
@@ -11713,6 +11714,7 @@ def render_cashoperations_body(
     today_income = sum(entry.amount for entry in cash_income_entries if entry.expense_date == today)
     today_expense = sum(entry.amount for entry in cash_expense_entries if entry.expense_date == today)
     start_balance = balance - today_income + today_expense
+    latest_reconciliation = storage.latest_cash_reconciliation(owner_chat_id, selected_cashbox)
     missing_scope_entries = [
         entry for entry in entries
         if (
@@ -11729,18 +11731,29 @@ def render_cashoperations_body(
     ]
     operations.sort(key=lambda item: (item[1].expense_date, item[1].created_at, item[1].id), reverse=True)
     latest_operations = operations[:14]
-    operation_rows = "".join(
-        f"""
+
+    def operation_card(kind: str, entry) -> str:
+        title = "Пополнение из банка" if kind == "income" else entry.title
+        category = "Вывод в кассу" if kind == "income" else expense_category_label(entry.category_code, category_labels)
+        comment = entry.comment if entry.comment else ("Вывод денежных средств в кассу" if kind == "income" else "Без комментария")
+        return f"""
         <article class="cash-mobile-op">
           <div>
-            <strong>{escape('Пополнение из банка' if kind == 'income' else entry.title)}</strong>
-            <span>{escape(format_date(entry.expense_date))} · {escape(expense_category_label(entry.category_code, dict(category_options_list)) if kind == 'expense' else 'Вывод в кассу')}</span>
-            <span>{escape(entry.comment) if entry.comment else ('Вывод денежных средств в кассу' if kind == 'income' else 'Без комментария')}</span>
+            <strong>{escape(title)}</strong>
+            <span>{escape(format_date(entry.expense_date))} · {escape(category)}</span>
+            <span>{escape(comment)}</span>
           </div>
           <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
         </article>
         """
-        for kind, entry in latest_operations
+
+    latest_rows = "".join(
+        operation_card(kind, entry)
+        for kind, entry in latest_operations[:8]
+    ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
+    history_rows = "".join(
+        operation_card(kind, entry)
+        for kind, entry in operations
     ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
 
     cashbox_tabs = "".join(
@@ -11748,17 +11761,27 @@ def render_cashoperations_body(
         for code, label in CASHBOX_OPTIONS
     )
     flash_html = f'<div class="cash-mobile-flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
-    warning_html = (
-        f'<div class="cash-mobile-warning">Есть операции кассы без понятного получателя: {len(missing_scope_entries)}. Их нужно уточнить в CRM, чтобы они попали в нужную кассу.</div>'
-        if missing_scope_entries
-        else ""
-    )
+    warnings = []
+    if missing_scope_entries:
+        warnings.append(f"Есть операции кассы без понятного получателя: {len(missing_scope_entries)}. Их нужно уточнить в CRM, чтобы они попали в нужную кассу.")
+    if latest_reconciliation and abs(float(latest_reconciliation["difference"])) > 0.009:
+        warnings.append(f"По последней сверке есть расхождение: {format_amount(float(latest_reconciliation['difference']))}.")
+    warning_html = "".join(f'<div class="cash-mobile-warning">{escape(text)}</div>' for text in warnings)
+    latest_reconciliation_html = ""
+    if latest_reconciliation:
+        latest_reconciliation_html = (
+            f'<div class="cash-mobile-sub" style="margin-top:10px;">'
+            f'Последняя сверка: {escape(format_date(latest_reconciliation["created_at"].date()))}, '
+            f'факт {escape(format_amount(latest_reconciliation["actual_balance"]))}, '
+            f'разница {escape(format_amount(latest_reconciliation["difference"]))}</div>'
+        )
+
     can_edit = has_permission(current_user, "expenses", "edit")
-    add_form = ""
+    expense_screen = '<div class="cash-mobile-empty">Нет прав на добавление расходов.</div>'
     if can_edit:
-        add_form = f"""
+        expense_screen = f"""
         <section class="cash-mobile-panel">
-          <h2>Добавить расход</h2>
+          <div class="cash-mobile-section-head"><h2>Добавить расход</h2></div>
           <form class="cash-mobile-form" method="post" action="/cashoperations/expense">
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
             <label>Сумма
@@ -11784,12 +11807,32 @@ def render_cashoperations_body(
         </section>
         """
 
+    reconcile_screen = f"""
+    <section class="cash-mobile-panel">
+      <div class="cash-mobile-section-head"><h2>Сверить кассу</h2></div>
+      <form class="cash-mobile-form" method="post" action="/cashoperations/reconcile">
+        <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+        <label>Остаток по CRM
+          <input type="text" value="{escape(format_amount(balance))}" readonly>
+        </label>
+        <label>Фактический остаток на руках
+          <input type="text" name="actual_balance" inputmode="decimal" placeholder="0" required>
+        </label>
+        <label>Комментарий
+          <textarea name="comment" placeholder="Если есть расхождение, что известно"></textarea>
+        </label>
+        <button type="submit">Сохранить сверку</button>
+      </form>
+      {latest_reconciliation_html}
+    </section>
+    """
+
     return f"""
     <style>
       .cash-mobile {{
         max-width: 560px;
         margin: 0 auto;
-        padding: 0 0 28px;
+        padding: 12px 0 92px;
       }}
       .cash-mobile * {{ box-sizing: border-box; }}
       .cash-mobile-tabs {{
@@ -11801,7 +11844,7 @@ def render_cashoperations_body(
       .cash-mobile-tab {{
         min-height: 42px;
         border: 1px solid var(--line);
-        border-radius: 12px;
+        border-radius: 8px;
         display: grid;
         place-items: center;
         text-decoration: none;
@@ -11810,24 +11853,27 @@ def render_cashoperations_body(
         font-weight: 700;
       }}
       .cash-mobile-tab.active {{
-        color: var(--ink);
-        background: rgba(232,246,238,.95);
-        border-color: rgba(29,92,99,.24);
+        color: #186844;
+        background: #e3f2e9;
+        border-color: rgba(24, 104, 68, .18);
       }}
+      .cash-mobile-screen {{ display: none; }}
+      .cash-mobile-screen.active {{ display: block; }}
       .cash-mobile-panel {{
-        background: rgba(255,255,255,.88);
+        background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 18px;
+        border-radius: 8px;
         padding: 16px;
         margin-top: 14px;
-        box-shadow: 0 14px 36px rgba(22, 35, 47, .08);
+        box-shadow: 0 10px 28px rgba(27, 34, 28, .08);
       }}
       .cash-mobile-balance {{
-        font-size: clamp(36px, 12vw, 54px);
+        font-size: clamp(34px, 11vw, 48px);
         line-height: 1;
         letter-spacing: 0;
         font-weight: 800;
         margin-top: 8px;
+        white-space: nowrap;
       }}
       .cash-mobile-sub {{
         color: var(--muted);
@@ -11838,12 +11884,12 @@ def render_cashoperations_body(
         display: grid;
         grid-template-columns: repeat(3, 1fr);
         gap: 8px;
-        margin-top: 16px;
+        margin-top: 18px;
       }}
       .cash-mobile-metric {{
         border: 1px solid var(--line);
-        border-radius: 12px;
-        padding: 10px;
+        border-radius: 8px;
+        padding: 10px 8px;
         min-width: 0;
       }}
       .cash-mobile-metric span {{
@@ -11859,19 +11905,59 @@ def render_cashoperations_body(
         font-size: 13px;
         overflow-wrap: anywhere;
       }}
+      .cash-mobile-actions {{
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 14px;
+      }}
+      .cash-mobile-action {{
+        border: 0;
+        border-radius: 8px;
+        min-height: 48px;
+        padding: 12px 14px;
+        cursor: pointer;
+        font-weight: 800;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        color: var(--ink);
+      }}
+      .cash-mobile-action.primary {{
+        background: #186844;
+        color: #fff;
+        border-color: #186844;
+      }}
+      .cash-mobile-action.secondary {{
+        background: #e3f2e9;
+        color: #186844;
+        border-color: #e3f2e9;
+      }}
       .cash-mobile-warning,
       .cash-mobile-flash {{
         margin-top: 12px;
         padding: 11px 12px;
-        border-radius: 12px;
+        border-radius: 8px;
         background: rgba(255, 241, 214, .95);
         color: #6f4109;
         font-size: 13px;
         line-height: 1.35;
       }}
       .cash-mobile-flash.ok {{
-        background: rgba(232,246,238,.95);
-        color: #1d5c43;
+        background: #e3f2e9;
+        color: #186844;
+      }}
+      .cash-mobile-section-head {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }}
+      .cash-mobile-section-head h2,
+      .cash-mobile-panel h2 {{
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.2;
       }}
       .cash-mobile-op {{
         display: flex;
@@ -11894,7 +11980,7 @@ def render_cashoperations_body(
       .cash-mobile-op b {{
         white-space: nowrap;
       }}
-      .cash-mobile-op b.income {{ color: #1d5c43; }}
+      .cash-mobile-op b.income {{ color: #186844; }}
       .cash-mobile-op b.expense {{ color: #9b2f2f; }}
       .cash-mobile-empty {{
         color: var(--muted);
@@ -11915,7 +12001,7 @@ def render_cashoperations_body(
       .cash-mobile-form textarea {{
         width: 100%;
         border: 1px solid var(--line);
-        border-radius: 12px;
+        border-radius: 8px;
         padding: 13px 12px;
         font: inherit;
         color: var(--ink);
@@ -11927,37 +12013,108 @@ def render_cashoperations_body(
       }}
       .cash-mobile-form button {{
         border: 0;
-        border-radius: 12px;
+        border-radius: 8px;
         min-height: 48px;
         padding: 12px 14px;
-        background: #1d5c43;
+        background: #186844;
         color: #fff;
         font: inherit;
         font-weight: 800;
       }}
+      .cash-mobile-bottom-tabs {{
+        position: fixed;
+        left: 50%;
+        bottom: 0;
+        z-index: 10;
+        width: min(100%, 560px);
+        transform: translateX(-50%);
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        padding: 9px 10px calc(9px + env(safe-area-inset-bottom));
+        background: rgba(255,255,255,.96);
+        border-top: 1px solid var(--line);
+        backdrop-filter: blur(16px);
+      }}
+      .cash-mobile-nav {{
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--muted);
+        padding: 9px 5px;
+        min-height: 44px;
+        font-size: 12px;
+        font-weight: 800;
+      }}
+      .cash-mobile-nav.active {{
+        background: #e3f2e9;
+        color: #186844;
+      }}
       @media (max-width: 420px) {{
         .cash-mobile-metrics {{ grid-template-columns: 1fr; }}
+        .cash-mobile-actions {{ grid-template-columns: 1fr; }}
       }}
     </style>
     <section class="cash-mobile">
       <div class="cash-mobile-tabs">{cashbox_tabs}</div>
       {flash_html}
-      <section class="cash-mobile-panel">
-        <div class="cash-mobile-sub">{escape(cashbox_label(selected_cashbox))}</div>
-        <div class="cash-mobile-balance">{escape(format_amount(balance))}</div>
-        <div class="cash-mobile-metrics">
-          <div class="cash-mobile-metric"><span>Поступило сегодня</span><b>{escape(format_amount(today_income))}</b></div>
-          <div class="cash-mobile-metric"><span>Потрачено сегодня</span><b>{escape(format_amount(today_expense))}</b></div>
-          <div class="cash-mobile-metric"><span>На начало дня</span><b>{escape(format_amount(start_balance))}</b></div>
+      <section id="cashScreenHome" class="cash-mobile-screen active">
+        <section class="cash-mobile-panel">
+          <div class="cash-mobile-sub">{escape(cashbox_label(selected_cashbox))}</div>
+          <div class="cash-mobile-balance">{escape(format_amount(balance))}</div>
+          <div class="cash-mobile-metrics">
+            <div class="cash-mobile-metric"><span>Поступило сегодня</span><b>{escape(format_amount(today_income))}</b></div>
+            <div class="cash-mobile-metric"><span>Потрачено сегодня</span><b>{escape(format_amount(today_expense))}</b></div>
+            <div class="cash-mobile-metric"><span>На начало дня</span><b>{escape(format_amount(start_balance))}</b></div>
+          </div>
+          {warning_html}
+        </section>
+        <div class="cash-mobile-actions">
+          <button class="cash-mobile-action primary" type="button" data-cash-screen="expense">Добавить расход</button>
+          <button class="cash-mobile-action secondary" type="button" data-cash-screen="reconcile">Сверить кассу</button>
+          <button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>
+          <button class="cash-mobile-action" type="button" data-cash-screen="history">Все расходы</button>
         </div>
-        {warning_html}
+        <section class="cash-mobile-panel">
+          <div class="cash-mobile-section-head"><h2>Последние операции</h2></div>
+          {latest_rows}
+        </section>
       </section>
-      <section class="cash-mobile-panel">
-        <h2>Последние операции</h2>
-        {operation_rows}
+      <section id="cashScreenExpense" class="cash-mobile-screen">{expense_screen}</section>
+      <section id="cashScreenHistory" class="cash-mobile-screen">
+        <section class="cash-mobile-panel">
+          <div class="cash-mobile-section-head"><h2>История операций</h2></div>
+          {history_rows}
+        </section>
       </section>
-      {add_form}
+      <section id="cashScreenReconcile" class="cash-mobile-screen">{reconcile_screen}</section>
     </section>
+    <nav class="cash-mobile-bottom-tabs">
+      <button class="cash-mobile-nav active" type="button" data-cash-screen="home">Касса</button>
+      <button class="cash-mobile-nav" type="button" data-cash-screen="expense">Расход</button>
+      <button class="cash-mobile-nav" type="button" data-cash-screen="history">История</button>
+      <button class="cash-mobile-nav" type="button" data-cash-screen="reconcile">Сверка</button>
+    </nav>
+    <script>
+      (() => {{
+        const screens = {{
+          home: document.querySelector("#cashScreenHome"),
+          expense: document.querySelector("#cashScreenExpense"),
+          history: document.querySelector("#cashScreenHistory"),
+          reconcile: document.querySelector("#cashScreenReconcile")
+        }};
+        function show(name) {{
+          Object.entries(screens).forEach(([key, el]) => el && el.classList.toggle("active", key === name));
+          document.querySelectorAll("[data-cash-screen]").forEach((button) => {{
+            button.classList.toggle("active", button.dataset.cashScreen === name);
+          }});
+          window.scrollTo({{ top: 0, behavior: "smooth" }});
+        }}
+        document.querySelectorAll("[data-cash-screen]").forEach((button) => {{
+          button.addEventListener("click", () => show(button.dataset.cashScreen));
+        }});
+      }})();
+    </script>
     """
 
 
@@ -14357,6 +14514,48 @@ def app(environ, start_response):
                 actor_name,
             )
             flash = "Расход добавлен в кассу и CRM-расходы."
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
+        except ValueError as exc:
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
+
+    if path == "/cashoperations/reconcile" and method == "POST":
+        denied = guard("expenses", "view")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
+        if selected_cashbox not in {code for code, _label in CASHBOX_OPTIONS}:
+            selected_cashbox = "denis"
+        try:
+            actual_balance = parse_amount(form.get("actual_balance", "").strip())
+            entries = storage.list_expense_entries(current_owner)
+            cash_income_entries = [
+                entry
+                for entry in entries
+                if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+                and (entry.payment_source or "bank") == "bank"
+                and cash_operation_scope(entry) == selected_cashbox
+            ]
+            cash_expense_entries = [
+                entry
+                for entry in entries
+                if (entry.payment_source or "bank") == "cash"
+                and entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE
+                and cash_operation_scope(entry) == selected_cashbox
+            ]
+            crm_balance = sum(entry.amount for entry in cash_income_entries) - sum(entry.amount for entry in cash_expense_entries)
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            storage.add_cash_reconciliation(
+                current_owner,
+                selected_cashbox,
+                (current_user or {}).get("id"),
+                actor_name,
+                crm_balance,
+                actual_balance,
+                form.get("comment", ""),
+            )
+            difference = round(actual_balance - crm_balance, 2)
+            flash = "Касса сверена." if abs(difference) < 0.01 else f"Сверка сохранена. Расхождение: {format_amount(difference)}"
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
