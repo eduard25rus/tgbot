@@ -6235,11 +6235,17 @@ def layout(
     .directory-title-link {{
       color: inherit;
       font: inherit;
+      font-weight: 400;
       text-decoration: none;
     }}
     .directory-edit-form {{
       min-width: min(520px, 84vw);
       margin: 0;
+    }}
+    .directory-edit-form .field label {{
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
     }}
     .auction-added-tooltip {{
       position: relative;
