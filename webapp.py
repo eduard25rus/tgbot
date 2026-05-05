@@ -7,6 +7,7 @@ import hashlib
 import io
 import secrets
 import re
+import sqlite3
 from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
@@ -726,6 +727,104 @@ def parse_amount(raw: str) -> float:
     if amount < 0:
         raise ValueError("Сумма не может быть отрицательной")
     return round(amount, 2)
+
+
+def parse_bank_1c_date(raw: str) -> date:
+    raw = raw.strip()
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError("В выписке найдена дата в неизвестном формате")
+
+
+def parse_bank_1c_amount(raw: str) -> float:
+    cleaned = raw.strip().replace("\xa0", "").replace(" ", "").replace(",", ".")
+    if not cleaned:
+        raise ValueError("В выписке есть платеж без суммы")
+    amount = float(cleaned)
+    if amount <= 0:
+        raise ValueError("В выписке есть платеж с некорректной суммой")
+    return round(amount, 2)
+
+
+def decode_bank_1c_export(data: bytes) -> str:
+    if not data:
+        raise ValueError("Файл выписки пустой")
+    for encoding in ("cp1251", "utf-8-sig", "utf-8"):
+        try:
+            text = data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        if "1CClientBankExchange" in text:
+            return text
+    raise ValueError("Не удалось прочитать выписку. Нужен TXT 1С в кодировке WIN")
+
+
+def parse_bank_1c_export(data: bytes) -> tuple[dict[str, str], list[dict[str, str]]]:
+    text = decode_bank_1c_export(data)
+    lines = [line.strip().lstrip("\ufeff") for line in text.splitlines()]
+    first_line = next((line for line in lines if line), "")
+    if first_line != "1CClientBankExchange":
+        raise ValueError("Это не выгрузка 1С Клиент-Банк")
+
+    meta: dict[str, str] = {}
+    documents: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    raw_lines: list[str] = []
+    in_account_section = False
+    for line in lines[1:]:
+        if not line:
+            continue
+        if line == "СекцияРасчСчет":
+            in_account_section = True
+            continue
+        if line == "КонецРасчСчет":
+            in_account_section = False
+            continue
+        if line.startswith("СекцияДокумент="):
+            current = {"СекцияДокумент": line.split("=", 1)[1].strip()}
+            raw_lines = [line]
+            continue
+        if line == "КонецДокумента" and current is not None:
+            current["raw_import_text"] = "\n".join(raw_lines + [line])
+            documents.append(current)
+            current = None
+            raw_lines = []
+            continue
+        if current is not None:
+            raw_lines.append(line)
+            if "=" in line:
+                key, value = line.split("=", 1)
+                current[key.strip()] = value.strip()
+            continue
+        if not in_account_section and "=" in line:
+            key, value = line.split("=", 1)
+            meta.setdefault(key.strip(), value.strip())
+
+    if meta.get("ВерсияФормата", "").strip() != "1.03":
+        raise ValueError("Поддерживается только формат 1С 1.03")
+    if not meta.get("РасчСчет", "").strip():
+        raise ValueError("В выписке не найден расчетный счет")
+    return meta, documents
+
+
+def bank_1c_expense_hash(document: dict[str, str]) -> str:
+    parts = [
+        document.get("Дата", ""),
+        document.get("ДатаСписано", ""),
+        document.get("Номер", ""),
+        document.get("Сумма", ""),
+        document.get("ПлательщикСчет", ""),
+        document.get("ПлательщикРасчСчет", ""),
+        document.get("ПолучательСчет", ""),
+        document.get("ПолучательРасчСчет", ""),
+        document.get("ПолучательИНН", ""),
+        document.get("НазначениеПлатежа", ""),
+    ]
+    normalized = "\n".join(part.strip().casefold() for part in parts)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
@@ -12685,6 +12784,21 @@ def render_expenses_section(
         <section class="card panel" style="margin-top:22px;">
           <div class="panel-head">
             <div>
+              <h2 class="panel-title">Импорт выписки 1С</h2>
+              <div class="panel-sub">TXT выгрузка Клиент-Банк для 1С: формат 1.03, кодировка WIN. Списания попадут в неуточненные расходы.</div>
+            </div>
+          </div>
+          <form class="form-grid" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment=needs">
+            <div class="field span-2">
+              <label>TXT выписка</label>
+              <input type="file" name="bank_statement" accept=".txt,text/plain" required>
+            </div>
+            <button class="submit-btn" type="submit">Загрузить выписку</button>
+          </form>
+        </section>
+        <section class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
               <h2 class="panel-title">Добавить расход</h2>
               <div class="panel-sub">Ежедневный ручной реестр всех трат по юрлицу: объект, группа расхода, сумма и комментарий.</div>
             </div>
@@ -17644,13 +17758,97 @@ def app(environ, start_response):
         category_filter = query.get("category", [""])[0].strip()
         adjustment_filter = query.get("adjustment", [""])[0].strip()
         selected_day_raw = query.get("day", [""])[0].strip()
+        flash_message = query.get("flash", [""])[0].strip()
         if active_tab not in {"active", "archive"}:
             active_tab = "active"
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
-        body = render_expenses_section(storage, current_owner, current_user, active_tab, project_filter=project_filter, category_filter=category_filter, adjustment_filter=adjustment_filter, selected_day=selected_day)
+        body = render_expenses_section(storage, current_owner, current_user, active_tab, flash_message, bool(flash_message), project_filter=project_filter, category_filter=category_filter, adjustment_filter=adjustment_filter, selected_day=selected_day)
         html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
+
+    if path == "/expenses/import" and method == "POST":
+        denied = guard("expenses", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        project_filter = query.get("project", [""])[0].strip()
+        category_filter = query.get("category", [""])[0].strip()
+        adjustment_filter = query.get("adjustment", ["needs"])[0].strip() or "needs"
+        selected_day_raw = query.get("day", [""])[0].strip()
+        selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        try:
+            form, files = read_multipart_form_data(environ)
+            uploads = files.get("bank_statement", [])
+            upload = uploads[0] if uploads else None
+            if upload is None or not upload.data:
+                raise ValueError("Выберите TXT выписку")
+            if not upload.filename.lower().endswith(".txt"):
+                raise ValueError("Загрузите TXT файл выгрузки 1С")
+            if len(upload.data) > 5 * 1024 * 1024:
+                raise ValueError("Файл выписки должен быть не больше 5 МБ")
+
+            meta, documents = parse_bank_1c_export(upload.data)
+            statement_account = meta.get("РасчСчет", "").strip()
+            imported_count = 0
+            duplicate_count = 0
+            skipped_count = 0
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Импорт выписки"
+            for document in documents:
+                payer_accounts = {
+                    document.get("ПлательщикСчет", "").strip(),
+                    document.get("ПлательщикРасчСчет", "").strip(),
+                }
+                if statement_account not in payer_accounts or not document.get("ДатаСписано", "").strip():
+                    skipped_count += 1
+                    continue
+                import_hash = bank_1c_expense_hash(document)
+                if storage.expense_import_hash_exists(current_owner, import_hash):
+                    duplicate_count += 1
+                    continue
+                expense_date = parse_bank_1c_date(document.get("ДатаСписано", "").strip() or document.get("Дата", "").strip())
+                amount = parse_bank_1c_amount(document.get("Сумма", ""))
+                recipient = document.get("Получатель", "").strip() or document.get("ПолучательСчет", "").strip() or "Расход из выписки"
+                purpose = document.get("НазначениеПлатежа", "").strip()
+                doc_number = document.get("Номер", "").strip()
+                doc_kind = document.get("СекцияДокумент", "").strip()
+                comment_parts = []
+                if purpose:
+                    comment_parts.append(purpose)
+                doc_label = " ".join(part for part in (doc_kind, f"№ {doc_number}" if doc_number else "") if part)
+                if doc_label:
+                    comment_parts.append(doc_label)
+                try:
+                    storage.add_expense_entry(
+                        current_owner,
+                        expense_date,
+                        "admin",
+                        "other",
+                        recipient,
+                        amount,
+                        " | ".join(comment_parts),
+                        True,
+                        (current_user or {}).get("id"),
+                        actor_name,
+                        import_source="1c_bank",
+                        import_hash=import_hash,
+                        import_doc_number=doc_number,
+                        import_counterparty_inn=document.get("ПолучательИНН", "").strip(),
+                        import_counterparty_account=document.get("ПолучательСчет", "").strip() or document.get("ПолучательРасчСчет", "").strip(),
+                        raw_import_text=document.get("raw_import_text", ""),
+                    )
+                except sqlite3.IntegrityError:
+                    duplicate_count += 1
+                    continue
+                imported_count += 1
+            flash = f"Импортировано: {imported_count}. Дублей пропущено: {duplicate_count}. Не расходы/поступления пропущены: {skipped_count}."
+        except ValueError as exc:
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day)
+            html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&flash={quote_plus(flash)}")
 
     if path == "/expenses/new" and method == "POST":
         denied = guard("expenses", "edit")

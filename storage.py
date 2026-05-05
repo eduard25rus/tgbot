@@ -351,6 +351,12 @@ class ExpenseEntry:
     deleted_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    import_source: str
+    import_hash: str
+    import_doc_number: str
+    import_counterparty_inn: str
+    import_counterparty_account: str
+    raw_import_text: str
 
 
 @dataclass
@@ -871,7 +877,13 @@ class Storage:
                     created_by_name TEXT NOT NULL DEFAULT '',
                     deleted_at TEXT,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    import_source TEXT NOT NULL DEFAULT '',
+                    import_hash TEXT NOT NULL DEFAULT '',
+                    import_doc_number TEXT NOT NULL DEFAULT '',
+                    import_counterparty_inn TEXT NOT NULL DEFAULT '',
+                    import_counterparty_account TEXT NOT NULL DEFAULT '',
+                    raw_import_text TEXT NOT NULL DEFAULT ''
                 );
                 """
             )
@@ -1074,10 +1086,23 @@ class Storage:
                 ("deleted_at", "TEXT"),
                 ("created_at", "TEXT NOT NULL DEFAULT ''"),
                 ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+                ("import_source", "TEXT NOT NULL DEFAULT ''"),
+                ("import_hash", "TEXT NOT NULL DEFAULT ''"),
+                ("import_doc_number", "TEXT NOT NULL DEFAULT ''"),
+                ("import_counterparty_inn", "TEXT NOT NULL DEFAULT ''"),
+                ("import_counterparty_account", "TEXT NOT NULL DEFAULT ''"),
+                ("raw_import_text", "TEXT NOT NULL DEFAULT ''"),
             ]
             for column_name, column_def in expense_alters:
                 if column_name not in expense_columns:
                     conn.execute(f"ALTER TABLE expense_entries ADD COLUMN {column_name} {column_def}")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_entries_import_hash
+                ON expense_entries(owner_chat_id, import_hash)
+                WHERE import_hash != ''
+                """
+            )
             legal_letter_contract_notnull = any(
                 row["name"] == "contract_id" and int(row["notnull"] or 0) == 1 for row in legal_letter_info
             )
@@ -5065,7 +5090,9 @@ class Storage:
                 SELECT
                     id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
                     needs_adjustment,
-                    status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
+                    status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
+                    import_source, import_hash, import_doc_number, import_counterparty_inn,
+                    import_counterparty_account, raw_import_text
                 FROM expense_entries
                 WHERE owner_chat_id = ? AND (? = 1 OR deleted_at IS NULL)
                 ORDER BY deleted_at IS NOT NULL, needs_adjustment DESC, status = 'closed', expense_date DESC, created_at DESC, id DESC
@@ -5086,6 +5113,12 @@ class Storage:
         needs_adjustment: bool,
         created_by_user_id: int | None,
         created_by_name: str,
+        import_source: str = "",
+        import_hash: str = "",
+        import_doc_number: str = "",
+        import_counterparty_inn: str = "",
+        import_counterparty_account: str = "",
+        raw_import_text: str = "",
     ) -> int:
         with self.connection() as conn:
             now = datetime.utcnow().isoformat()
@@ -5094,9 +5127,11 @@ class Storage:
                 INSERT INTO expense_entries (
                     owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
                     needs_adjustment,
-                    status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at
+                    status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
+                    import_source, import_hash, import_doc_number, import_counterparty_inn,
+                    import_counterparty_account, raw_import_text
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -5111,9 +5146,30 @@ class Storage:
                     created_by_name.strip(),
                     now,
                     now,
+                    import_source.strip(),
+                    import_hash.strip(),
+                    import_doc_number.strip(),
+                    import_counterparty_inn.strip(),
+                    import_counterparty_account.strip(),
+                    raw_import_text.strip(),
                 ),
             )
             return int(cursor.lastrowid)
+
+    def expense_import_hash_exists(self, owner_chat_id: int, import_hash: str) -> bool:
+        if not import_hash.strip():
+            return False
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM expense_entries
+                WHERE owner_chat_id = ? AND import_hash = ?
+                LIMIT 1
+                """,
+                (owner_chat_id, import_hash.strip()),
+            ).fetchone()
+        return row is not None
 
     def update_expense_entry_status(self, owner_chat_id: int, entry_id: int, status: str) -> bool:
         with self.connection() as conn:
@@ -5614,6 +5670,12 @@ class Storage:
             deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            import_source=row["import_source"] if "import_source" in row.keys() else "",
+            import_hash=row["import_hash"] if "import_hash" in row.keys() else "",
+            import_doc_number=row["import_doc_number"] if "import_doc_number" in row.keys() else "",
+            import_counterparty_inn=row["import_counterparty_inn"] if "import_counterparty_inn" in row.keys() else "",
+            import_counterparty_account=row["import_counterparty_account"] if "import_counterparty_account" in row.keys() else "",
+            raw_import_text=row["raw_import_text"] if "raw_import_text" in row.keys() else "",
         )
 
     @staticmethod
