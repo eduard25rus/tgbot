@@ -5724,6 +5724,8 @@ class Storage:
         comment: str,
         payment_source: str,
         needs_adjustment: bool,
+        payroll_employee_id: int | None = None,
+        payroll_employee_name: str = "",
     ) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
@@ -5736,6 +5738,8 @@ class Storage:
                     title = ?,
                     amount = ?,
                     comment = ?,
+                    payroll_employee_id = ?,
+                    payroll_employee_name = ?,
                     payment_source = ?,
                     needs_adjustment = ?,
                     updated_at = ?
@@ -5748,6 +5752,8 @@ class Storage:
                     title.strip(),
                     amount,
                     comment.strip(),
+                    payroll_employee_id,
+                    payroll_employee_name.strip(),
                     payment_source.strip() or "bank",
                     1 if needs_adjustment else 0,
                     datetime.utcnow().isoformat(),

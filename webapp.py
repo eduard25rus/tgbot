@@ -11766,6 +11766,15 @@ def render_cashoperations_body(
     ]
     operations.sort(key=lambda item: (item[1].expense_date, item[1].created_at, item[1].id), reverse=True)
     latest_operations = operations[:14]
+    can_edit = bool(cash_access["can_add_expense"])
+
+    def editable_comment(entry) -> str:
+        comment = entry.comment or ""
+        while True:
+            cleaned = re.sub(r"^\s*\[[^\]]+\]\s*", "", comment, count=1)
+            if cleaned == comment:
+                return comment.strip()
+            comment = cleaned
 
     def operation_card(kind: str, entry) -> str:
         title = "Пополнение из банка" if kind == "income" else entry.title
@@ -11776,6 +11785,27 @@ def render_cashoperations_body(
             if kind != "income" and getattr(entry, "payroll_employee_name", "")
             else ""
         )
+        if kind == "expense" and can_edit:
+            return f"""
+            <button class="cash-mobile-op editable" type="button"
+              data-edit-expense="1"
+              data-expense-id="{entry.id}"
+              data-expense-amount="{escape(str(entry.amount))}"
+              data-expense-category="{escape(entry.category_code)}"
+              data-expense-project="{escape(entry.project_code)}"
+              data-expense-employee="{escape(str(entry.payroll_employee_id or ''))}"
+              data-expense-title="{escape(entry.title)}"
+              data-expense-date="{entry.expense_date.isoformat()}"
+              data-expense-comment="{escape(editable_comment(entry))}">
+              <span>
+                <strong>{escape(title)}</strong>
+                <span>{escape(format_date(entry.expense_date))} · {escape(category)}</span>
+                {employee_line}
+                <span>{escape(comment)}</span>
+              </span>
+              <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
+            </button>
+            """
         return f"""
         <article class="cash-mobile-op">
           <div>
@@ -11817,14 +11847,14 @@ def render_cashoperations_body(
             f'разница {escape(format_amount(latest_reconciliation["difference"]))}</div>'
         )
 
-    can_edit = bool(cash_access["can_add_expense"])
     expense_screen = '<div class="cash-mobile-empty">Нет прав на добавление расходов.</div>'
     if can_edit:
         expense_screen = f"""
         <section class="cash-mobile-panel">
-          <div class="cash-mobile-section-head"><h2>Добавить расход</h2></div>
+          <div class="cash-mobile-section-head"><h2 data-cash-expense-title>Добавить расход</h2></div>
           <form class="cash-mobile-form" method="post" action="/cashoperations/expense">
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <input type="hidden" name="expense_id" value="" data-cash-expense-id>
             <label>Сумма
               <input type="text" name="amount" inputmode="decimal" placeholder="0" required>
             </label>
@@ -11846,7 +11876,7 @@ def render_cashoperations_body(
             <label>Комментарий
               <textarea name="comment" placeholder="Коротко, что купили или оплатили"></textarea>
             </label>
-            <button type="submit">Сохранить расход</button>
+            <button type="submit" data-cash-expense-submit>Сохранить расход</button>
           </form>
         </section>
         """
@@ -11922,6 +11952,9 @@ def render_cashoperations_body(
         font-weight: 800;
         margin-top: 8px;
         white-space: nowrap;
+      }}
+      .cash-mobile-balance.negative {{
+        color: #9b2f2f;
       }}
       .cash-mobile-sub {{
         color: var(--muted);
@@ -12011,8 +12044,19 @@ def render_cashoperations_body(
         display: flex;
         justify-content: space-between;
         gap: 12px;
+        width: 100%;
         padding: 12px 0;
         border-top: 1px solid var(--line);
+        border-left: 0;
+        border-right: 0;
+        border-bottom: 0;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+        font: inherit;
+      }}
+      .cash-mobile-op.editable {{
+        cursor: pointer;
       }}
       .cash-mobile-op:first-child {{ border-top: 0; }}
       .cash-mobile-op strong,
@@ -12052,6 +12096,7 @@ def render_cashoperations_body(
         border-radius: 8px;
         padding: 13px 12px;
         font: inherit;
+        font-size: 16px;
         color: var(--ink);
         background: #fff;
       }}
@@ -12116,7 +12161,7 @@ def render_cashoperations_body(
       <section id="cashScreenHome" class="cash-mobile-screen active">
         <section class="cash-mobile-panel">
         <div class="cash-mobile-sub">{escape(cashbox_labels.get(selected_cashbox, "Касса"))}</div>
-          <div class="cash-mobile-balance">{escape(format_amount(balance))}</div>
+          <div class="cash-mobile-balance{" negative" if balance < -0.009 else ""}">{escape(format_amount(balance))}</div>
           <div class="cash-mobile-metrics">
             <div class="cash-mobile-metric"><span>Поступило сегодня</span><b>{escape(format_amount(today_income))}</b></div>
             <div class="cash-mobile-metric"><span>Потрачено сегодня</span><b>{escape(format_amount(today_expense))}</b></div>
@@ -12125,7 +12170,7 @@ def render_cashoperations_body(
           {warning_html}
         </section>
         <div class="cash-mobile-actions">
-          <button class="cash-mobile-action primary" type="button" data-cash-screen="expense">Добавить расход</button>
+          <button class="cash-mobile-action primary" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
           <button class="cash-mobile-action secondary" type="button" data-cash-screen="reconcile">Сверить кассу</button>
           <button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>
           <button class="cash-mobile-action" type="button" data-cash-screen="history">Все расходы</button>
@@ -12146,7 +12191,7 @@ def render_cashoperations_body(
     </section>
     <nav class="cash-mobile-bottom-tabs">
       <button class="cash-mobile-nav active" type="button" data-cash-screen="home">Касса</button>
-      <button class="cash-mobile-nav" type="button" data-cash-screen="expense">Расход</button>
+      <button class="cash-mobile-nav" type="button" data-cash-screen="expense" data-cash-new-expense="1">Расход</button>
       <button class="cash-mobile-nav" type="button" data-cash-screen="history">История</button>
       <button class="cash-mobile-nav" type="button" data-cash-screen="reconcile">Сверка</button>
     </nav>
@@ -12165,9 +12210,10 @@ def render_cashoperations_body(
           }});
           window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
-        document.querySelectorAll("[data-cash-screen]").forEach((button) => {{
-          button.addEventListener("click", () => show(button.dataset.cashScreen));
-        }});
+        const expenseForm = document.querySelector(".cash-mobile-form[action='/cashoperations/expense']");
+        const expenseHeading = document.querySelector("[data-cash-expense-title]");
+        const expenseSubmit = document.querySelector("[data-cash-expense-submit]");
+        const expenseIdInput = document.querySelector("[data-cash-expense-id]");
         const categorySelect = document.querySelector("[data-cash-category]");
         const projectSelect = document.querySelector("[data-cash-project]");
         const projectWrap = document.querySelector("[data-cash-project-wrap]");
@@ -12190,6 +12236,39 @@ def render_cashoperations_body(
           employeeWrap && employeeWrap.classList.toggle("is-hidden", !isSalary);
         }}
         categorySelect && categorySelect.addEventListener("change", syncAdminProject);
+        function resetExpenseForm() {{
+          if (!expenseForm) return;
+          expenseForm.reset();
+          if (expenseIdInput) expenseIdInput.value = "";
+          if (expenseForm.elements.expense_date) expenseForm.elements.expense_date.value = "{today.isoformat()}";
+          if (expenseHeading) expenseHeading.textContent = "Добавить расход";
+          if (expenseSubmit) expenseSubmit.textContent = "Сохранить расход";
+          syncAdminProject();
+        }}
+        function editExpense(button) {{
+          if (!expenseForm) return;
+          if (expenseIdInput) expenseIdInput.value = button.dataset.expenseId || "";
+          if (expenseForm.elements.amount) expenseForm.elements.amount.value = button.dataset.expenseAmount || "";
+          if (categorySelect) categorySelect.value = button.dataset.expenseCategory || "other";
+          if (projectSelect) projectSelect.value = button.dataset.expenseProject || "admin";
+          if (employeeSelect) employeeSelect.value = button.dataset.expenseEmployee || "";
+          if (expenseForm.elements.title) expenseForm.elements.title.value = button.dataset.expenseTitle || "";
+          if (expenseForm.elements.expense_date) expenseForm.elements.expense_date.value = button.dataset.expenseDate || "{today.isoformat()}";
+          if (expenseForm.elements.comment) expenseForm.elements.comment.value = button.dataset.expenseComment || "";
+          if (expenseHeading) expenseHeading.textContent = "Редактировать расход";
+          if (expenseSubmit) expenseSubmit.textContent = "Сохранить изменения";
+          syncAdminProject();
+          show("expense");
+        }}
+        document.querySelectorAll("[data-cash-screen]").forEach((button) => {{
+          button.addEventListener("click", () => {{
+            if (button.dataset.cashNewExpense) resetExpenseForm();
+            show(button.dataset.cashScreen);
+          }});
+        }});
+        document.querySelectorAll("[data-edit-expense]").forEach((button) => {{
+          button.addEventListener("click", () => editExpense(button));
+        }});
         syncAdminProject();
       }})();
     </script>
@@ -14695,6 +14774,19 @@ def app(environ, start_response):
             title = form.get("title", "").strip()
             comment = form.get("comment", "").strip()
             entries = storage.list_expense_entries(current_owner)
+            expense_id = 0
+            try:
+                expense_id = int(form.get("expense_id", "0") or "0")
+            except ValueError:
+                expense_id = 0
+            existing_entry = next((entry for entry in entries if entry.id == expense_id), None) if expense_id else None
+            if expense_id:
+                if existing_entry is None or (existing_entry.payment_source or "bank") != "cash" or existing_entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE:
+                    raise ValueError("Расход не найден")
+                existing_cashbox = cashbox_code_from_entry(existing_entry, cashboxes)
+                if existing_cashbox not in allowed_codes:
+                    raise ValueError("Нет прав на редактирование этой кассы")
+                selected_cashbox = existing_cashbox or selected_cashbox
             payroll_employee_lookup = {
                 employee.id: employee
                 for employee in storage.list_payroll_employees(current_owner)
@@ -14725,6 +14817,23 @@ def app(environ, start_response):
             cashbox_marker = f"[{cashbox_labels.get(selected_cashbox, 'Касса')}]"
             employee_marker = f"[Сотрудник: {payroll_employee_name}]" if payroll_employee_name else ""
             normalized_comment = " ".join(part for part in (cashbox_marker, employee_marker, comment) if part)
+            if expense_id:
+                storage.update_expense_entry(
+                    current_owner,
+                    expense_id,
+                    expense_date,
+                    project_code,
+                    category_code,
+                    title,
+                    amount,
+                    normalized_comment,
+                    "cash",
+                    False,
+                    payroll_employee_id=payroll_employee_id,
+                    payroll_employee_name=payroll_employee_name,
+                )
+                flash = "Расход обновлен."
+                return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
             storage.add_expense_entry(
                 current_owner,
                 expense_date,
