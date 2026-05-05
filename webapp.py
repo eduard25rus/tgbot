@@ -12081,9 +12081,9 @@ def render_cashoperations_body(
         border-color: #186844;
       }}
       .cash-mobile-action.expense {{
-        background: #f4e5e5;
-        color: #9b2f2f;
-        border-color: rgba(155, 47, 47, .14);
+        background: #9b2f2f;
+        color: #fff;
+        border-color: #9b2f2f;
       }}
       .cash-mobile-action.income {{
         background: #186844;
