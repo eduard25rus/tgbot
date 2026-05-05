@@ -1776,9 +1776,7 @@ def render_stage_amount_form(owner_chat_id: int, contract_id: int, stage, curren
 def jurisprudence_contract_options(storage: Storage, owner_chat_id: int) -> list[tuple[str, str]]:
     options: list[tuple[str, str]] = []
     for contract in storage.list_contracts(owner_chat_id):
-        object_name = contract.object_name.strip() or contract.title
-        object_address = contract.object_address.strip()
-        label = f"{object_name}, {object_address}" if object_address else object_name
+        label = contract.object_name.strip() or contract.title
         options.append((str(contract.id), label))
     return options
 
@@ -1797,10 +1795,6 @@ def jurisprudence_object_options(storage: Storage, owner_chat_id: int) -> list[s
             labels.add(cleaned)
     for label in storage.list_jurisprudence_objects(owner_chat_id):
         cleaned = clean_label(label)
-        if cleaned:
-            labels.add(cleaned)
-    for letter in storage.list_legal_letters(owner_chat_id):
-        cleaned = clean_label(letter.object_label)
         if cleaned:
             labels.add(cleaned)
     return sorted(labels, key=lambda value: value.lower())
@@ -1851,6 +1845,50 @@ def normalize_legal_letter_object_label(object_label: str) -> str:
     return normalized
 
 
+def compact_object_match_key(value: str) -> str:
+    return re.sub(r"[\W_]+", "", normalize_legal_letter_object_label(value).replace("ё", "е").lower())
+
+
+def quoted_object_part(value: str) -> str:
+    normalized = normalize_legal_letter_object_label(value)
+    if "«" in normalized and "»" in normalized:
+        quoted = normalized.split("«", 1)[1].split("»", 1)[0].strip()
+        if quoted:
+            return quoted
+    return ""
+
+
+def resolve_jurisprudence_object_record(storage: Storage, owner_chat_id: int, object_label: str, contract=None):
+    candidates = storage.list_jurisprudence_object_records(owner_chat_id)
+    labels_to_match = [normalize_legal_letter_object_label(object_label)]
+    if contract is not None:
+        labels_to_match.append((contract.object_name.strip() or contract.title.strip() or "").strip())
+    normalized_labels = [label for label in labels_to_match if label]
+    normalized_keys = [compact_object_match_key(label) for label in normalized_labels if compact_object_match_key(label)]
+    for item in candidates:
+        item_name = item.name.strip()
+        if any(item_name.lower() == label.lower() for label in normalized_labels):
+            return item
+        item_short = quoted_object_part(item_name)
+        if item_short and any(item_short.lower() == label.lower() for label in normalized_labels):
+            return item
+    for item in candidates:
+        item_key = compact_object_match_key(item.name)
+        item_short_key = compact_object_match_key(quoted_object_part(item.name))
+        if any(key and (key == item_key or key == item_short_key or key in item_key) for key in normalized_keys):
+            return item
+    return None
+
+
+def jurisprudence_letter_object_display(storage: Storage, owner_chat_id: int, letter, contract=None) -> tuple[str, str]:
+    object_record = resolve_jurisprudence_object_record(storage, owner_chat_id, letter.object_label, contract)
+    if object_record is not None:
+        return object_record.name.strip(), object_record.customer.strip()
+    if contract is not None:
+        return (contract.object_name.strip() or contract.title.strip() or letter.object_label.strip() or "Без объекта").strip(), ""
+    return normalize_legal_letter_object_label(letter.object_label) or "Без объекта", ""
+
+
 def short_jurisprudence_object_label(object_label: str, contract=None) -> str:
     if contract is not None:
         return (contract.object_name.strip() or contract.title.strip() or object_label.strip() or "Без объекта").strip()
@@ -1885,7 +1923,8 @@ def render_legal_letter_object_fields(
     object_label: str,
 ) -> str:
     object_options = jurisprudence_object_options(storage, owner_chat_id)
-    current_label = object_label.strip()
+    object_record = resolve_jurisprudence_object_record(storage, owner_chat_id, object_label)
+    current_label = object_record.name if object_record is not None else normalize_legal_letter_object_label(object_label)
     if current_label and current_label not in object_options:
         object_options = [*object_options, current_label]
     object_options_html = "".join(
@@ -2040,6 +2079,15 @@ def render_jurisprudence_letter_editor(storage: Storage, owner_chat_id: int, let
         </div>
       </div>
     </details>
+    """
+
+
+def render_jurisprudence_letter_object_cell(storage: Storage, owner_chat_id: int, letter, contract=None) -> str:
+    object_name, customer = jurisprudence_letter_object_display(storage, owner_chat_id, letter, contract)
+    customer_html = escape(customer) if customer else "Заказчик не указан"
+    return f"""
+    <div class="timeline-title">{escape(object_name)}</div>
+    <div class="contract-table-subtle">Заказчик: {customer_html}</div>
     """
 
 
@@ -7752,10 +7800,26 @@ def render_jurisprudence_letters_section(
     object_filter: str = "",
 ) -> str:
     flash_html = f'<div class="flash">{escape(flash_message)}</div>' if flash_message else ""
-    letters = storage.list_legal_letters(owner_chat_id, object_filter=object_filter)
     contracts_by_id = {contract.id: contract for contract in storage.list_contracts(owner_chat_id)}
-    today = datetime.now(VLADIVOSTOK_TZ).date()
     selected_object_label = resolve_jurisprudence_filter_label(storage, owner_chat_id, object_filter)
+    letters = storage.list_legal_letters(owner_chat_id)
+    if object_filter.strip():
+        selected_key = compact_object_match_key(selected_object_label)
+        if object_filter.startswith("contract:"):
+            contract_id_raw = object_filter.split(":", 1)[1].strip()
+            selected_contract_id = int(contract_id_raw) if contract_id_raw.isdigit() else None
+            letters = [
+                letter for letter in letters
+                if letter.contract_id == selected_contract_id
+                or compact_object_match_key(jurisprudence_letter_object_display(storage, owner_chat_id, letter, contracts_by_id.get(letter.contract_id or -1))[0]) == selected_key
+            ]
+        else:
+            letters = [
+                letter for letter in letters
+                if compact_object_match_key(jurisprudence_letter_object_display(storage, owner_chat_id, letter, contracts_by_id.get(letter.contract_id or -1))[0]) == selected_key
+                or selected_key in compact_object_match_key(letter.object_label)
+            ]
+    today = datetime.now(VLADIVOSTOK_TZ).date()
     attachments = storage.list_legal_letter_attachments(owner_chat_id)
     attachment_map: dict[int, list] = {}
     for attachment in attachments:
@@ -7768,8 +7832,7 @@ def render_jurisprudence_letters_section(
         f"""
         <tr>
           <td>
-            <div class="timeline-title">{escape(short_jurisprudence_object_label(letter.object_label, contracts_by_id.get(letter.contract_id or -1)))}</div>
-            {f'<div class="contract-table-subtle">{escape(letter.contract_title)}</div>' if letter.contract_title else '<div class="contract-table-subtle">Вне текущих контрактов</div>'}
+            {render_jurisprudence_letter_object_cell(storage, owner_chat_id, letter, contracts_by_id.get(letter.contract_id or -1))}
           </td>
           <td style="text-align:center;">
             <span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span>
@@ -8171,7 +8234,7 @@ def render_directories_section(
         """
         for contract in contracts
     )
-    manual_objects = storage.list_jurisprudence_objects(owner_chat_id)
+    manual_objects = storage.list_jurisprudence_object_records(owner_chat_id)
     manual_object_rows = "".join(
         f"""
         <tr>
@@ -8179,27 +8242,31 @@ def render_directories_section(
             <div class="timeline-title">
               {f'''
               <details class="status-menu directory-edit-menu">
-                <summary><span class="directory-title-link">{escape(object_name)}</span></summary>
+                <summary><span class="directory-title-link">{escape(object_item.name)}</span></summary>
                 <div class="status-popover" style="min-width:420px;">
                   <form class="form-grid directory-edit-form" method="post" action="/directories/objects/update?owner={owner_chat_id}">
-                    <input type="hidden" name="old_name" value="{escape(object_name)}">
+                    <input type="hidden" name="old_name" value="{escape(object_item.name)}">
                     <div class="field" style="grid-column: 1 / -1;">
                       <label>Название объекта</label>
-                      <input type="text" name="new_name" value="{escape(object_name)}" required>
+                      <input type="text" name="new_name" value="{escape(object_item.name)}" required>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Заказчик</label>
+                      <input type="text" name="customer" value="{escape(object_item.customer)}" placeholder="Например, МБУ ДО СШ">
                     </div>
                     <button class="submit-btn" type="submit">Сохранить объект</button>
                   </form>
                 </div>
               </details>
-              ''' if can_edit else escape(object_name)}
+              ''' if can_edit else escape(object_item.name)}
             </div>
-            <div class="contract-table-subtle">Ручной объект справочника</div>
+            <div class="contract-table-subtle">Заказчик: {escape(object_item.customer) if object_item.customer else 'не указан'}</div>
           </td>
           <td><span class="chip">Ручной объект</span></td>
           <td><div class="contract-table-subtle">Используется в переписке, судах и будущих юридических разделах</div></td>
         </tr>
         """
-        for object_name in manual_objects
+        for object_item in manual_objects
     )
     object_rows = contract_object_rows + manual_object_rows
     if not object_rows:
@@ -8214,6 +8281,10 @@ def render_directories_section(
               <div class="field" style="grid-column: 1 / -1;">
                 <label>Название объекта</label>
                 <input type="text" name="name" placeholder="Например, Детский сад №28 / старый объект" required>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Заказчик</label>
+                <input type="text" name="customer" placeholder="Например, МБУ ДО СШ">
               </div>
               <button class="submit-btn" type="submit">Сохранить объект</button>
             </form>
@@ -8538,7 +8609,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
                 <div class="status-popover align-right" style="min-width:520px;">
                   <form class="form-grid" method="post" action="/contracts/{contract.id}/letters/new?owner={owner_chat_id}" enctype="multipart/form-data">
                     <input type="hidden" name="contract_id" value="{contract.id}">
-                    <input type="hidden" name="object_label" value="{escape((contract.object_name.strip() or contract.title) + (', ' + contract.object_address.strip() if contract.object_address.strip() else ''))}">
+                    <input type="hidden" name="object_label" value="{escape(contract.object_name.strip() or contract.title)}">
                     <div class="field">
                       <label>Тип письма</label>
                       <select name="direction" required>
@@ -14011,11 +14082,13 @@ def app(environ, start_response):
         form = read_post_data(environ)
         try:
             name = form.get("name", "").strip()
+            customer = form.get("customer", "").strip()
             if not name:
                 raise ValueError("Укажите название объекта")
             created = storage.add_jurisprudence_object(
                 current_owner,
                 name,
+                customer,
                 current_user.get("id") if current_user else None,
                 current_user.get("full_name", "").strip() if current_user else "",
             )
@@ -14036,9 +14109,10 @@ def app(environ, start_response):
         try:
             old_name = form.get("old_name", "").strip()
             new_name = form.get("new_name", "").strip()
+            customer = form.get("customer", "").strip()
             if not old_name or not new_name:
                 raise ValueError("Укажите название объекта")
-            if not storage.update_jurisprudence_object(current_owner, old_name, new_name):
+            if not storage.update_jurisprudence_object(current_owner, old_name, new_name, customer):
                 raise ValueError("Объект не найден или уже существует")
             return redirect(start_response, f"/directories?owner={current_owner}")
         except Exception as exc:
@@ -14306,11 +14380,13 @@ def app(environ, start_response):
         form = read_post_data(environ)
         try:
             name = form.get("name", "").strip()
+            customer = form.get("customer", "").strip()
             if not name:
                 raise ValueError("Укажите название объекта")
             created = storage.add_jurisprudence_object(
                 current_owner,
                 name,
+                customer,
                 current_user.get("id") if current_user else None,
                 current_user.get("full_name", "").strip() if current_user else "",
             )
@@ -14339,9 +14415,10 @@ def app(environ, start_response):
         try:
             old_name = form.get("old_name", "").strip()
             new_name = form.get("new_name", "").strip()
+            customer = form.get("customer", "").strip()
             if not old_name or not new_name:
                 raise ValueError("Укажите название объекта")
-            if not storage.update_jurisprudence_object(current_owner, old_name, new_name):
+            if not storage.update_jurisprudence_object(current_owner, old_name, new_name, customer):
                 raise ValueError("Не удалось обновить объект")
             return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
         except Exception as exc:

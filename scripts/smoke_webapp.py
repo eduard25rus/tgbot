@@ -65,7 +65,7 @@ def seed_demo_data(db_path: Path) -> str:
         None,
         "Smoke",
     )
-    storage.add_jurisprudence_object(OWNER_CHAT_ID, "Smoke court object", None, "Smoke")
+    storage.add_jurisprudence_object(OWNER_CHAT_ID, "Smoke court object", "", None, "Smoke")
     court_case_id = storage.add_court_case(
         OWNER_CHAT_ID,
         "Smoke court object",

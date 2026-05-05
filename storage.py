@@ -101,6 +101,17 @@ class LegalLetterAttachment:
 
 
 @dataclass
+class JurisprudenceObject:
+    id: int
+    owner_chat_id: int
+    name: str
+    customer: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+
+
+@dataclass
 class CourtCase:
     id: int
     owner_chat_id: int
@@ -510,6 +521,7 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_chat_id INTEGER NOT NULL,
                     name TEXT NOT NULL DEFAULT '',
+                    customer TEXT NOT NULL DEFAULT '',
                     created_by_user_id INTEGER,
                     created_by_name TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -888,6 +900,9 @@ class Storage:
                 row["name"] for row in conn.execute("PRAGMA table_info(legal_letters)").fetchall()
             }
             legal_letter_info = conn.execute("PRAGMA table_info(legal_letters)").fetchall()
+            jurisprudence_object_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(jurisprudence_objects)").fetchall()
+            }
             court_case_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(court_cases)").fetchall()
             }
@@ -1086,7 +1101,7 @@ class Storage:
                         l.id,
                         {"COALESCE(NULLIF(l.owner_chat_id, 0), c.chat_id, 0)" if "owner_chat_id" in legal_letter_columns else "COALESCE(c.chat_id, 0)"},
                         l.contract_id,
-                        {"COALESCE(NULLIF(l.object_label, ''), CASE WHEN COALESCE(c.object_name, '') != '' THEN CASE WHEN COALESCE(c.object_address, '') != '' THEN c.object_name || ', ' || c.object_address ELSE c.object_name END ELSE COALESCE(c.title, '') END, '')" if "object_label" in legal_letter_columns else "COALESCE(CASE WHEN COALESCE(c.object_name, '') != '' THEN CASE WHEN COALESCE(c.object_address, '') != '' THEN c.object_name || ', ' || c.object_address ELSE c.object_name END ELSE COALESCE(c.title, '') END, '')"},
+                        {"COALESCE(NULLIF(l.object_label, ''), NULLIF(c.object_name, ''), COALESCE(c.title, ''), '')" if "object_label" in legal_letter_columns else "COALESCE(NULLIF(c.object_name, ''), COALESCE(c.title, ''), '')"},
                         l.direction,
                         {"l.source_channel" if "source_channel" in legal_letter_columns else "'mail'"},
                         l.letter_date,
@@ -1109,6 +1124,8 @@ class Storage:
                 }
             if "source_channel" not in legal_letter_columns:
                 conn.execute("ALTER TABLE legal_letters ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'mail'")
+            if "customer" not in jurisprudence_object_columns:
+                conn.execute("ALTER TABLE jurisprudence_objects ADD COLUMN customer TEXT NOT NULL DEFAULT ''")
             court_case_alters = [
                 ("object_label", "TEXT NOT NULL DEFAULT ''"),
                 ("case_number", "TEXT NOT NULL DEFAULT ''"),
@@ -2723,8 +2740,7 @@ class Storage:
                     return None
                 if not resolved_object_label:
                     contract_object = (contract["object_name"] or contract["title"] or "").strip()
-                    contract_address = (contract["object_address"] or "").strip()
-                    resolved_object_label = f"{contract_object}, {contract_address}" if contract_address else contract_object
+                    resolved_object_label = contract_object
             if not resolved_object_label:
                 return None
             cursor = conn.execute(
@@ -2754,26 +2770,31 @@ class Storage:
             return int(cursor.lastrowid)
 
     def list_jurisprudence_objects(self, chat_id: int) -> list[str]:
+        return [item.name for item in self.list_jurisprudence_object_records(chat_id)]
+
+    def list_jurisprudence_object_records(self, chat_id: int) -> list[JurisprudenceObject]:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT name
+                SELECT id, owner_chat_id, name, customer, created_by_user_id, created_by_name, created_at
                 FROM jurisprudence_objects
                 WHERE owner_chat_id = ?
                 ORDER BY LOWER(name) ASC, id ASC
                 """,
                 (chat_id,),
             ).fetchall()
-        return [str(row["name"] or "").strip() for row in rows if str(row["name"] or "").strip()]
+        return [self._jurisprudence_object_from_row(row) for row in rows if str(row["name"] or "").strip()]
 
     def add_jurisprudence_object(
         self,
         chat_id: int,
         name: str,
-        created_by_user_id: int | None,
-        created_by_name: str,
+        customer: str = "",
+        created_by_user_id: int | None = None,
+        created_by_name: str = "",
     ) -> int | None:
         cleaned_name = name.strip()
+        cleaned_customer = customer.strip()
         if not cleaned_name:
             return None
         with self.connection() as conn:
@@ -2786,17 +2807,27 @@ class Storage:
                 (chat_id, cleaned_name),
             ).fetchone()
             if existing is not None:
+                if cleaned_customer:
+                    conn.execute(
+                        """
+                        UPDATE jurisprudence_objects
+                        SET customer = ?
+                        WHERE id = ? AND owner_chat_id = ? AND COALESCE(customer, '') = ''
+                        """,
+                        (cleaned_customer, int(existing["id"]), chat_id),
+                    )
                 return int(existing["id"])
             cursor = conn.execute(
                 """
                 INSERT INTO jurisprudence_objects (
-                    owner_chat_id, name, created_by_user_id, created_by_name, created_at
+                    owner_chat_id, name, customer, created_by_user_id, created_by_name, created_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
                     cleaned_name,
+                    cleaned_customer,
                     created_by_user_id,
                     created_by_name.strip(),
                     datetime.utcnow().isoformat(),
@@ -2804,9 +2835,10 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
-    def update_jurisprudence_object(self, chat_id: int, old_name: str, new_name: str) -> bool:
+    def update_jurisprudence_object(self, chat_id: int, old_name: str, new_name: str, customer: str = "") -> bool:
         cleaned_old_name = old_name.strip()
         cleaned_new_name = new_name.strip()
+        cleaned_customer = customer.strip()
         if not cleaned_old_name or not cleaned_new_name:
             return False
         with self.connection() as conn:
@@ -2833,10 +2865,10 @@ class Storage:
             conn.execute(
                 """
                 UPDATE jurisprudence_objects
-                SET name = ?
+                SET name = ?, customer = ?
                 WHERE id = ? AND owner_chat_id = ?
                 """,
-                (cleaned_new_name, int(existing["id"]), chat_id),
+                (cleaned_new_name, cleaned_customer, int(existing["id"]), chat_id),
             )
             conn.execute(
                 """
@@ -2898,8 +2930,7 @@ class Storage:
                     return False
                 if not resolved_object_label:
                     contract_object = (contract["object_name"] or contract["title"] or "").strip()
-                    contract_address = (contract["object_address"] or "").strip()
-                    resolved_object_label = f"{contract_object}, {contract_address}" if contract_address else contract_object
+                    resolved_object_label = contract_object
             if not resolved_object_label:
                 return False
             cursor = conn.execute(
@@ -3516,7 +3547,7 @@ class Storage:
             rows = conn.execute(
                 f"""
                 SELECT l.id, l.owner_chat_id, l.contract_id,
-                       COALESCE(NULLIF(l.object_label, ''), CASE WHEN COALESCE(c.object_name, '') != '' THEN CASE WHEN COALESCE(c.object_address, '') != '' THEN c.object_name || ', ' || c.object_address ELSE c.object_name END ELSE COALESCE(c.title, '') END, '') AS object_label,
+                       COALESCE(NULLIF(l.object_label, ''), NULLIF(c.object_name, ''), COALESCE(c.title, ''), '') AS object_label,
                        l.direction, l.source_channel, l.letter_date, l.subject, l.comment,
                        l.file_name, l.file_path, l.created_by_user_id, l.created_by_name, l.created_at,
                        COALESCE(c.title, '') AS contract_title, l.owner_chat_id AS chat_id
@@ -3953,6 +3984,18 @@ class Storage:
             created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],
+        )
+
+    @staticmethod
+    def _jurisprudence_object_from_row(row: sqlite3.Row) -> JurisprudenceObject:
+        return JurisprudenceObject(
+            id=int(row["id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            name=row["name"] or "",
+            customer=row["customer"] or "",
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
     @staticmethod
