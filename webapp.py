@@ -3995,6 +3995,7 @@ FINANCE_NAV_SECTIONS = [
     ("finance_loans", "Кредиты и займы", "/finance-loans"),
     ("finance_liabilities", "Прочие обязательства", "/finance-liabilities"),
     ("expenses", "Расходы", "/expenses"),
+    ("cashoperations", "Кассы", "/cashoperations"),
 ]
 
 JURISPRUDENCE_NAV_SECTIONS = [
@@ -11441,8 +11442,18 @@ EXPENSE_PAYMENT_SOURCE_META = {
 
 CASH_WITHDRAWAL_CATEGORY_CODE = "cash_withdrawal"
 CASH_RECIPIENT_META = (
-    ("учайкин денис павлович", "Денис"),
-    ("шевченко эдуард артурович", "Эдуард"),
+    ("учайкин денис павлович", "denis", "Денис"),
+    ("учайкин", "denis", "Денис"),
+    ("касса дениса", "denis", "Денис"),
+    ("денис", "denis", "Денис"),
+    ("шевченко эдуард артурович", "eduard", "Эдуард"),
+    ("шевченко", "eduard", "Эдуард"),
+    ("касса эдуарда", "eduard", "Эдуард"),
+    ("эдуард", "eduard", "Эдуард"),
+)
+CASHBOX_OPTIONS = (
+    ("eduard", "Касса Эдуарда"),
+    ("denis", "Касса Дениса"),
 )
 
 
@@ -11549,12 +11560,28 @@ def expense_payment_source_options(selected_source: str = "bank") -> str:
     )
 
 
-def cash_recipient_label(title: str, comment: str = "") -> str:
+def cashbox_label(code: str) -> str:
+    return dict(CASHBOX_OPTIONS).get(code, "Касса")
+
+
+def cashbox_code_from_text(title: str, comment: str = "") -> str:
     haystack = f"{title} {comment}".casefold()
-    for marker, label in CASH_RECIPIENT_META:
+    for marker, code, _label in CASH_RECIPIENT_META:
         if marker in haystack:
-            return label
-    return "Касса"
+            return code
+    return ""
+
+
+def cash_recipient_label(title: str, comment: str = "") -> str:
+    code = cashbox_code_from_text(title, comment)
+    return cashbox_label(code) if code else "Касса"
+
+
+def cashbox_options_html(selected_code: str = "denis") -> str:
+    return "".join(
+        f'<option value="{code}"{" selected" if code == selected_code else ""}>{escape(label)}</option>'
+        for code, label in CASHBOX_OPTIONS
+    )
 
 
 def expense_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses") -> str:
@@ -11632,6 +11659,305 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         </form>
       </div>
     </details>
+    """
+
+
+def cash_operation_scope(entry) -> str:
+    return cashbox_code_from_text(entry.title, entry.comment)
+
+
+def render_cashoperations_body(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    selected_cashbox: str = "denis",
+    flash_message: str = "",
+    success: bool = False,
+) -> str:
+    if selected_cashbox not in {code for code, _label in CASHBOX_OPTIONS}:
+        selected_cashbox = "denis"
+    entries = storage.list_expense_entries(owner_chat_id)
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    project_options_list = expense_project_options(storage, owner_chat_id, entries)
+    category_options_list = [
+        (code, label)
+        for code, label in expense_category_options(storage, owner_chat_id, entries)
+        if code != CASH_WITHDRAWAL_CATEGORY_CODE
+    ]
+    project_options = "".join(
+        f'<option value="{code}">{escape(label)}</option>'
+        for code, label in project_options_list
+    )
+    category_options = "".join(
+        f'<option value="{code}">{escape(label)}</option>'
+        for code, label in category_options_list
+    )
+
+    cash_income_entries = [
+        entry
+        for entry in entries
+        if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+        and (entry.payment_source or "bank") == "bank"
+        and cash_operation_scope(entry) == selected_cashbox
+    ]
+    cash_expense_entries = [
+        entry
+        for entry in entries
+        if (entry.payment_source or "bank") == "cash"
+        and entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE
+        and cash_operation_scope(entry) == selected_cashbox
+    ]
+    income_total = sum(entry.amount for entry in cash_income_entries)
+    expense_total = sum(entry.amount for entry in cash_expense_entries)
+    balance = income_total - expense_total
+    today_income = sum(entry.amount for entry in cash_income_entries if entry.expense_date == today)
+    today_expense = sum(entry.amount for entry in cash_expense_entries if entry.expense_date == today)
+    start_balance = balance - today_income + today_expense
+    missing_scope_entries = [
+        entry for entry in entries
+        if (
+            entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+            or (entry.payment_source or "bank") == "cash"
+        )
+        and not cash_operation_scope(entry)
+    ]
+
+    operations = [
+        ("income", entry) for entry in cash_income_entries
+    ] + [
+        ("expense", entry) for entry in cash_expense_entries
+    ]
+    operations.sort(key=lambda item: (item[1].expense_date, item[1].created_at, item[1].id), reverse=True)
+    latest_operations = operations[:14]
+    operation_rows = "".join(
+        f"""
+        <article class="cash-mobile-op">
+          <div>
+            <strong>{escape('Пополнение из банка' if kind == 'income' else entry.title)}</strong>
+            <span>{escape(format_date(entry.expense_date))} · {escape(expense_category_label(entry.category_code, dict(category_options_list)) if kind == 'expense' else 'Вывод в кассу')}</span>
+            <span>{escape(entry.comment) if entry.comment else ('Вывод денежных средств в кассу' if kind == 'income' else 'Без комментария')}</span>
+          </div>
+          <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
+        </article>
+        """
+        for kind, entry in latest_operations
+    ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
+
+    cashbox_tabs = "".join(
+        f'<a class="cash-mobile-tab{" active" if code == selected_cashbox else ""}" href="/cashoperations?cashbox={code}">{escape(label)}</a>'
+        for code, label in CASHBOX_OPTIONS
+    )
+    flash_html = f'<div class="cash-mobile-flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    warning_html = (
+        f'<div class="cash-mobile-warning">Есть операции кассы без понятного получателя: {len(missing_scope_entries)}. Их нужно уточнить в CRM, чтобы они попали в нужную кассу.</div>'
+        if missing_scope_entries
+        else ""
+    )
+    can_edit = has_permission(current_user, "expenses", "edit")
+    add_form = ""
+    if can_edit:
+        add_form = f"""
+        <section class="cash-mobile-panel">
+          <h2>Добавить расход</h2>
+          <form class="cash-mobile-form" method="post" action="/cashoperations/expense">
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <label>Сумма
+              <input type="text" name="amount" inputmode="decimal" placeholder="0" required>
+            </label>
+            <label>Объект
+              <select name="project_code" required>{project_options}</select>
+            </label>
+            <label>Статья расхода
+              <select name="category_code" required>{category_options}</select>
+            </label>
+            <label>Наименование
+              <input type="text" name="title" placeholder="Например, материалы / доставка" required>
+            </label>
+            <label>Дата
+              <input type="date" name="expense_date" value="{today.isoformat()}" required>
+            </label>
+            <label>Комментарий
+              <textarea name="comment" placeholder="Коротко, что купили или оплатили"></textarea>
+            </label>
+            <button type="submit">Сохранить расход</button>
+          </form>
+        </section>
+        """
+
+    return f"""
+    <style>
+      .cash-mobile {{
+        max-width: 560px;
+        margin: 0 auto;
+        padding: 0 0 28px;
+      }}
+      .cash-mobile * {{ box-sizing: border-box; }}
+      .cash-mobile-tabs {{
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+        margin-bottom: 12px;
+      }}
+      .cash-mobile-tab {{
+        min-height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        display: grid;
+        place-items: center;
+        text-decoration: none;
+        color: var(--muted);
+        background: rgba(255,255,255,.72);
+        font-weight: 700;
+      }}
+      .cash-mobile-tab.active {{
+        color: var(--ink);
+        background: rgba(232,246,238,.95);
+        border-color: rgba(29,92,99,.24);
+      }}
+      .cash-mobile-panel {{
+        background: rgba(255,255,255,.88);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 16px;
+        margin-top: 14px;
+        box-shadow: 0 14px 36px rgba(22, 35, 47, .08);
+      }}
+      .cash-mobile-balance {{
+        font-size: clamp(36px, 12vw, 54px);
+        line-height: 1;
+        letter-spacing: 0;
+        font-weight: 800;
+        margin-top: 8px;
+      }}
+      .cash-mobile-sub {{
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.35;
+      }}
+      .cash-mobile-metrics {{
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 16px;
+      }}
+      .cash-mobile-metric {{
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px;
+        min-width: 0;
+      }}
+      .cash-mobile-metric span {{
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.2;
+        min-height: 27px;
+      }}
+      .cash-mobile-metric b {{
+        display: block;
+        margin-top: 7px;
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }}
+      .cash-mobile-warning,
+      .cash-mobile-flash {{
+        margin-top: 12px;
+        padding: 11px 12px;
+        border-radius: 12px;
+        background: rgba(255, 241, 214, .95);
+        color: #6f4109;
+        font-size: 13px;
+        line-height: 1.35;
+      }}
+      .cash-mobile-flash.ok {{
+        background: rgba(232,246,238,.95);
+        color: #1d5c43;
+      }}
+      .cash-mobile-op {{
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 0;
+        border-top: 1px solid var(--line);
+      }}
+      .cash-mobile-op:first-child {{ border-top: 0; }}
+      .cash-mobile-op strong,
+      .cash-mobile-op span {{
+        display: block;
+      }}
+      .cash-mobile-op span {{
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }}
+      .cash-mobile-op b {{
+        white-space: nowrap;
+      }}
+      .cash-mobile-op b.income {{ color: #1d5c43; }}
+      .cash-mobile-op b.expense {{ color: #9b2f2f; }}
+      .cash-mobile-empty {{
+        color: var(--muted);
+        padding: 14px 0 4px;
+      }}
+      .cash-mobile-form {{
+        display: grid;
+        gap: 12px;
+      }}
+      .cash-mobile-form label {{
+        color: var(--muted);
+        font-size: 13px;
+        display: grid;
+        gap: 6px;
+      }}
+      .cash-mobile-form input,
+      .cash-mobile-form select,
+      .cash-mobile-form textarea {{
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 13px 12px;
+        font: inherit;
+        color: var(--ink);
+        background: #fff;
+      }}
+      .cash-mobile-form textarea {{
+        min-height: 86px;
+        resize: vertical;
+      }}
+      .cash-mobile-form button {{
+        border: 0;
+        border-radius: 12px;
+        min-height: 48px;
+        padding: 12px 14px;
+        background: #1d5c43;
+        color: #fff;
+        font: inherit;
+        font-weight: 800;
+      }}
+      @media (max-width: 420px) {{
+        .cash-mobile-metrics {{ grid-template-columns: 1fr; }}
+      }}
+    </style>
+    <section class="cash-mobile">
+      <div class="cash-mobile-tabs">{cashbox_tabs}</div>
+      {flash_html}
+      <section class="cash-mobile-panel">
+        <div class="cash-mobile-sub">{escape(cashbox_label(selected_cashbox))}</div>
+        <div class="cash-mobile-balance">{escape(format_amount(balance))}</div>
+        <div class="cash-mobile-metrics">
+          <div class="cash-mobile-metric"><span>Поступило сегодня</span><b>{escape(format_amount(today_income))}</b></div>
+          <div class="cash-mobile-metric"><span>Потрачено сегодня</span><b>{escape(format_amount(today_expense))}</b></div>
+          <div class="cash-mobile-metric"><span>На начало дня</span><b>{escape(format_amount(start_balance))}</b></div>
+        </div>
+        {warning_html}
+      </section>
+      <section class="cash-mobile-panel">
+        <h2>Последние операции</h2>
+        {operation_rows}
+      </section>
+      {add_form}
+    </section>
     """
 
 
@@ -13782,6 +14108,80 @@ def app(environ, start_response):
         html = layout("Доступ запрещен", body, owners, current_owner, section_id, current_user)
         start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
+
+    if path == "/cashoperations" and method == "GET":
+        denied = guard("expenses", "view")
+        if denied:
+            return denied
+        selected_cashbox = query.get("cashbox", ["denis"])[0].strip() or "denis"
+        flash_message = query.get("flash", [""])[0].strip()
+        success = query.get("ok", ["0"])[0] == "1"
+        body = render_cashoperations_body(storage, current_owner, current_user, selected_cashbox, flash_message, success)
+        html = layout(
+            "Кассы",
+            body,
+            owners,
+            current_owner,
+            "expenses",
+            current_user,
+            "Кассы",
+            "Мобильный учет налички: пополнения из расчетного счета, расходы из кассы и текущий остаток.",
+            "cashoperations",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/cashoperations/expense" and method == "POST":
+        denied = guard("expenses", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
+        if selected_cashbox not in {code for code, _label in CASHBOX_OPTIONS}:
+            selected_cashbox = "denis"
+        try:
+            expense_date_raw = form.get("expense_date", "").strip()
+            expense_date = parse_date(expense_date_raw) if expense_date_raw else None
+            if expense_date is None:
+                raise ValueError("Укажите дату расхода")
+            amount = parse_amount(form.get("amount", "").strip())
+            project_code = form.get("project_code", "").strip()
+            category_code = form.get("category_code", "").strip()
+            title = form.get("title", "").strip()
+            comment = form.get("comment", "").strip()
+            entries = storage.list_expense_entries(current_owner)
+            project_codes = {code for code, _label in expense_project_options(storage, current_owner, entries)}
+            category_codes = {
+                code
+                for code, _label in expense_category_options(storage, current_owner, entries)
+                if code != CASH_WITHDRAWAL_CATEGORY_CODE
+            }
+            if project_code not in project_codes:
+                raise ValueError("Выберите объект")
+            if category_code not in category_codes:
+                raise ValueError("Выберите статью расхода")
+            if not title:
+                raise ValueError("Укажите наименование траты")
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            cashbox_marker = f"[{cashbox_label(selected_cashbox)}]"
+            normalized_comment = " ".join(part for part in (cashbox_marker, comment) if part)
+            storage.add_expense_entry(
+                current_owner,
+                expense_date,
+                project_code,
+                category_code,
+                title,
+                amount,
+                normalized_comment,
+                "cash",
+                False,
+                (current_user or {}).get("id"),
+                actor_name,
+            )
+            flash = "Расход добавлен в кассу и CRM-расходы."
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
+        except ValueError as exc:
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
 
     if path == "/events":
         denied = guard("events", "view")

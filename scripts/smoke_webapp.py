@@ -149,6 +149,7 @@ def main() -> int:
         "/finance-loans",
         "/finance-receivables",
         "/finance-liabilities",
+        "/cashoperations",
         "/jurisprudence/letters",
         "/jurisprudence/courts",
         "/jurisprudence/courts/1",
