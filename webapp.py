@@ -11961,6 +11961,177 @@ def render_cashoperations_body(
     """
 
 
+def render_cashoperations_standalone_page(body: str, current_user: dict | None = None) -> str:
+    user_label = ""
+    logout_html = ""
+    if current_user:
+        user_label = (current_user.get("full_name") or current_user.get("login") or "").strip()
+        logout_html = '<a class="cash-shell-logout" href="/logout">Выйти</a>'
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Касса</title>
+  <style>
+    :root {{
+      --bg: #f4f6f2;
+      --panel: #ffffff;
+      --ink: #19201c;
+      --muted: #68736d;
+      --line: #dde4dd;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      letter-spacing: 0;
+    }}
+    button, input, select, textarea {{ font: inherit; }}
+    .cash-shell {{
+      width: min(100%, 560px);
+      margin: 0 auto;
+      min-height: 100vh;
+      padding: env(safe-area-inset-top) 14px calc(24px + env(safe-area-inset-bottom));
+    }}
+    .cash-shell-top {{
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      margin: 0 -14px;
+      padding: 12px 14px 10px;
+      background: rgba(244, 246, 242, .94);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(221, 228, 221, .75);
+    }}
+    .cash-shell-row {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }}
+    .cash-shell-user {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
+    }}
+    .cash-shell h1 {{
+      margin: 2px 0 0;
+      font-size: 24px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }}
+    .cash-shell-logout {{
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 9px 12px;
+      text-decoration: none;
+      font-size: 14px;
+      white-space: nowrap;
+    }}
+  </style>
+</head>
+<body>
+  <main class="cash-shell">
+    <header class="cash-shell-top">
+      <div class="cash-shell-row">
+        <div>
+          <div class="cash-shell-user">{escape(user_label) if user_label else "Касса"}</div>
+          <h1>Моя касса</h1>
+        </div>
+        {logout_html}
+      </div>
+    </header>
+    {body}
+  </main>
+</body>
+</html>"""
+
+
+def render_cashoperations_login_page(error: str = "", login_hint: str = "") -> str:
+    error_html = f'<div class="cash-login-error">{escape(error)}</div>' if error else '<div class="cash-login-error"></div>'
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Вход в кассу</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #f4f6f2;
+      color: #19201c;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      letter-spacing: 0;
+      padding: 18px;
+    }}
+    main {{
+      width: min(100%, 420px);
+      background: white;
+      border: 1px solid #dde4dd;
+      border-radius: 8px;
+      padding: 22px;
+      box-shadow: 0 10px 28px rgba(27, 34, 28, .08);
+    }}
+    h1 {{ margin: 0 0 6px; font-size: 28px; letter-spacing: 0; }}
+    p {{ margin: 0 0 18px; color: #68736d; line-height: 1.4; }}
+    label {{ display: block; margin-bottom: 14px; color: #68736d; font-size: 13px; }}
+    input {{
+      width: 100%;
+      margin-top: 6px;
+      border: 1px solid #dde4dd;
+      border-radius: 8px;
+      padding: 14px 12px;
+      font: inherit;
+      color: #19201c;
+    }}
+    button {{
+      width: 100%;
+      border: 0;
+      border-radius: 8px;
+      background: #186844;
+      color: white;
+      min-height: 50px;
+      padding: 12px 14px;
+      font: inherit;
+      font-weight: 750;
+    }}
+    .cash-login-error {{
+      margin-top: 12px;
+      color: #b13535;
+      min-height: 20px;
+      font-size: 14px;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Касса</h1>
+    <p>Вход для внесения наличных расходов с телефона.</p>
+    <form method="post" action="/cashoperations/login">
+      <label>Логин
+        <input name="login" autocomplete="username" value="{escape(login_hint)}" required>
+      </label>
+      <label>Пароль
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit">Войти</button>
+      {error_html}
+    </form>
+  </main>
+</body>
+</html>"""
+
+
 def finance_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, kind_filter: str, base_path: str = "/finance-analysis", allowed_kinds: tuple[str, ...] | None = None) -> str:
     if not has_permission(current_user, "finance", "edit"):
         return finance_kind_chip(entry.entry_kind)
@@ -14093,6 +14264,23 @@ def app(environ, start_response):
             cookie = f"{PREVIEW_THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax"
         return redirect_with_cookies(start_response, next_path, [cookie])
 
+    if path == "/cashoperations/login" and method == "POST":
+        form = read_post_data(environ)
+        login = form.get("login", "")
+        user = storage.get_web_user_by_login(login)
+        if user is None or not user["is_active"] or not verify_password(form.get("password", ""), user.get("password_hash", "")):
+            html = render_cashoperations_login_page("Неверный логин или пароль.", login)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        token = secrets.token_urlsafe(32)
+        storage.create_web_session(user["id"], token)
+        return redirect_with_cookie(start_response, "/cashoperations", token)
+
+    if path == "/cashoperations" and method == "GET" and current_user is None:
+        html = render_cashoperations_login_page()
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
     if current_user is None:
         body = render_auth_body(storage)
         html = layout("Авторизация", body, owners, current_owner, "contracts", None)
@@ -14117,17 +14305,7 @@ def app(environ, start_response):
         flash_message = query.get("flash", [""])[0].strip()
         success = query.get("ok", ["0"])[0] == "1"
         body = render_cashoperations_body(storage, current_owner, current_user, selected_cashbox, flash_message, success)
-        html = layout(
-            "Кассы",
-            body,
-            owners,
-            current_owner,
-            "expenses",
-            current_user,
-            "Кассы",
-            "Мобильный учет налички: пополнения из расчетного счета, расходы из кассы и текущий остаток.",
-            "cashoperations",
-        )
+        html = render_cashoperations_standalone_page(body, current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
