@@ -11439,6 +11439,12 @@ EXPENSE_PAYMENT_SOURCE_META = {
     "cash": "Касса",
 }
 
+CASH_WITHDRAWAL_CATEGORY_CODE = "cash_withdrawal"
+CASH_RECIPIENT_META = (
+    ("учайкин денис павлович", "Денис"),
+    ("шевченко эдуард артурович", "Эдуард"),
+)
+
 
 def finance_query_suffix(owner_chat_id: int, active_tab: str = "active", kind_filter: str = "") -> str:
     parts = [f"owner={owner_chat_id}"]
@@ -11541,6 +11547,14 @@ def expense_payment_source_options(selected_source: str = "bank") -> str:
         f'<option value="{code}"{" selected" if code == selected_source else ""}>{escape(label)}</option>'
         for code, label in EXPENSE_PAYMENT_SOURCE_META.items()
     )
+
+
+def cash_recipient_label(title: str, comment: str = "") -> str:
+    haystack = f"{title} {comment}".casefold()
+    for marker, label in CASH_RECIPIENT_META:
+        if marker in haystack:
+            return label
+    return "Касса"
 
 
 def expense_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses") -> str:
@@ -12921,11 +12935,57 @@ def render_expenses_section(
         </div>
         """
 
+    def render_cash_income_rows(row_entries) -> str:
+        return "".join(
+            f"""
+            <tr>
+              <td class="nowrap">{format_date(entry.expense_date)}</td>
+              <td><span class="chip">Приход</span></td>
+              <td>
+                <div class="timeline-title">Пополнение кассы: {escape(cash_recipient_label(entry.title, entry.comment))}</div>
+                <div class="contract-table-subtle" style="margin-top:4px;">Из расчетного счета</div>
+                <div class="contract-table-subtle" style="margin-top:4px;">{escape(entry.title)}</div>
+              </td>
+              <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+              <td>{escape(entry.comment) if entry.comment else "Вывод денежных средств в кассу"}</td>
+              <td class="nowrap">Банк</td>
+            </tr>
+            """
+            for entry in row_entries
+        )
+
+    def render_cash_table(cash_income_entries, cash_expense_entries, empty_text: str) -> str:
+        rows_html = render_cash_income_rows(cash_income_entries) + render_expense_rows(cash_expense_entries)
+        return f"""
+        <div class="expenses-table-wrap">
+          <table class="table contract-table">
+            <thead>
+              <tr>
+                <th class="nowrap">Дата</th>
+                <th>Тип</th>
+                <th>Наименование</th>
+                <th class="nowrap">Сумма</th>
+                <th>Комментарий</th>
+                <th>Источник</th>
+              </tr>
+            </thead>
+            <tbody>{rows_html or f'<tr><td colspan="6">{escape(empty_text)}</td></tr>'}</tbody>
+          </table>
+        </div>
+        """
+
     if selected_day is not None:
         bank_entries = [entry for entry in filtered_entries if (entry.payment_source or "bank") == "bank"]
+        cash_income_entries = [
+            entry
+            for entry in bank_entries
+            if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+        ]
         cash_entries = [entry for entry in filtered_entries if (entry.payment_source or "bank") == "cash"]
         bank_total = sum(entry.amount for entry in bank_entries)
-        cash_total = sum(entry.amount for entry in cash_entries)
+        cash_income_total = sum(entry.amount for entry in cash_income_entries)
+        cash_expense_total = sum(entry.amount for entry in cash_entries)
+        cash_total = cash_income_total - cash_expense_total
         registry_tables_html = f"""
         <div style="margin-top:18px;">
           <div class="panel-head" style="margin-bottom:10px;">
@@ -12941,11 +13001,11 @@ def render_expenses_section(
           <div class="panel-head" style="margin-bottom:10px;">
             <div>
               <h3 class="panel-title">Касса</h3>
-              <div class="panel-sub">Наличные расходы за {escape(format_date(selected_day))}, внесенные вручную или из отдельной формы.</div>
+              <div class="panel-sub">Приходы из вывода в кассу и наличные расходы за {escape(format_date(selected_day))}. Приход: {escape(format_amount(cash_income_total))}. Расход: {escape(format_amount(cash_expense_total))}.</div>
             </div>
             <span class="chip">{escape(format_amount(cash_total))}</span>
           </div>
-          {render_expenses_table(cash_entries, "По кассе за выбранный день расходов нет.")}
+          {render_cash_table(cash_income_entries, cash_entries, "По кассе за выбранный день движений нет.")}
         </div>
         """
     else:

@@ -22,6 +22,7 @@ DEFAULT_EXPENSE_CATEGORIES = (
     ("taxes", "Налоги и сборы"),
     ("utilities", "Связь / коммунальные"),
     ("bank_commission", "Комиссии банка"),
+    ("cash_withdrawal", "Вывод в кассу"),
     ("other", "Прочее"),
 )
 
