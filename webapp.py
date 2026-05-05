@@ -11824,16 +11824,18 @@ def render_cashoperations_body(
     def operation_card(kind: str, entry) -> str:
         title = (entry.title or "Пополнение кассы") if kind == "income" else entry.title
         category = "Вывод в кассу" if kind == "income" else expense_category_label(entry.category_code, category_labels)
+        if kind == "income" and title.startswith("Пополнение кассы:"):
+            title, category = "Пополнение кассы", title.split(":", 1)[1].strip() or "Поступление"
         comment = editable_comment(entry)
         if not comment:
             comment = "Вывод денежных средств в кассу" if kind == "income" else "Без комментария"
         employee_line = (
-            f'<span>Сотрудник: {escape(entry.payroll_employee_name)}</span>'
+            f'<span class="cash-mobile-op-meta">Сотрудник: {escape(entry.payroll_employee_name)}</span>'
             if kind != "income" and getattr(entry, "payroll_employee_name", "")
             else ""
         )
         receipt_line = (
-            '<span>Чек приложен</span>'
+            '<span class="cash-mobile-op-receipt">Чек приложен</span>'
             if kind != "income" and getattr(entry, "receipt_file_path", "")
             else ""
         )
@@ -11850,26 +11852,30 @@ def render_cashoperations_body(
               data-expense-date="{entry.expense_date.isoformat()}"
               data-expense-comment="{escape(editable_comment(entry))}"
               data-expense-receipt="{"1" if getattr(entry, "receipt_file_path", "") else ""}">
-              <span>
-                <strong>{escape(title)}</strong>
-                <span>{escape(format_date(entry.expense_date))} · {escape(category)}</span>
+              <span class="cash-mobile-op-main">
+                <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
+                <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
                 {employee_line}
-                {receipt_line}
-                <span>{escape(comment)}</span>
+                <span class="cash-mobile-op-comment">{escape(comment)}</span>
               </span>
-              <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
+              <span class="cash-mobile-op-side">
+                <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
+                {receipt_line}
+              </span>
             </button>
             """
         return f"""
         <article class="cash-mobile-op">
-          <div>
-            <strong>{escape(title)}</strong>
-            <span>{escape(format_date(entry.expense_date))} · {escape(category)}</span>
+          <div class="cash-mobile-op-main">
+            <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
+            <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
             {employee_line}
-            {receipt_line}
-            <span>{escape(comment)}</span>
+            <span class="cash-mobile-op-comment">{escape(comment)}</span>
           </div>
-          <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
+          <div class="cash-mobile-op-side">
+            <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
+            {receipt_line}
+          </div>
         </article>
         """
 
@@ -12183,18 +12189,52 @@ def render_cashoperations_body(
         cursor: pointer;
       }}
       .cash-mobile-op:first-child {{ border-top: 0; }}
-      .cash-mobile-op strong,
-      .cash-mobile-op span {{
+      .cash-mobile-op-main,
+      .cash-mobile-op-side,
+      .cash-mobile-op-date,
+      .cash-mobile-op-title,
+      .cash-mobile-op-comment,
+      .cash-mobile-op-meta,
+      .cash-mobile-op-receipt {{
         display: block;
       }}
-      .cash-mobile-op span {{
-        margin-top: 4px;
+      .cash-mobile-op-main {{
+        flex: 1;
+        min-width: 0;
+      }}
+      .cash-mobile-op-date,
+      .cash-mobile-op-comment,
+      .cash-mobile-op-meta,
+      .cash-mobile-op-receipt {{
         color: var(--muted);
         font-size: 12px;
         line-height: 1.35;
       }}
-      .cash-mobile-op b {{
+      .cash-mobile-op-title {{
+        margin-top: 4px;
+        line-height: 1.3;
+      }}
+      .cash-mobile-op-title strong {{
+        font-weight: 800;
+      }}
+      .cash-mobile-op-title span {{
+        color: var(--muted);
+        font-weight: 500;
+      }}
+      .cash-mobile-op-comment,
+      .cash-mobile-op-meta {{
+        margin-top: 4px;
+      }}
+      .cash-mobile-op-side {{
+        flex: 0 0 auto;
+        text-align: right;
+      }}
+      .cash-mobile-op-side b {{
+        display: block;
         white-space: nowrap;
+      }}
+      .cash-mobile-op-receipt {{
+        margin-top: 4px;
       }}
       .cash-mobile-op b.income {{ color: #186844; }}
       .cash-mobile-op b.expense {{ color: #9b2f2f; }}
