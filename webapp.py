@@ -5426,14 +5426,17 @@ def layout(
       width: fit-content;
     }}
     .jurisprudence-letters-table {{
-      table-layout: fixed;
+      table-layout: auto;
       width: 100%;
     }}
     .jurisprudence-letters-table .type-col {{
       width: 150px;
     }}
     .jurisprudence-letters-table .object-col {{
-      width: 205px;
+      width: 1%;
+    }}
+    .jurisprudence-letters-table .topic-col {{
+      width: 100%;
     }}
     .jurisprudence-letters-table .files-col {{
       width: 210px;
@@ -5456,6 +5459,10 @@ def layout(
     .jurisprudence-object-cell .contract-table-subtle {{
       overflow: hidden;
       text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .jurisprudence-letters-table th:nth-child(2),
+    .jurisprudence-letters-table td:nth-child(2) {{
       white-space: nowrap;
     }}
     .legal-letter-topic {{
@@ -8033,7 +8040,7 @@ def render_jurisprudence_letters_section(
         <colgroup>
           <col class="type-col">
           <col class="object-col">
-          <col>
+          <col class="topic-col">
           <col class="files-col">
           <col class="author-col">
         </colgroup>
