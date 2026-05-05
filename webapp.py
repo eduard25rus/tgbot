@@ -8151,8 +8151,10 @@ def render_directories_section(
     employee_groups = {
         "admin": "Административные",
         "builders": "Строители",
+        "terminated": "Уволенные",
     }
     active_employee_group = active_employee_group if active_employee_group in employee_groups else "admin"
+    employee_work_groups = {key: label for key, label in employee_groups.items() if key != "terminated"}
     can_edit = has_permission(current_user, "directories", "edit")
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     contracts = storage.list_contracts(owner_chat_id)
@@ -8221,7 +8223,11 @@ def render_directories_section(
 
     employees = storage.list_payroll_employees(owner_chat_id)
     employee_group_counts = {
-        group_code: sum(1 for employee in employees if employee.employee_group == group_code)
+        group_code: (
+            sum(1 for employee in employees if not employee.is_active)
+            if group_code == "terminated"
+            else sum(1 for employee in employees if employee.employee_group == group_code and employee.is_active)
+        )
         for group_code in employee_groups
     }
     employee_group_tabs = "".join(
@@ -8233,11 +8239,18 @@ def render_directories_section(
         """
         for group_code, label in employee_groups.items()
     )
-    visible_employees = [employee for employee in employees if employee.employee_group == active_employee_group]
+    if active_employee_group == "terminated":
+        visible_employees = [employee for employee in employees if not employee.is_active]
+    else:
+        visible_employees = [
+            employee for employee in employees
+            if employee.employee_group == active_employee_group and employee.is_active
+        ]
+
     def employee_group_options(selected_group: str) -> str:
         return "".join(
             f'<option value="{group_code}" {"selected" if selected_group == group_code else ""}>{escape(label)}</option>'
-            for group_code, label in employee_groups.items()
+            for group_code, label in employee_work_groups.items()
         )
 
     today_iso = datetime.now(VLADIVOSTOK_TZ).date().isoformat()
@@ -8275,6 +8288,13 @@ def render_directories_section(
           </form>
         </details>
         """
+
+    show_employee_source_group = active_employee_group == "terminated"
+    employee_group_header = '<th class="nowrap">Раздел</th>' if show_employee_source_group else ''
+    employee_group_empty_colspan = 5 if show_employee_source_group else 4
+    employee_group_cell = (
+        lambda employee: f'<td><span class="chip">{escape(employee_work_groups.get(employee.employee_group, "Административные"))}</span></td>'
+    )
 
     employee_rows = "".join(
         f"""
@@ -8320,11 +8340,12 @@ def render_directories_section(
             </div>
           </td>
           <td>{escape(employee.role_title or "Без должности")}</td>
+          {employee_group_cell(employee) if show_employee_source_group else ""}
           <td style="text-align:center;">{render_employee_status_control(employee)}</td>
         </tr>
         """
         for index, employee in enumerate(visible_employees, start=1)
-    ) or '<tr><td colspan="4">Сотрудников в этой группе пока нет.</td></tr>'
+    ) or f'<tr><td colspan="{employee_group_empty_colspan}">Сотрудников в этом разделе пока нет.</td></tr>'
     add_employee_block = ""
     if can_edit:
         add_employee_block = f"""
@@ -8343,7 +8364,7 @@ def render_directories_section(
               <div class="field">
                 <label>Группа</label>
                 <select name="employee_group">
-                  {employee_group_options(active_employee_group)}
+                  {employee_group_options(active_employee_group if active_employee_group != "terminated" else "admin")}
                 </select>
               </div>
               <button class="submit-btn" type="submit">Добавить сотрудника</button>
@@ -8389,6 +8410,7 @@ def render_directories_section(
             <th class="nowrap">№</th>
             <th>Сотрудник</th>
             <th>Должность</th>
+            {employee_group_header}
             <th class="nowrap">Статус</th>
           </tr>
         </thead>
@@ -14074,7 +14096,8 @@ def app(environ, start_response):
                 raise ValueError("Укажите должность")
             if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, employee_group, is_active, terminated_date):
                 raise ValueError("Сотрудник не найден")
-            return redirect(start_response, f"/directories?owner={current_owner}&employee_group={employee_group}#directory-employees")
+            target_employee_group = employee_group if is_active else "terminated"
+            return redirect(start_response, f"/directories?owner={current_owner}&employee_group={target_employee_group}#directory-employees")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, active_employee_group, f"Не удалось обновить сотрудника: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
