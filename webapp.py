@@ -6247,6 +6247,14 @@ def layout(
       text-transform: none;
       letter-spacing: 0;
     }}
+    .directory-edit-form .field input,
+    .directory-edit-form .field textarea,
+    .directory-edit-form .field select {{
+      font-weight: 400;
+    }}
+    .directory-edit-form .submit-btn {{
+      font-weight: 500;
+    }}
     .auction-added-tooltip {{
       position: relative;
       cursor: default;
