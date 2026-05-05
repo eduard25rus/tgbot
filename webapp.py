@@ -767,6 +767,25 @@ def save_cash_receipt_upload(storage: Storage, owner_chat_id: int, expense_id: i
         raise ValueError("Не удалось прикрепить чек")
 
 
+def resolve_cash_receipt_file(storage: Storage, entry) -> tuple[Path, str, str]:
+    if not getattr(entry, "receipt_file_path", ""):
+        raise ValueError("Receipt not found")
+    upload_root = contract_upload_root(storage).resolve()
+    absolute_path = (upload_root / entry.receipt_file_path).resolve()
+    if upload_root not in absolute_path.parents and absolute_path != upload_root:
+        raise ValueError("Forbidden")
+    safe_filename, content_type = detect_legal_file_type(absolute_path, entry.receipt_file_name or absolute_path.name or "receipt")
+    if content_type == "application/octet-stream":
+        suffix = Path(safe_filename).suffix.lower()
+        if suffix == ".heic":
+            content_type = "image/heic"
+        elif suffix == ".heif":
+            content_type = "image/heif"
+    if content_type != "application/pdf" and not content_type.startswith("image/"):
+        raise ValueError("Receipt is not a supported preview file")
+    return absolute_path, safe_filename, content_type
+
+
 def parse_amount(raw: str) -> float:
     amount = float(raw.strip().replace(" ", "").replace(",", "."))
     if amount < 0:
@@ -11983,6 +12002,7 @@ def render_cashoperations_body(
               <span data-cash-receipt-label>Добавить чек</span>
             </label>
             <div class="cash-receipt-status is-hidden" data-cash-receipt-status></div>
+            <button class="secondary" type="button" data-cash-receipt-view hidden>Посмотреть чек</button>
             <button class="danger secondary-danger" type="button" data-cash-receipt-clear hidden>Удалить чек</button>
             <button type="submit" data-cash-expense-submit>Сохранить расход</button>
             <button class="danger" type="submit" formaction="/cashoperations/expense/delete" data-cash-expense-delete hidden>Удалить расход</button>
@@ -12346,6 +12366,11 @@ def render_cashoperations_body(
         font: inherit;
         font-weight: 800;
       }}
+      .cash-mobile-form button.secondary {{
+        background: #fff;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }}
       .cash-mobile-form button.danger {{
         background: #9b2f2f;
       }}
@@ -12390,6 +12415,48 @@ def render_cashoperations_body(
         .cash-mobile-metrics {{ grid-template-columns: 1fr; }}
         .cash-mobile-actions {{ grid-template-columns: 1fr; }}
       }}
+      .cash-receipt-viewer {{
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        display: none;
+        grid-template-rows: auto 1fr;
+        background: #f7faf6;
+      }}
+      .cash-receipt-viewer.active {{
+        display: grid;
+      }}
+      .cash-receipt-viewer-head {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255,255,255,.96);
+      }}
+      .cash-receipt-viewer-head strong {{
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }}
+      .cash-receipt-viewer-close {{
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--ink);
+        min-height: 40px;
+        padding: 8px 12px;
+        font: inherit;
+        font-weight: 800;
+      }}
+      .cash-receipt-frame {{
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: #f7faf6;
+      }}
     </style>
     <section class="cash-mobile">
       <div class="cash-mobile-tabs">{cashbox_tabs}</div>
@@ -12433,6 +12500,13 @@ def render_cashoperations_body(
       <button class="cash-mobile-nav" type="button" data-cash-screen="history">История</button>
       <button class="cash-mobile-nav" type="button" data-cash-screen="reconcile">Сверка</button>
     </nav>
+    <section class="cash-receipt-viewer" data-cash-receipt-viewer aria-hidden="true">
+      <div class="cash-receipt-viewer-head">
+        <strong data-cash-receipt-viewer-title>Чек</strong>
+        <button class="cash-receipt-viewer-close" type="button" data-cash-receipt-viewer-close>Закрыть</button>
+      </div>
+      <iframe class="cash-receipt-frame" title="Просмотр чека" data-cash-receipt-frame></iframe>
+    </section>
     <script>
       (() => {{
         const screens = {{
@@ -12477,11 +12551,17 @@ def render_cashoperations_body(
         const receiptLabel = document.querySelector("[data-cash-receipt-label]");
         const receiptClear = document.querySelector("[data-cash-receipt-clear]");
         const receiptStatus = document.querySelector("[data-cash-receipt-status]");
+        const receiptView = document.querySelector("[data-cash-receipt-view]");
+        const receiptViewer = document.querySelector("[data-cash-receipt-viewer]");
+        const receiptViewerClose = document.querySelector("[data-cash-receipt-viewer-close]");
+        const receiptViewerTitle = document.querySelector("[data-cash-receipt-viewer-title]");
+        const receiptFrame = document.querySelector("[data-cash-receipt-frame]");
         const removeReceiptInput = document.querySelector("[data-cash-remove-receipt]");
         let editBackScreen = "history";
         let formDirty = false;
         let isSubmitting = false;
         let currentExpenseHasReceipt = false;
+        let selectedReceiptPreviewUrl = "";
         const loadedAt = Date.now();
         function randomKey() {{
           if (window.crypto && crypto.getRandomValues) {{
@@ -12500,6 +12580,27 @@ def render_cashoperations_body(
         }}
         function showEditbar(showBack) {{
           if (editbar) editbar.classList.toggle("is-hidden", !showBack);
+        }}
+        function clearSelectedReceiptPreview() {{
+          if (selectedReceiptPreviewUrl) {{
+            URL.revokeObjectURL(selectedReceiptPreviewUrl);
+            selectedReceiptPreviewUrl = "";
+          }}
+        }}
+        function openReceiptViewer(src, title) {{
+          if (!receiptViewer || !receiptFrame) return;
+          receiptFrame.src = src;
+          if (receiptViewerTitle) receiptViewerTitle.textContent = title || "Чек";
+          receiptViewer.classList.add("active");
+          receiptViewer.setAttribute("aria-hidden", "false");
+          document.documentElement.style.overflow = "hidden";
+        }}
+        function closeReceiptViewer() {{
+          if (!receiptViewer || !receiptFrame) return;
+          receiptViewer.classList.remove("active");
+          receiptViewer.setAttribute("aria-hidden", "true");
+          receiptFrame.src = "about:blank";
+          document.documentElement.style.overflow = "";
         }}
         function canRefresh() {{
           if (isSubmitting) return false;
@@ -12556,12 +12657,14 @@ def render_cashoperations_body(
           if (expenseDelete) expenseDelete.hidden = true;
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
           if (receiptClear) receiptClear.hidden = true;
+          if (receiptView) receiptView.hidden = true;
           if (receiptStatus) {{
             receiptStatus.textContent = "";
             receiptStatus.classList.add("is-hidden");
           }}
           if (removeReceiptInput) removeReceiptInput.value = "";
           currentExpenseHasReceipt = false;
+          clearSelectedReceiptPreview();
           showEditbar(false);
           formDirty = false;
           syncAdminProject();
@@ -12596,11 +12699,13 @@ def render_cashoperations_body(
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
           currentExpenseHasReceipt = Boolean(button.dataset.expenseReceipt);
           if (receiptClear) receiptClear.hidden = !currentExpenseHasReceipt;
+          if (receiptView) receiptView.hidden = !currentExpenseHasReceipt;
           if (receiptStatus) {{
             receiptStatus.textContent = currentExpenseHasReceipt ? "Чек приложен" : "";
             receiptStatus.classList.toggle("is-hidden", !currentExpenseHasReceipt);
           }}
           if (removeReceiptInput) removeReceiptInput.value = "";
+          clearSelectedReceiptPreview();
           showEditbar(true);
           formDirty = false;
           syncAdminProject();
@@ -12653,6 +12758,9 @@ def render_cashoperations_body(
           const file = receiptInput.files && receiptInput.files[0];
           if (receiptLabel) receiptLabel.textContent = file ? file.name : "Добавить чек";
           if (receiptClear) receiptClear.hidden = !(file || currentExpenseHasReceipt);
+          clearSelectedReceiptPreview();
+          if (file) selectedReceiptPreviewUrl = URL.createObjectURL(file);
+          if (receiptView) receiptView.hidden = !(file || currentExpenseHasReceipt);
           if (receiptStatus) {{
             if (file) {{
               receiptStatus.textContent = "Выбран чек: " + file.name;
@@ -12669,12 +12777,32 @@ def render_cashoperations_body(
           if (removeReceiptInput) removeReceiptInput.value = "1";
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
           currentExpenseHasReceipt = false;
+          clearSelectedReceiptPreview();
+          if (receiptView) receiptView.hidden = true;
           if (receiptStatus) {{
             receiptStatus.textContent = "Чек будет удален после сохранения";
             receiptStatus.classList.remove("is-hidden");
           }}
           receiptClear.hidden = true;
           formDirty = true;
+        }});
+        receiptView && receiptView.addEventListener("click", () => {{
+          if (selectedReceiptPreviewUrl) {{
+            const file = receiptInput && receiptInput.files && receiptInput.files[0];
+            openReceiptViewer(selectedReceiptPreviewUrl, file ? file.name : "Новый чек");
+            return;
+          }}
+          const expenseId = expenseIdInput ? expenseIdInput.value : "";
+          if (expenseId && currentExpenseHasReceipt) {{
+            openReceiptViewer("/cashoperations/receipt/" + encodeURIComponent(expenseId) + "/file", "Чек");
+          }}
+        }});
+        receiptViewerClose && receiptViewerClose.addEventListener("click", closeReceiptViewer);
+        receiptViewer && receiptViewer.addEventListener("click", (event) => {{
+          if (event.target === receiptViewer) closeReceiptViewer();
+        }});
+        document.addEventListener("keydown", (event) => {{
+          if (event.key === "Escape") closeReceiptViewer();
         }});
         expenseForm && expenseForm.addEventListener("input", () => {{
           formDirty = true;
@@ -15222,6 +15350,43 @@ def app(environ, start_response):
             ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
         ])
         return [html.encode("utf-8")]
+
+    if path.startswith("/cashoperations/receipt/") and path.endswith("/file") and method == "GET":
+        cashboxes = storage.list_cashbox_directory(current_owner)
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        if not cash_access or not cash_access["enabled"]:
+            start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Cash access denied"]
+        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        try:
+            receipt_entry_id = int(path.split("/")[3])
+            entries = storage.list_expense_entries(current_owner)
+            receipt_entry = next((entry for entry in entries if entry.id == receipt_entry_id), None)
+            if (
+                receipt_entry is None
+                or (receipt_entry.payment_source or "bank") != "cash"
+                or receipt_entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+                or not getattr(receipt_entry, "receipt_file_path", "")
+            ):
+                raise ValueError("Receipt not found")
+            existing_cashbox = cashbox_code_from_entry(receipt_entry, cashboxes)
+            if existing_cashbox not in allowed_codes:
+                raise ValueError("Receipt access denied")
+            absolute_path, safe_filename, content_type = resolve_cash_receipt_file(storage, receipt_entry)
+            if not absolute_path.exists():
+                raise ValueError("Receipt file not found")
+            start_response(
+                "200 OK",
+                [
+                    ("Content-Type", content_type),
+                    ("Content-Disposition", f'inline; filename="{safe_filename}"'),
+                    ("Cache-Control", "private, no-store"),
+                ],
+            )
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Receipt not found"]
 
     if path == "/cashoperations/income" and method == "POST":
         form = read_post_data(environ)
