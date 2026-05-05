@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -10,6 +11,19 @@ from typing import Optional
 
 DATE_FMT = "%Y-%m-%d"
 WEB_SECTION_IDS = ("contracts", "auctions", "events", "tasks", "directories", "payables", "expenses", "payroll", "finance", "jurisprudence", "access")
+DEFAULT_EXPENSE_CATEGORIES = (
+    ("materials", "Материалы"),
+    ("equipment", "Услуги техники"),
+    ("labor", "Работы / подряд"),
+    ("transport", "Транспорт и логистика"),
+    ("fuel", "Топливо"),
+    ("rent", "Аренда"),
+    ("admin", "Административные"),
+    ("taxes", "Налоги и сборы"),
+    ("utilities", "Связь / коммунальные"),
+    ("bank_commission", "Комиссии банка"),
+    ("other", "Прочее"),
+)
 
 
 @dataclass
@@ -357,6 +371,18 @@ class ExpenseEntry:
     import_counterparty_inn: str
     import_counterparty_account: str
     raw_import_text: str
+
+
+@dataclass
+class ExpenseCategory:
+    id: int
+    owner_chat_id: int
+    code: str
+    label: str
+    sort_order: int
+    deleted_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
 
 
 @dataclass
@@ -885,6 +911,18 @@ class Storage:
                     import_counterparty_account TEXT NOT NULL DEFAULT '',
                     raw_import_text TEXT NOT NULL DEFAULT ''
                 );
+
+                CREATE TABLE IF NOT EXISTS expense_categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    code TEXT NOT NULL DEFAULT '',
+                    label TEXT NOT NULL DEFAULT '',
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    deleted_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, code)
+                );
                 """
             )
             columns = {
@@ -907,6 +945,9 @@ class Storage:
             }
             expense_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(expense_entries)").fetchall()
+            }
+            expense_category_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(expense_categories)").fetchall()
             }
             if "needs_adjustment" not in expense_columns:
                 conn.execute("ALTER TABLE expense_entries ADD COLUMN needs_adjustment INTEGER NOT NULL DEFAULT 0")
@@ -1096,11 +1137,29 @@ class Storage:
             for column_name, column_def in expense_alters:
                 if column_name not in expense_columns:
                     conn.execute(f"ALTER TABLE expense_entries ADD COLUMN {column_name} {column_def}")
+            expense_category_alters = [
+                ("owner_chat_id", "INTEGER NOT NULL DEFAULT 0"),
+                ("code", "TEXT NOT NULL DEFAULT ''"),
+                ("label", "TEXT NOT NULL DEFAULT ''"),
+                ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
+                ("deleted_at", "TEXT"),
+                ("created_at", "TEXT NOT NULL DEFAULT ''"),
+                ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in expense_category_alters:
+                if column_name not in expense_category_columns:
+                    conn.execute(f"ALTER TABLE expense_categories ADD COLUMN {column_name} {column_def}")
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_entries_import_hash
                 ON expense_entries(owner_chat_id, import_hash)
                 WHERE import_hash != ''
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_categories_owner_code
+                ON expense_categories(owner_chat_id, code)
                 """
             )
             legal_letter_contract_notnull = any(
@@ -5083,6 +5142,136 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    @staticmethod
+    def expense_category_code(label: str) -> str:
+        cleaned = label.strip().lower()
+        digest = hashlib.sha1(cleaned.encode("utf-8")).hexdigest()[:10]
+        return f"custom_{digest}"
+
+    def ensure_default_expense_categories(self, owner_chat_id: int) -> None:
+        now = datetime.utcnow().isoformat()
+        with self.connection() as conn:
+            for index, (code, label) in enumerate(DEFAULT_EXPENSE_CATEGORIES, start=1):
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM expense_categories
+                    WHERE owner_chat_id = ? AND code = ?
+                    """,
+                    (owner_chat_id, code),
+                ).fetchone()
+                if existing is None:
+                    conn.execute(
+                        """
+                        INSERT INTO expense_categories (
+                            owner_chat_id, code, label, sort_order, deleted_at, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, NULL, ?, ?)
+                        """,
+                        (owner_chat_id, code, label, index * 10, now, now),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE expense_categories
+                        SET label = ?, sort_order = ?, deleted_at = NULL, updated_at = ?
+                        WHERE id = ? AND owner_chat_id = ? AND COALESCE(label, '') = ''
+                        """,
+                        (label, index * 10, now, int(existing["id"]), owner_chat_id),
+                    )
+
+    def list_expense_categories(self, owner_chat_id: int) -> list[ExpenseCategory]:
+        self.ensure_default_expense_categories(owner_chat_id)
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, code, label, sort_order, deleted_at, created_at, updated_at
+                FROM expense_categories
+                WHERE owner_chat_id = ? AND deleted_at IS NULL
+                ORDER BY sort_order ASC, LOWER(label) ASC, id ASC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [self._expense_category_from_row(row) for row in rows]
+
+    def add_expense_category(
+        self,
+        owner_chat_id: int,
+        label: str,
+    ) -> int | None:
+        cleaned_label = label.strip()
+        if not cleaned_label:
+            return None
+        now = datetime.utcnow().isoformat()
+        with self.connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT id, deleted_at
+                FROM expense_categories
+                WHERE owner_chat_id = ? AND LOWER(label) = LOWER(?)
+                """,
+                (owner_chat_id, cleaned_label),
+            ).fetchone()
+            if existing is not None:
+                if existing["deleted_at"]:
+                    conn.execute(
+                        """
+                        UPDATE expense_categories
+                        SET deleted_at = NULL, updated_at = ?
+                        WHERE id = ? AND owner_chat_id = ?
+                        """,
+                        (now, int(existing["id"]), owner_chat_id),
+                    )
+                return int(existing["id"])
+            code_base = self.expense_category_code(cleaned_label)
+            code = code_base
+            suffix = 2
+            while conn.execute(
+                "SELECT 1 FROM expense_categories WHERE owner_chat_id = ? AND code = ?",
+                (owner_chat_id, code),
+            ).fetchone():
+                code = f"{code_base}_{suffix}"
+                suffix += 1
+            max_sort = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) AS max_sort FROM expense_categories WHERE owner_chat_id = ?",
+                (owner_chat_id,),
+            ).fetchone()
+            cursor = conn.execute(
+                """
+                INSERT INTO expense_categories (
+                    owner_chat_id, code, label, sort_order, deleted_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, NULL, ?, ?)
+                """,
+                (owner_chat_id, code, cleaned_label, int(max_sort["max_sort"] or 0) + 10, now, now),
+            )
+            return int(cursor.lastrowid)
+
+    def update_expense_category(self, owner_chat_id: int, category_id: int, label: str) -> bool:
+        cleaned_label = label.strip()
+        if not cleaned_label:
+            return False
+        with self.connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM expense_categories
+                WHERE owner_chat_id = ? AND id != ? AND LOWER(label) = LOWER(?) AND deleted_at IS NULL
+                """,
+                (owner_chat_id, category_id, cleaned_label),
+            ).fetchone()
+            if existing is not None:
+                return False
+            cursor = conn.execute(
+                """
+                UPDATE expense_categories
+                SET label = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (cleaned_label, datetime.utcnow().isoformat(), category_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
     def list_expense_entries(self, owner_chat_id: int, include_deleted: bool = False) -> list[ExpenseEntry]:
         with self.connection() as conn:
             rows = conn.execute(
@@ -5676,6 +5865,19 @@ class Storage:
             import_counterparty_inn=row["import_counterparty_inn"] if "import_counterparty_inn" in row.keys() else "",
             import_counterparty_account=row["import_counterparty_account"] if "import_counterparty_account" in row.keys() else "",
             raw_import_text=row["raw_import_text"] if "raw_import_text" in row.keys() else "",
+        )
+
+    @staticmethod
+    def _expense_category_from_row(row: sqlite3.Row) -> ExpenseCategory:
+        return ExpenseCategory(
+            id=int(row["id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            code=row["code"] or "",
+            label=row["label"] or "",
+            sort_order=int(row["sort_order"] or 0),
+            deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None,
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
         )
 
     @staticmethod

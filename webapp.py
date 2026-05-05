@@ -23,7 +23,7 @@ from urllib.parse import parse_qs
 from urllib.parse import quote_plus
 from wsgiref.simple_server import make_server
 
-from storage import Storage, WEB_SECTION_IDS
+from storage import DEFAULT_EXPENSE_CATEGORIES, Storage, WEB_SECTION_IDS
 
 
 STATUS_META = {
@@ -8524,6 +8524,52 @@ def render_directories_section(
         </details>
         """
 
+    expense_categories = storage.list_expense_categories(owner_chat_id)
+    default_expense_category_codes = {code for code, _label in DEFAULT_EXPENSE_CATEGORIES}
+    expense_category_rows = "".join(
+        f"""
+        <tr>
+          <td>
+            <div class="timeline-title">
+              {f'''
+              <details class="status-menu directory-edit-menu">
+                <summary><span class="directory-title-link">{escape(category.label)}</span></summary>
+                <div class="status-popover" style="min-width:420px;">
+                  <form class="form-grid directory-edit-form" method="post" action="/directories/expense-categories/{category.id}/update?owner={owner_chat_id}">
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Название категории</label>
+                      <input type="text" name="label" value="{escape(category.label)}" required>
+                    </div>
+                    <button class="submit-btn" type="submit">Сохранить категорию</button>
+                  </form>
+                </div>
+              </details>
+              ''' if can_edit else escape(category.label)}
+            </div>
+          </td>
+          <td><span class="chip">{'Базовая' if category.code in default_expense_category_codes else 'Своя'}</span></td>
+          <td><div class="contract-table-subtle">Используется в выборе группы расхода и фильтрах реестра расходов.</div></td>
+        </tr>
+        """
+        for category in expense_categories
+    ) or '<tr><td colspan="3">Категорий расходов пока нет.</td></tr>'
+    add_expense_category_block = ""
+    if can_edit:
+        add_expense_category_block = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Добавить категорию</span></summary>
+          <div class="status-popover align-right" style="min-width:420px;">
+            <form class="form-grid" method="post" action="/directories/expense-categories/new?owner={owner_chat_id}">
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Название категории</label>
+                <input type="text" name="label" placeholder="Например, Комиссии банка" required>
+              </div>
+              <button class="submit-btn" type="submit">Сохранить категорию</button>
+            </form>
+          </div>
+        </details>
+        """
+
     employees = storage.list_payroll_employees(owner_chat_id)
     employee_group_counts = {
         group_code: (
@@ -8694,6 +8740,25 @@ def render_directories_section(
           </tr>
         </thead>
         <tbody>{object_rows}</tbody>
+      </table>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Категории расходов</h2>
+          <div class="panel-sub">Справочник групп для ручного занесения и уточнения импортированных банковских расходов.</div>
+        </div>
+        {add_expense_category_block}
+      </div>
+      <table class="table contract-table">
+        <thead>
+          <tr>
+            <th>Категория</th>
+            <th class="nowrap">Тип</th>
+            <th>Где используется</th>
+          </tr>
+        </thead>
+        <tbody>{expense_category_rows}</tbody>
       </table>
     </section>
     <section class="card panel" id="directory-employees">
@@ -11362,18 +11427,7 @@ EXPENSE_PROJECT_META = {
     "admin": "Админ",
 }
 
-EXPENSE_CATEGORY_META = {
-    "materials": "Материалы",
-    "equipment": "Услуги техники",
-    "labor": "Работы / подряд",
-    "transport": "Транспорт и логистика",
-    "fuel": "Топливо",
-    "rent": "Аренда",
-    "admin": "Административные",
-    "taxes": "Налоги и сборы",
-    "utilities": "Связь / коммунальные",
-    "other": "Прочее",
-}
+EXPENSE_CATEGORY_META = dict(DEFAULT_EXPENSE_CATEGORIES)
 
 EXPENSE_STATUS_META = {
     "active": ("В работе", "chip warn"),
@@ -11423,11 +11477,53 @@ def finance_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_project_label(code: str) -> str:
+def expense_project_options(storage: Storage, owner_chat_id: int, entries: Iterable | None = None) -> list[tuple[str, str]]:
+    options: list[tuple[str, str]] = [("admin", "Админ")]
+    seen = {"admin"}
+    for contract in storage.list_contracts(owner_chat_id):
+        label = (contract.object_name.strip() or contract.title.strip()).strip()
+        if not label:
+            continue
+        code = f"contract:{contract.id}"
+        if code not in seen:
+            options.append((code, label))
+            seen.add(code)
+    for object_item in storage.list_jurisprudence_object_records(owner_chat_id):
+        label = object_item.name.strip()
+        if not label:
+            continue
+        code = f"object:{object_item.id}"
+        if code not in seen:
+            options.append((code, label))
+            seen.add(code)
+    for entry in entries or ():
+        code = (entry.project_code or "").strip()
+        if code and code not in seen:
+            options.append((code, EXPENSE_PROJECT_META.get(code, code)))
+            seen.add(code)
+    return options
+
+
+def expense_category_options(storage: Storage, owner_chat_id: int, entries: Iterable | None = None) -> list[tuple[str, str]]:
+    options = [(item.code, item.label) for item in storage.list_expense_categories(owner_chat_id) if item.code and item.label]
+    seen = {code for code, _label in options}
+    for entry in entries or ():
+        code = (entry.category_code or "").strip()
+        if code and code not in seen:
+            options.append((code, EXPENSE_CATEGORY_META.get(code, code)))
+            seen.add(code)
+    return options
+
+
+def expense_project_label(code: str, project_labels: dict[str, str] | None = None) -> str:
+    if project_labels and code in project_labels:
+        return project_labels[code]
     return EXPENSE_PROJECT_META.get(code, "Объект не указан")
 
 
-def expense_category_label(code: str) -> str:
+def expense_category_label(code: str, category_labels: dict[str, str] | None = None) -> str:
+    if category_labels and code in category_labels:
+        return category_labels[code]
     return EXPENSE_CATEGORY_META.get(code, "Прочее")
 
 
@@ -11455,16 +11551,16 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "") -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "") -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return f'<div class="timeline-title">{escape(entry.title)}</div>'
     project_options = "".join(
         f'<option value="{code}"{" selected" if code == entry.project_code else ""}>{escape(label)}</option>'
-        for code, label in EXPENSE_PROJECT_META.items()
+        for code, label in project_options_list
     )
     category_options = "".join(
         f'<option value="{code}"{" selected" if code == entry.category_code else ""}>{escape(label)}</option>'
-        for code, label in EXPENSE_CATEGORY_META.items()
+        for code, label in category_options_list
     )
     return f"""
     <details class="status-menu expense-editor-menu">
@@ -12705,9 +12801,13 @@ def render_expenses_section(
     active_entries = [entry for entry in entries if entry.status != "closed"]
     archive_entries = [entry for entry in entries if entry.status == "closed"]
     source_entries = archive_entries if active_tab == "archive" else active_entries
-    if project_filter and project_filter not in EXPENSE_PROJECT_META:
+    project_options_list = expense_project_options(storage, owner_chat_id, entries)
+    category_options_list = expense_category_options(storage, owner_chat_id, entries)
+    project_labels = dict(project_options_list)
+    category_labels = dict(category_options_list)
+    if project_filter and project_filter not in project_labels:
         project_filter = ""
-    if category_filter and category_filter not in EXPENSE_CATEGORY_META:
+    if category_filter and category_filter not in category_labels:
         category_filter = ""
     if adjustment_filter not in {"", "needs"}:
         adjustment_filter = ""
@@ -12733,11 +12833,11 @@ def render_expenses_section(
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     project_options = "".join(
         f'<option value="{code}"{" selected" if code == project_filter else ""}>{escape(label)}</option>'
-        for code, label in EXPENSE_PROJECT_META.items()
+        for code, label in project_options_list
     )
     category_options = "".join(
         f'<option value="{code}"{" selected" if code == category_filter else ""}>{escape(label)}</option>'
-        for code, label in EXPENSE_CATEGORY_META.items()
+        for code, label in category_options_list
     )
     def build_expenses_href(*, tab: str | None = None, project: str | None = None, category: str | None = None, adjustment: str | None = None, day: date | None = None) -> str:
         return (
@@ -12761,10 +12861,10 @@ def render_expenses_section(
         f"""
         <tr>
           <td class="nowrap">{format_date(entry.expense_date)}</td>
-          <td><span class="chip">{escape(expense_project_label(entry.project_code))}</span></td>
+          <td><span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span></td>
           <td>
-            {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter)}
-            <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_category_label(entry.category_code))}</div>
+            {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter)}
+            <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_category_label(entry.category_code, category_labels))}</div>
             {f'<div class="chip warn expenses-adjustment-chip">Требует корректировки</div>' if entry.needs_adjustment else ''}
           </td>
           <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
@@ -12811,25 +12911,13 @@ def render_expenses_section(
             <div class="field">
               <label>Объект</label>
               <select name="project_code" required>
-                <option value="library">Библиотека</option>
-                <option value="football">Футбольное поле</option>
-                <option value="khor">Хор</option>
-                <option value="admin">Админ</option>
+                {project_options}
               </select>
             </div>
             <div class="field">
               <label>Группа расхода</label>
               <select name="category_code" required>
-                <option value="materials">Материалы</option>
-                <option value="equipment">Услуги техники</option>
-                <option value="labor">Работы / подряд</option>
-                <option value="transport">Транспорт и логистика</option>
-                <option value="fuel">Топливо</option>
-                <option value="rent">Аренда</option>
-                <option value="admin">Административные</option>
-                <option value="taxes">Налоги и сборы</option>
-                <option value="utilities">Связь / коммунальные</option>
-                <option value="other">Прочее</option>
+                {category_options}
               </select>
             </div>
             <div class="field span-2">
@@ -14364,6 +14452,47 @@ def app(environ, start_response):
             return redirect(start_response, f"/directories?owner={current_owner}")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось обновить объект: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path == "/directories/expense-categories/new" and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        form = read_post_data(environ)
+        try:
+            label = form.get("label", "").strip()
+            if not label:
+                raise ValueError("Укажите название категории")
+            created = storage.add_expense_category(current_owner, label)
+            if created is None:
+                raise ValueError("Не удалось сохранить категорию")
+            return redirect(start_response, f"/directories?owner={current_owner}")
+        except Exception as exc:
+            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось добавить категорию расходов: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/directories/expense-categories/") and path.endswith("/update") and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        try:
+            category_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            category_id = -1
+        form = read_post_data(environ)
+        try:
+            label = form.get("label", "").strip()
+            if not label:
+                raise ValueError("Укажите название категории")
+            if not storage.update_expense_category(current_owner, category_id, label):
+                raise ValueError("Категория не найдена или уже существует")
+            return redirect(start_response, f"/directories?owner={current_owner}")
+        except Exception as exc:
+            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось обновить категорию расходов: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -17873,9 +18002,11 @@ def app(environ, start_response):
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
                 raise ValueError("Укажите дату расхода")
-            if project_code not in EXPENSE_PROJECT_META:
+            project_codes = {code for code, _label in expense_project_options(storage, current_owner, storage.list_expense_entries(current_owner))}
+            category_codes = {code for code, _label in expense_category_options(storage, current_owner, storage.list_expense_entries(current_owner))}
+            if project_code not in project_codes:
                 raise ValueError("Выберите объект")
-            if category_code not in EXPENSE_CATEGORY_META:
+            if category_code not in category_codes:
                 raise ValueError("Выберите группу расхода")
             if not title:
                 raise ValueError("Укажите наименование траты")
@@ -17915,9 +18046,11 @@ def app(environ, start_response):
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
                 raise ValueError("Укажите дату расхода")
-            if project_code not in EXPENSE_PROJECT_META:
+            project_codes = {code for code, _label in expense_project_options(storage, current_owner, storage.list_expense_entries(current_owner))}
+            category_codes = {code for code, _label in expense_category_options(storage, current_owner, storage.list_expense_entries(current_owner))}
+            if project_code not in project_codes:
                 raise ValueError("Выберите объект")
-            if category_code not in EXPENSE_CATEGORY_META:
+            if category_code not in category_codes:
                 raise ValueError("Выберите группу расхода")
             if not title:
                 raise ValueError("Укажите наименование траты")
