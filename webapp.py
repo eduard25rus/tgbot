@@ -5428,9 +5428,25 @@ def layout(
     .jurisprudence-letters-table {{
       table-layout: fixed;
     }}
-    .jurisprudence-letters-table th:first-child,
-    .jurisprudence-letters-table td:first-child {{
+    .jurisprudence-letters-table th:nth-child(1),
+    .jurisprudence-letters-table td:nth-child(1) {{
+      width: 120px;
+    }}
+    .jurisprudence-letters-table th:nth-child(2),
+    .jurisprudence-letters-table td:nth-child(2) {{
+      width: 160px;
+    }}
+    .jurisprudence-letters-table th:nth-child(3),
+    .jurisprudence-letters-table td:nth-child(3) {{
       width: 230px;
+    }}
+    .jurisprudence-letters-table th:nth-child(5),
+    .jurisprudence-letters-table td:nth-child(5) {{
+      width: 220px;
+    }}
+    .jurisprudence-letters-table th:nth-child(6),
+    .jurisprudence-letters-table td:nth-child(6) {{
+      width: 150px;
     }}
     .jurisprudence-object-cell .timeline-title,
     .jurisprudence-object-cell .contract-table-subtle {{
@@ -7909,16 +7925,16 @@ def render_jurisprudence_letters_section(
     letters_rows_html = "".join(
         f"""
         <tr>
-          <td>
-            {render_jurisprudence_letter_object_cell(storage, owner_chat_id, letter, contracts_by_id.get(letter.contract_id or -1))}
+          <td class="nowrap">
+            <div>{format_date(letter.letter_date)}</div>
+            {f'<div class="jurisprudence-new-badge">NEW</div>' if letter.letter_date == today else ''}
           </td>
           <td style="text-align:center;">
             <span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span>
             <div class="contract-table-subtle">{escape(LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта"))}</div>
           </td>
-          <td class="nowrap">
-            <div>{format_date(letter.letter_date)}</div>
-            {f'<div class="jurisprudence-new-badge">NEW</div>' if letter.letter_date == today else ''}
+          <td>
+            {render_jurisprudence_letter_object_cell(storage, owner_chat_id, letter, contracts_by_id.get(letter.contract_id or -1))}
           </td>
           <td>{render_jurisprudence_letter_editor(storage, owner_chat_id, letter, attachment_map.get(letter.id, []), current_user)}</td>
           <td>
@@ -8014,9 +8030,9 @@ def render_jurisprudence_letters_section(
       <table class="table contract-table jurisprudence-letters-table">
         <thead>
           <tr>
-            <th>Объект</th>
-            <th class="nowrap">Тип</th>
             <th class="nowrap">Дата</th>
+            <th class="nowrap">Тип</th>
+            <th>Объект</th>
             <th>О чем письмо</th>
             <th class="nowrap">Файлы</th>
             <th class="nowrap">Добавил</th>
