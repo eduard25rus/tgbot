@@ -11824,7 +11824,8 @@ def render_cashoperations_body(
               data-expense-employee="{escape(str(entry.payroll_employee_id or ''))}"
               data-expense-title="{escape(entry.title)}"
               data-expense-date="{entry.expense_date.isoformat()}"
-              data-expense-comment="{escape(editable_comment(entry))}">
+              data-expense-comment="{escape(editable_comment(entry))}"
+              data-expense-receipt="{"1" if getattr(entry, "receipt_file_path", "") else ""}">
               <span>
                 <strong>{escape(title)}</strong>
                 <span>{escape(format_date(entry.expense_date))} · {escape(category)}</span>
@@ -11899,19 +11900,21 @@ def render_cashoperations_body(
             <label class="is-hidden" data-cash-employee-wrap>Кому? Сотрудник
               <select name="payroll_employee_id" data-cash-employee>{payroll_employee_options}</select>
             </label>
-            <label>Наименование
+            <label data-cash-title-wrap>Наименование
               <input type="text" name="title" placeholder="Например, материалы / доставка" required>
             </label>
             <label>Дата
               <input type="date" name="expense_date" value="{today.isoformat()}" required>
             </label>
             <label>Комментарий
-              <textarea name="comment" placeholder="Коротко, что купили или оплатили"></textarea>
+              <textarea name="comment" data-cash-comment placeholder="Коротко, что купили или оплатили"></textarea>
             </label>
             <label class="cash-receipt-button">Приложить чек
               <input type="file" name="receipt_file" accept="image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp,image/heic,.heic,image/heif,.heif,application/pdf,.pdf" data-cash-receipt>
-              <span data-cash-receipt-label>Выбрать фото чека</span>
+              <input type="hidden" name="remove_receipt" value="" data-cash-remove-receipt>
+              <span data-cash-receipt-label>Добавить чек</span>
             </label>
+            <button class="danger secondary-danger" type="button" data-cash-receipt-clear hidden>Удалить чек</button>
             <button type="submit" data-cash-expense-submit>Сохранить расход</button>
             <button class="danger" type="submit" formaction="/cashoperations/expense/delete" data-cash-expense-delete hidden>Удалить расход</button>
           </form>
@@ -12077,6 +12080,16 @@ def render_cashoperations_body(
         color: #fff;
         border-color: #186844;
       }}
+      .cash-mobile-action.expense {{
+        background: #f4e5e5;
+        color: #9b2f2f;
+        border-color: rgba(155, 47, 47, .14);
+      }}
+      .cash-mobile-action.income {{
+        background: #186844;
+        color: #fff;
+        border-color: #186844;
+      }}
       .cash-mobile-action.secondary {{
         background: #e3f2e9;
         color: #186844;
@@ -12224,6 +12237,11 @@ def render_cashoperations_body(
       .cash-mobile-form button.danger {{
         background: #9b2f2f;
       }}
+      .cash-mobile-form button.secondary-danger {{
+        background: #f4e5e5;
+        color: #9b2f2f;
+        border: 1px solid rgba(155, 47, 47, .14);
+      }}
       .cash-mobile-form button:disabled {{
         opacity: .68;
       }}
@@ -12277,8 +12295,8 @@ def render_cashoperations_body(
           {warning_html}
         </section>
         <div class="cash-mobile-actions">
-          <button class="cash-mobile-action primary" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
-          <button class="cash-mobile-action secondary" type="button" data-cash-screen="income">Добавить поступление</button>
+          <button class="cash-mobile-action expense" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
+          <button class="cash-mobile-action income" type="button" data-cash-screen="income">Добавить поступление</button>
           <button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>
           <button class="cash-mobile-action" type="button" data-cash-screen="reconcile">Сверить кассу</button>
         </div>
@@ -12332,10 +12350,15 @@ def render_cashoperations_body(
         const categorySelect = document.querySelector("[data-cash-category]");
         const projectSelect = document.querySelector("[data-cash-project]");
         const projectWrap = document.querySelector("[data-cash-project-wrap]");
+        const titleWrap = document.querySelector("[data-cash-title-wrap]");
+        const titleInput = expenseForm ? expenseForm.elements.title : null;
+        const commentInput = document.querySelector("[data-cash-comment]");
         const employeeSelect = document.querySelector("[data-cash-employee]");
         const employeeWrap = document.querySelector("[data-cash-employee-wrap]");
         const receiptInput = document.querySelector("[data-cash-receipt]");
         const receiptLabel = document.querySelector("[data-cash-receipt-label]");
+        const receiptClear = document.querySelector("[data-cash-receipt-clear]");
+        const removeReceiptInput = document.querySelector("[data-cash-remove-receipt]");
         let editBackScreen = "history";
         let formDirty = false;
         let isSubmitting = false;
@@ -12386,6 +12409,14 @@ def render_cashoperations_body(
           projectSelect.disabled = isAdmin || isSalary;
           projectSelect.required = !(isAdmin || isSalary);
           projectWrap && projectWrap.classList.toggle("is-hidden", isSalary);
+          titleWrap && titleWrap.classList.toggle("is-hidden", isSalary);
+          if (titleInput) {{
+            titleInput.required = !isSalary;
+            if (isSalary) titleInput.value = "";
+          }}
+          if (commentInput) {{
+            commentInput.placeholder = isSalary ? "наличные / перевод?" : "Коротко, что купили или оплатили";
+          }}
           if (employeeSelect) {{
             employeeSelect.disabled = !isSalary;
             employeeSelect.required = isSalary;
@@ -12402,7 +12433,9 @@ def render_cashoperations_body(
           if (expenseHeading) expenseHeading.textContent = "Добавить расход";
           if (expenseSubmit) expenseSubmit.textContent = "Сохранить расход";
           if (expenseDelete) expenseDelete.hidden = true;
-          if (receiptLabel) receiptLabel.textContent = "Выбрать фото чека";
+          if (receiptLabel) receiptLabel.textContent = "Добавить чек";
+          if (receiptClear) receiptClear.hidden = true;
+          if (removeReceiptInput) removeReceiptInput.value = "";
           showEditbar(false);
           formDirty = false;
           syncAdminProject();
@@ -12422,7 +12455,9 @@ def render_cashoperations_body(
           if (expenseHeading) expenseHeading.textContent = "Редактировать расход";
           if (expenseSubmit) expenseSubmit.textContent = "Сохранить изменения";
           if (expenseDelete) expenseDelete.hidden = false;
-          if (receiptLabel) receiptLabel.textContent = "Заменить чек";
+          if (receiptLabel) receiptLabel.textContent = "Добавить чек";
+          if (receiptClear) receiptClear.hidden = !button.dataset.expenseReceipt;
+          if (removeReceiptInput) removeReceiptInput.value = "";
           showEditbar(true);
           formDirty = false;
           syncAdminProject();
@@ -12446,7 +12481,16 @@ def render_cashoperations_body(
         }});
         receiptInput && receiptInput.addEventListener("change", () => {{
           const file = receiptInput.files && receiptInput.files[0];
-          if (receiptLabel) receiptLabel.textContent = file ? file.name : "Выбрать фото чека";
+          if (receiptLabel) receiptLabel.textContent = file ? file.name : "Добавить чек";
+          if (receiptClear) receiptClear.hidden = !file && !(removeReceiptInput && removeReceiptInput.value === "0");
+          if (removeReceiptInput && file) removeReceiptInput.value = "";
+        }});
+        receiptClear && receiptClear.addEventListener("click", () => {{
+          if (receiptInput) receiptInput.value = "";
+          if (removeReceiptInput) removeReceiptInput.value = "1";
+          if (receiptLabel) receiptLabel.textContent = "Добавить чек";
+          receiptClear.hidden = true;
+          formDirty = true;
         }});
         expenseForm && expenseForm.addEventListener("input", () => {{
           formDirty = true;
@@ -15095,6 +15139,8 @@ def app(environ, start_response):
                 if payroll_employee is None:
                     raise ValueError("Выберите сотрудника")
                 payroll_employee_name = payroll_employee.full_name
+                if not title:
+                    title = f"Выплата зарплаты: {payroll_employee_name}"
             if not title:
                 raise ValueError("Укажите наименование траты")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
@@ -15117,7 +15163,10 @@ def app(environ, start_response):
                     payroll_employee_name=payroll_employee_name,
                 )
                 upload = next((item for item in files.get("receipt_file", []) if item.filename.strip()), None)
-                save_cash_receipt_upload(storage, current_owner, expense_id, upload)
+                if form.get("remove_receipt") == "1" and upload is None:
+                    storage.clear_expense_receipt(current_owner, expense_id)
+                else:
+                    save_cash_receipt_upload(storage, current_owner, expense_id, upload)
                 flash = "Расход обновлен."
                 return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
             saved_expense_id = storage.add_expense_entry(

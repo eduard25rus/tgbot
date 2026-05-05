@@ -5723,6 +5723,9 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def clear_expense_receipt(self, owner_chat_id: int, entry_id: int) -> bool:
+        return self.update_expense_receipt(owner_chat_id, entry_id, "", "")
+
     def delete_expense_entry(self, owner_chat_id: int, entry_id: int) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
