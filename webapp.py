@@ -723,11 +723,35 @@ def save_construction_report_photos(storage: Storage, owner_chat_id: int, contra
 
 
 def save_cash_receipt_upload(storage: Storage, owner_chat_id: int, expense_id: int, upload: UploadedFile | None) -> None:
-    if upload is None or not upload.filename.strip() or not upload.data:
+    if upload is None or not upload.data:
         return
-    original_name = upload.filename.strip()
-    lower_name = original_name.lower()
-    if not any(lower_name.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".pdf")):
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".pdf"}
+    extension_by_mime = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/heic": ".heic",
+        "image/heif": ".heif",
+        "application/pdf": ".pdf",
+    }
+    original_name = upload.filename.strip() or "receipt"
+    suffix = Path(original_name).suffix.lower()
+    content_type = upload.content_type.split(";", 1)[0].strip().lower()
+    if suffix not in allowed_extensions:
+        mime_extension = extension_by_mime.get(content_type)
+        if mime_extension:
+            original_name = f"{Path(original_name).stem or 'receipt'}{mime_extension}"
+        else:
+            header = upload.data[:16]
+            if header.startswith(b"\xff\xd8\xff"):
+                original_name = f"{Path(original_name).stem or 'receipt'}.jpg"
+            elif header.startswith(b"\x89PNG\r\n\x1a\n"):
+                original_name = f"{Path(original_name).stem or 'receipt'}.png"
+            elif header.startswith(b"%PDF"):
+                original_name = f"{Path(original_name).stem or 'receipt'}.pdf"
+            else:
+                raise ValueError("Чек должен быть фото или PDF")
+    if Path(original_name).suffix.lower() not in allowed_extensions:
         raise ValueError("Чек должен быть фото или PDF")
     if len(upload.data) > 20 * 1024 * 1024:
         raise ValueError("Файл чека должен быть не больше 20 МБ")
@@ -11914,6 +11938,7 @@ def render_cashoperations_body(
               <input type="hidden" name="remove_receipt" value="" data-cash-remove-receipt>
               <span data-cash-receipt-label>Добавить чек</span>
             </label>
+            <div class="cash-receipt-status is-hidden" data-cash-receipt-status></div>
             <button class="danger secondary-danger" type="button" data-cash-receipt-clear hidden>Удалить чек</button>
             <button type="submit" data-cash-expense-submit>Сохранить расход</button>
             <button class="danger" type="submit" formaction="/cashoperations/expense/delete" data-cash-expense-delete hidden>Удалить расход</button>
@@ -12213,6 +12238,12 @@ def render_cashoperations_body(
         font-size: 16px;
         font-weight: 800;
       }}
+      .cash-receipt-status {{
+        margin-top: -4px;
+        color: #186844;
+        font-size: 13px;
+        font-weight: 800;
+      }}
       .cash-mobile-form select:disabled {{
         background: #eef2ed;
         color: var(--muted);
@@ -12358,10 +12389,12 @@ def render_cashoperations_body(
         const receiptInput = document.querySelector("[data-cash-receipt]");
         const receiptLabel = document.querySelector("[data-cash-receipt-label]");
         const receiptClear = document.querySelector("[data-cash-receipt-clear]");
+        const receiptStatus = document.querySelector("[data-cash-receipt-status]");
         const removeReceiptInput = document.querySelector("[data-cash-remove-receipt]");
         let editBackScreen = "history";
         let formDirty = false;
         let isSubmitting = false;
+        let currentExpenseHasReceipt = false;
         const loadedAt = Date.now();
         function randomKey() {{
           if (window.crypto && crypto.getRandomValues) {{
@@ -12435,7 +12468,12 @@ def render_cashoperations_body(
           if (expenseDelete) expenseDelete.hidden = true;
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
           if (receiptClear) receiptClear.hidden = true;
+          if (receiptStatus) {{
+            receiptStatus.textContent = "";
+            receiptStatus.classList.add("is-hidden");
+          }}
           if (removeReceiptInput) removeReceiptInput.value = "";
+          currentExpenseHasReceipt = false;
           showEditbar(false);
           formDirty = false;
           syncAdminProject();
@@ -12456,7 +12494,12 @@ def render_cashoperations_body(
           if (expenseSubmit) expenseSubmit.textContent = "Сохранить изменения";
           if (expenseDelete) expenseDelete.hidden = false;
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
-          if (receiptClear) receiptClear.hidden = !button.dataset.expenseReceipt;
+          currentExpenseHasReceipt = Boolean(button.dataset.expenseReceipt);
+          if (receiptClear) receiptClear.hidden = !currentExpenseHasReceipt;
+          if (receiptStatus) {{
+            receiptStatus.textContent = currentExpenseHasReceipt ? "Чек приложен" : "";
+            receiptStatus.classList.toggle("is-hidden", !currentExpenseHasReceipt);
+          }}
           if (removeReceiptInput) removeReceiptInput.value = "";
           showEditbar(true);
           formDirty = false;
@@ -12482,13 +12525,27 @@ def render_cashoperations_body(
         receiptInput && receiptInput.addEventListener("change", () => {{
           const file = receiptInput.files && receiptInput.files[0];
           if (receiptLabel) receiptLabel.textContent = file ? file.name : "Добавить чек";
-          if (receiptClear) receiptClear.hidden = !file && !(removeReceiptInput && removeReceiptInput.value === "0");
+          if (receiptClear) receiptClear.hidden = !(file || currentExpenseHasReceipt);
+          if (receiptStatus) {{
+            if (file) {{
+              receiptStatus.textContent = "Выбран чек: " + file.name;
+              receiptStatus.classList.remove("is-hidden");
+            }} else {{
+              receiptStatus.textContent = currentExpenseHasReceipt ? "Чек приложен" : "";
+              receiptStatus.classList.toggle("is-hidden", !currentExpenseHasReceipt);
+            }}
+          }}
           if (removeReceiptInput && file) removeReceiptInput.value = "";
         }});
         receiptClear && receiptClear.addEventListener("click", () => {{
           if (receiptInput) receiptInput.value = "";
           if (removeReceiptInput) removeReceiptInput.value = "1";
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
+          currentExpenseHasReceipt = false;
+          if (receiptStatus) {{
+            receiptStatus.textContent = "Чек будет удален после сохранения";
+            receiptStatus.classList.remove("is-hidden");
+          }}
           receiptClear.hidden = true;
           formDirty = true;
         }});
@@ -14629,9 +14686,15 @@ def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, list[Up
             continue
         filename = part.get_filename()
         payload = part.get_payload(decode=True) or b""
-        if filename:
+        if filename is not None:
             files.setdefault(name, []).append(UploadedFile(
-                filename=filename,
+                filename=filename or name,
+                content_type=part.get_content_type(),
+                data=payload,
+            ))
+        elif name == "receipt_file" and payload:
+            files.setdefault(name, []).append(UploadedFile(
+                filename=name,
                 content_type=part.get_content_type(),
                 data=payload,
             ))
@@ -15162,7 +15225,7 @@ def app(environ, start_response):
                     payroll_employee_id=payroll_employee_id,
                     payroll_employee_name=payroll_employee_name,
                 )
-                upload = next((item for item in files.get("receipt_file", []) if item.filename.strip()), None)
+                upload = next((item for item in files.get("receipt_file", []) if item.data), None)
                 if form.get("remove_receipt") == "1" and upload is None:
                     storage.clear_expense_receipt(current_owner, expense_id)
                 else:
@@ -15185,7 +15248,7 @@ def app(environ, start_response):
                 payroll_employee_name=payroll_employee_name,
                 client_request_key=form.get("request_key", ""),
             )
-            upload = next((item for item in files.get("receipt_file", []) if item.filename.strip()), None)
+            upload = next((item for item in files.get("receipt_file", []) if item.data), None)
             save_cash_receipt_upload(storage, current_owner, saved_expense_id, upload)
             flash = "Расход добавлен в кассу и CRM-расходы."
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
