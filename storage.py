@@ -24,6 +24,7 @@ DEFAULT_EXPENSE_CATEGORIES = (
     ("utilities", "Связь / коммунальные"),
     ("bank_commission", "Комиссии банка"),
     ("cash_withdrawal", "Вывод в кассу"),
+    ("income_unallocated", "Поступление"),
     ("other", "Прочее"),
 )
 
@@ -365,6 +366,7 @@ class ExpenseEntry:
     amount: float
     comment: str
     payment_source: str
+    operation_type: str
     needs_adjustment: bool
     status: str
     created_by_user_id: Optional[int]
@@ -909,6 +911,7 @@ class Storage:
                     amount REAL NOT NULL DEFAULT 0,
                     comment TEXT NOT NULL DEFAULT '',
                     payment_source TEXT NOT NULL DEFAULT 'bank',
+                    operation_type TEXT NOT NULL DEFAULT 'expense',
                     needs_adjustment INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'active',
                     created_by_user_id INTEGER,
@@ -923,6 +926,21 @@ class Storage:
                     import_counterparty_account TEXT NOT NULL DEFAULT '',
                     raw_import_text TEXT NOT NULL DEFAULT '',
                     client_request_key TEXT NOT NULL DEFAULT ''
+                );
+
+                CREATE TABLE IF NOT EXISTS bank_account_balances (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    account_number TEXT NOT NULL DEFAULT '',
+                    balance_date TEXT NOT NULL,
+                    opening_balance REAL NOT NULL DEFAULT 0,
+                    total_expense REAL NOT NULL DEFAULT 0,
+                    total_income REAL NOT NULL DEFAULT 0,
+                    closing_balance REAL NOT NULL DEFAULT 0,
+                    import_source TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, account_number, balance_date)
                 );
 
                 CREATE TABLE IF NOT EXISTS expense_categories (
@@ -1002,6 +1020,9 @@ class Storage:
             }
             expense_category_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(expense_categories)").fetchall()
+            }
+            bank_balance_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(bank_account_balances)").fetchall()
             }
             mobile_cash_access_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(mobile_cash_access)").fetchall()
@@ -1187,6 +1208,7 @@ class Storage:
                 ("amount", "REAL NOT NULL DEFAULT 0"),
                 ("comment", "TEXT NOT NULL DEFAULT ''"),
                 ("payment_source", "TEXT NOT NULL DEFAULT 'bank'"),
+                ("operation_type", "TEXT NOT NULL DEFAULT 'expense'"),
                 ("status", "TEXT NOT NULL DEFAULT 'active'"),
                 ("created_by_user_id", "INTEGER"),
                 ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
@@ -1216,6 +1238,21 @@ class Storage:
             for column_name, column_def in expense_category_alters:
                 if column_name not in expense_category_columns:
                     conn.execute(f"ALTER TABLE expense_categories ADD COLUMN {column_name} {column_def}")
+            bank_balance_alters = [
+                ("owner_chat_id", "INTEGER NOT NULL DEFAULT 0"),
+                ("account_number", "TEXT NOT NULL DEFAULT ''"),
+                ("balance_date", "TEXT NOT NULL DEFAULT ''"),
+                ("opening_balance", "REAL NOT NULL DEFAULT 0"),
+                ("total_expense", "REAL NOT NULL DEFAULT 0"),
+                ("total_income", "REAL NOT NULL DEFAULT 0"),
+                ("closing_balance", "REAL NOT NULL DEFAULT 0"),
+                ("import_source", "TEXT NOT NULL DEFAULT ''"),
+                ("created_at", "TEXT NOT NULL DEFAULT ''"),
+                ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in bank_balance_alters:
+                if column_name not in bank_balance_columns:
+                    conn.execute(f"ALTER TABLE bank_account_balances ADD COLUMN {column_name} {column_def}")
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_entries_import_hash
@@ -1227,6 +1264,12 @@ class Storage:
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_categories_owner_code
                 ON expense_categories(owner_chat_id, code)
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_account_balances_owner_account_date
+                ON bank_account_balances(owner_chat_id, account_number, balance_date)
                 """
             )
             legal_letter_contract_notnull = any(
@@ -5559,7 +5602,7 @@ class Storage:
                 SELECT
                     id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
                     payroll_employee_id, payroll_employee_name, receipt_file_name, receipt_file_path,
-                    payment_source, needs_adjustment,
+                    payment_source, operation_type, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
                     import_counterparty_account, raw_import_text
@@ -5570,6 +5613,77 @@ class Storage:
                 (owner_chat_id, 1 if include_deleted else 0),
             ).fetchall()
         return [self._expense_entry_from_row(row) for row in rows]
+
+    def upsert_bank_account_balance(
+        self,
+        owner_chat_id: int,
+        account_number: str,
+        balance_date: date,
+        opening_balance: float,
+        total_expense: float,
+        total_income: float,
+        closing_balance: float,
+        import_source: str = "1c_bank",
+    ) -> None:
+        with self.connection() as conn:
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                """
+                INSERT INTO bank_account_balances (
+                    owner_chat_id, account_number, balance_date, opening_balance,
+                    total_expense, total_income, closing_balance, import_source, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_chat_id, account_number, balance_date) DO UPDATE SET
+                    opening_balance = excluded.opening_balance,
+                    total_expense = excluded.total_expense,
+                    total_income = excluded.total_income,
+                    closing_balance = excluded.closing_balance,
+                    import_source = excluded.import_source,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    owner_chat_id,
+                    account_number.strip(),
+                    balance_date.strftime(DATE_FMT),
+                    round(opening_balance, 2),
+                    round(total_expense, 2),
+                    round(total_income, 2),
+                    round(closing_balance, 2),
+                    import_source.strip(),
+                    now,
+                    now,
+                ),
+            )
+
+    def latest_bank_account_balance(self, owner_chat_id: int) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, owner_chat_id, account_number, balance_date, opening_balance,
+                       total_expense, total_income, closing_balance, import_source, created_at, updated_at
+                FROM bank_account_balances
+                WHERE owner_chat_id = ?
+                ORDER BY balance_date DESC, updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (owner_chat_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": int(row["id"]),
+            "owner_chat_id": int(row["owner_chat_id"]),
+            "account_number": row["account_number"],
+            "balance_date": date.fromisoformat(row["balance_date"]),
+            "opening_balance": float(row["opening_balance"]),
+            "total_expense": float(row["total_expense"]),
+            "total_income": float(row["total_income"]),
+            "closing_balance": float(row["closing_balance"]),
+            "import_source": row["import_source"] or "",
+            "created_at": datetime.fromisoformat(row["created_at"]),
+            "updated_at": datetime.fromisoformat(row["updated_at"]),
+        }
 
     def add_cash_reconciliation(
         self,
@@ -5655,6 +5769,7 @@ class Storage:
         payroll_employee_id: int | None = None,
         payroll_employee_name: str = "",
         client_request_key: str = "",
+        operation_type: str = "expense",
     ) -> int:
         cleaned_request_key = client_request_key.strip()
         with self.connection() as conn:
@@ -5677,12 +5792,12 @@ class Storage:
                 """
                 INSERT INTO expense_entries (
                     owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
-                    payroll_employee_id, payroll_employee_name, payment_source, needs_adjustment,
+                    payroll_employee_id, payroll_employee_name, payment_source, operation_type, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
                     import_counterparty_account, raw_import_text, client_request_key
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -5695,6 +5810,7 @@ class Storage:
                     payroll_employee_id,
                     payroll_employee_name.strip(),
                     payment_source.strip() or "bank",
+                    operation_type.strip() or "expense",
                     1 if needs_adjustment else 0,
                     created_by_user_id,
                     created_by_name.strip(),
@@ -5779,6 +5895,7 @@ class Storage:
         needs_adjustment: bool,
         payroll_employee_id: int | None = None,
         payroll_employee_name: str = "",
+        operation_type: str = "expense",
     ) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
@@ -5794,6 +5911,7 @@ class Storage:
                     payroll_employee_id = ?,
                     payroll_employee_name = ?,
                     payment_source = ?,
+                    operation_type = ?,
                     needs_adjustment = ?,
                     updated_at = ?
                 WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
@@ -5808,6 +5926,7 @@ class Storage:
                     payroll_employee_id,
                     payroll_employee_name.strip(),
                     payment_source.strip() or "bank",
+                    operation_type.strip() or "expense",
                     1 if needs_adjustment else 0,
                     datetime.utcnow().isoformat(),
                     entry_id,
@@ -6259,6 +6378,7 @@ class Storage:
             amount=float(row["amount"]) if row["amount"] is not None else 0.0,
             comment=row["comment"] or "",
             payment_source=row["payment_source"] if "payment_source" in row.keys() else "bank",
+            operation_type=row["operation_type"] if "operation_type" in row.keys() else "expense",
             needs_adjustment=bool(row["needs_adjustment"]) if "needs_adjustment" in row.keys() else False,
             status=row["status"] or "active",
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,

@@ -813,6 +813,13 @@ def parse_bank_1c_amount(raw: str) -> float:
     return round(amount, 2)
 
 
+def parse_bank_1c_balance_amount(raw: str) -> float:
+    cleaned = raw.strip().replace("\xa0", "").replace(" ", "").replace(",", ".")
+    if not cleaned:
+        return 0.0
+    return round(float(cleaned), 2)
+
+
 def decode_bank_1c_export(data: bytes) -> str:
     if not data:
         raise ValueError("Файл выписки пустой")
@@ -826,7 +833,7 @@ def decode_bank_1c_export(data: bytes) -> str:
     raise ValueError("Не удалось прочитать выписку. Нужен TXT 1С в кодировке WIN")
 
 
-def parse_bank_1c_export(data: bytes) -> tuple[dict[str, str], list[dict[str, str]]]:
+def parse_bank_1c_export(data: bytes) -> tuple[dict[str, str], list[dict[str, str]], list[dict[str, str]]]:
     text = decode_bank_1c_export(data)
     lines = [line.strip().lstrip("\ufeff") for line in text.splitlines()]
     first_line = next((line for line in lines if line), "")
@@ -835,17 +842,24 @@ def parse_bank_1c_export(data: bytes) -> tuple[dict[str, str], list[dict[str, st
 
     meta: dict[str, str] = {}
     documents: list[dict[str, str]] = []
+    account_sections: list[dict[str, str]] = []
     current: dict[str, str] | None = None
+    current_account: dict[str, str] | None = None
     raw_lines: list[str] = []
-    in_account_section = False
     for line in lines[1:]:
         if not line:
             continue
         if line == "СекцияРасчСчет":
-            in_account_section = True
+            current_account = {}
             continue
-        if line == "КонецРасчСчет":
-            in_account_section = False
+        if line == "КонецРасчСчет" and current_account is not None:
+            account_sections.append(current_account)
+            current_account = None
+            continue
+        if current_account is not None:
+            if "=" in line:
+                key, value = line.split("=", 1)
+                current_account[key.strip()] = value.strip()
             continue
         if line.startswith("СекцияДокумент="):
             current = {"СекцияДокумент": line.split("=", 1)[1].strip()}
@@ -863,7 +877,7 @@ def parse_bank_1c_export(data: bytes) -> tuple[dict[str, str], list[dict[str, st
                 key, value = line.split("=", 1)
                 current[key.strip()] = value.strip()
             continue
-        if not in_account_section and "=" in line:
+        if "=" in line:
             key, value = line.split("=", 1)
             meta.setdefault(key.strip(), value.strip())
 
@@ -871,7 +885,7 @@ def parse_bank_1c_export(data: bytes) -> tuple[dict[str, str], list[dict[str, st
         raise ValueError("Поддерживается только формат 1С 1.03")
     if not meta.get("РасчСчет", "").strip():
         raise ValueError("В выписке не найден расчетный счет")
-    return meta, documents
+    return meta, documents, account_sections
 
 
 def bank_1c_expense_hash(document: dict[str, str]) -> str:
@@ -4045,7 +4059,7 @@ SECTIONS = [
     ("tasks", "Задачи", "/tasks"),
     ("directories", "Справочники", "/directories"),
     ("payables", "Кредиторка", "/payables"),
-    ("expenses", "Расходы компании", "/expenses"),
+    ("expenses", "ДДС", "/expenses"),
     ("payroll", "Зарплата", "/payroll"),
     ("finance", "Финансовый анализ", "/finance-analysis"),
     ("jurisprudence", "Юриспруденция", "/jurisprudence/letters"),
@@ -4058,7 +4072,7 @@ FINANCE_NAV_SECTIONS = [
     ("finance_receivables", "Дебиторка", "/finance-receivables"),
     ("finance_loans", "Кредиты и займы", "/finance-loans"),
     ("finance_liabilities", "Прочие обязательства", "/finance-liabilities"),
-    ("expenses", "Расходы", "/expenses"),
+    ("expenses", "ДДС", "/expenses"),
     ("cashoperations", "Кассы", "/cashoperations"),
 ]
 
@@ -4096,8 +4110,8 @@ SECTION_HERO = {
         "Реестр кредиторской задолженности: кому должны, по какому документу, на какой объект, до какого срока и что уже закрыто оплатой.",
     ),
     "expenses": (
-        "Расходы компании",
-        "Отдельный блок для учета постоянных и проектных расходов, чтобы видеть не только выручку, но и реальную денежную нагрузку.",
+        "ДДС",
+        "Движение денежных средств: банковская выписка, кассы, приходы, расходы и неразнесенные операции.",
     ),
     "payroll": (
         "Зарплата",
@@ -11504,6 +11518,11 @@ EXPENSE_PAYMENT_SOURCE_META = {
     "cash": "Касса",
 }
 
+MONEY_OPERATION_TYPE_META = {
+    "expense": "Расход",
+    "income": "Приход",
+}
+
 CASH_WITHDRAWAL_CATEGORY_CODE = "cash_withdrawal"
 CASH_RECIPIENT_META = (
     ("учайкин денис павлович", "denis", "Денис"),
@@ -11624,6 +11643,10 @@ def expense_payment_source_options(selected_source: str = "bank") -> str:
     )
 
 
+def money_operation_type_label(code: str) -> str:
+    return MONEY_OPERATION_TYPE_META.get(code, MONEY_OPERATION_TYPE_META["expense"])
+
+
 def cashbox_label(code: str) -> str:
     return dict(CASHBOX_OPTIONS).get(code, "Касса")
 
@@ -11658,6 +11681,24 @@ def cashbox_options_html(selected_code: str = "denis") -> str:
         f'<option value="{code}"{" selected" if code == selected_code else ""}>{escape(label)}</option>'
         for code, label in CASHBOX_OPTIONS
     )
+
+
+def cashbox_balance_for_code(entries, cashboxes: list[dict], cashbox_code: str) -> float:
+    cash_income_entries = [
+        entry for entry in entries
+        if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+        and (entry.payment_source or "bank") == "bank"
+        and cashbox_code_from_entry(entry, cashboxes) == cashbox_code
+        and entry.status != "closed"
+    ]
+    cash_expense_entries = [
+        entry for entry in entries
+        if (entry.payment_source or "bank") == "cash"
+        and entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE
+        and cashbox_code_from_entry(entry, cashboxes) == cashbox_code
+        and entry.status != "closed"
+    ]
+    return round(sum(entry.amount for entry in cash_income_entries) - sum(entry.amount for entry in cash_expense_entries), 2)
 
 
 def expense_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses") -> str:
@@ -11700,6 +11741,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
       <summary><span class="timeline-title">{escape(entry.title)}</span></summary>
       <div class="status-popover expense-editor-popover">
         <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}">
+          <input type="hidden" name="operation_type" value="{escape(entry.operation_type or 'expense')}">
           <div class="field">
             <label>Дата расхода</label>
             <input type="date" name="expense_date" value="{entry.expense_date.isoformat()}" required>
@@ -14350,11 +14392,19 @@ def render_expenses_section(
     ]
     if selected_day is not None:
         filtered_entries = [entry for entry in filtered_entries if entry.expense_date == selected_day]
-    total_active = sum(entry.amount for entry in active_entries)
-    total_admin = sum(entry.amount for entry in active_entries if entry.project_code == "admin")
-    total_project = sum(entry.amount for entry in active_entries if entry.project_code != "admin")
+    active_income_entries = [entry for entry in active_entries if (entry.operation_type or "expense") == "income"]
+    active_expense_entries = [entry for entry in active_entries if (entry.operation_type or "expense") == "expense"]
     today = datetime.now(VLADIVOSTOK_TZ).date()
-    today_total = sum(entry.amount for entry in active_entries if entry.expense_date == today)
+    today_income_total = sum(entry.amount for entry in active_income_entries if entry.expense_date == today)
+    today_expense_total = sum(
+        entry.amount for entry in active_expense_entries
+        if entry.expense_date == today and entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE
+    )
+    today_balance = today_income_total - today_expense_total
+    latest_bank_balance = storage.latest_bank_account_balance(owner_chat_id)
+    cashboxes = storage.list_cashbox_directory(owner_chat_id)
+    eduard_cash_balance = cashbox_balance_for_code(active_entries, cashboxes, "eduard")
+    denis_cash_balance = cashbox_balance_for_code(active_entries, cashboxes, "denis")
     anchor_day = today
     day_window = [anchor_day - timedelta(days=offset) for offset in range(20, -1, -1)]
     daily_totals = {day: sum(entry.amount for entry in source_entries if entry.expense_date == day) for day in day_window}
@@ -14395,11 +14445,12 @@ def render_expenses_section(
               <td><span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span></td>
               <td>
                 {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter)}
+                <div class="contract-table-subtle" style="margin-top:4px;">{escape(money_operation_type_label(entry.operation_type))}</div>
                 <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_category_label(entry.category_code, category_labels))}</div>
                 <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_payment_source_label(entry.payment_source))}</div>
                 {f'<div class="chip warn expenses-adjustment-chip">Требует корректировки</div>' if entry.needs_adjustment else ''}
               </td>
-              <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
+              <td class="nowrap" style="text-align:center;">{"+" if (entry.operation_type or "expense") == "income" else "-"}{format_amount(entry.amount)}</td>
               <td>{escape(entry.comment) if entry.comment else "Без комментария"}</td>
               <td class="nowrap">
                 <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
@@ -14478,7 +14529,9 @@ def render_expenses_section(
             if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
         ]
         cash_entries = [entry for entry in filtered_entries if (entry.payment_source or "bank") == "cash"]
-        bank_total = sum(entry.amount for entry in bank_entries)
+        bank_income_total = sum(entry.amount for entry in bank_entries if (entry.operation_type or "expense") == "income")
+        bank_expense_total = sum(entry.amount for entry in bank_entries if (entry.operation_type or "expense") == "expense")
+        bank_total = bank_income_total - bank_expense_total
         cash_income_total = sum(entry.amount for entry in cash_income_entries)
         cash_expense_total = sum(entry.amount for entry in cash_entries)
         cash_total = cash_income_total - cash_expense_total
@@ -14487,11 +14540,11 @@ def render_expenses_section(
           <div class="panel-head" style="margin-bottom:10px;">
             <div>
               <h3 class="panel-title">Расчетный счет</h3>
-              <div class="panel-sub">Расходы за {escape(format_date(selected_day))} по банковской выписке и безналичным платежам.</div>
+              <div class="panel-sub">Движения за {escape(format_date(selected_day))}. Приход: {escape(format_amount(bank_income_total))}. Расход: {escape(format_amount(bank_expense_total))}.</div>
             </div>
             <span class="chip">{escape(format_amount(bank_total))}</span>
           </div>
-          {render_expenses_table(bank_entries, "По расчетному счету за выбранный день расходов нет.")}
+          {render_expenses_table(bank_entries, "По расчетному счету за выбранный день движений нет.")}
         </div>
         <div style="margin-top:22px;">
           <div class="panel-head" style="margin-bottom:10px;">
@@ -14505,7 +14558,7 @@ def render_expenses_section(
         </div>
         """
     else:
-        registry_tables_html = render_expenses_table(filtered_entries, "Пока нет расходов в этом срезе.")
+        registry_tables_html = render_expenses_table(filtered_entries, "Пока нет операций ДДС в этом срезе.")
     add_section = ""
     if has_permission(current_user, "expenses", "edit") and active_tab != "archive":
         add_section = f"""
@@ -14513,7 +14566,7 @@ def render_expenses_section(
           <div class="panel-head">
             <div>
               <h2 class="panel-title">Импорт выписки 1С</h2>
-              <div class="panel-sub">TXT выгрузка Клиент-Банк для 1С: формат 1.03, кодировка WIN. Списания попадут в неуточненные расходы.</div>
+              <div class="panel-sub">TXT выгрузка Клиент-Банк для 1С: формат 1.03, кодировка WIN. Поступления и списания попадут в неразнесенные операции ДДС.</div>
             </div>
           </div>
           <form class="form-grid" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment=needs">
@@ -14528,7 +14581,7 @@ def render_expenses_section(
           <div class="panel-head">
             <div>
               <h2 class="panel-title">Добавить расход</h2>
-              <div class="panel-sub">Ежедневный ручной реестр всех трат по юрлицу: объект, группа расхода, сумма и комментарий.</div>
+              <div class="panel-sub">Ручное добавление списания в ДДС: объект, группа, сумма, источник и комментарий.</div>
             </div>
           </div>
           <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}">
@@ -14576,31 +14629,35 @@ def render_expenses_section(
     return f"""
     <section class="stats">
       <article class="card stat-card">
-        <div class="stat-label">Всего расходов</div>
-        <div class="stat-value">{format_amount(total_active)}</div>
-        <div class="stat-note">Активные расходы по реестру</div>
+        <div class="stat-label">Остаток на счете</div>
+        <div class="stat-value">{format_amount(latest_bank_balance["closing_balance"]) if latest_bank_balance else "—"}</div>
+        <div class="stat-note">{f'На {escape(format_date(latest_bank_balance["balance_date"]))}' if latest_bank_balance else 'Загрузите выписку 1С с остатками'}</div>
       </article>
       <article class="card stat-card">
-        <div class="stat-label">За сегодня</div>
-        <div class="stat-value">{format_amount(today_total)}</div>
-        <div class="stat-note">Траты текущего дня</div>
+        <div class="stat-label">Касса Эдуарда</div>
+        <div class="stat-value">{format_amount(eduard_cash_balance)}</div>
+        <div class="stat-note">Расчетный остаток по кассовым операциям</div>
       </article>
       <article class="card stat-card">
-        <div class="stat-label">Проектные</div>
-        <div class="stat-value">{format_amount(total_project)}</div>
-        <div class="stat-note">Расходы по объектам</div>
+        <div class="stat-label">Касса Дениса</div>
+        <div class="stat-value">{format_amount(denis_cash_balance)}</div>
+        <div class="stat-note">Расчетный остаток по кассовым операциям</div>
       </article>
       <article class="card stat-card">
-        <div class="stat-label">Административные</div>
-        <div class="stat-value">{format_amount(total_admin)}</div>
-        <div class="stat-note">Общехозяйственные траты</div>
+        <div class="stat-label">Баланс сегодня</div>
+        <div class="stat-value">{format_amount(today_balance)}</div>
+        <div class="stat-note">Приход {format_amount(today_income_total)} · расход {format_amount(today_expense_total)}</div>
       </article>
     </section>
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
-          <h2 class="panel-title">Реестр расходов</h2>
-          <div class="panel-sub">Единый список всех трат по юрлицу с привязкой к объекту и группе расходов.</div>
+          <h2 class="panel-title">Реестр ДДС</h2>
+          <div class="panel-sub">Единый реестр ДДС: поступления, списания, касса и неразнесенные операции.</div>
+        </div>
+        <div class="action-row" style="margin:0;">
+          <a class="secondary-btn mini" href="{build_expenses_href(adjustment='needs', day=None)}">Неразнесенные</a>
+          <a class="secondary-btn mini" href="{build_expenses_href(adjustment='', day=None)}">Все операции</a>
         </div>
       </div>
       <div class="expenses-day-carousel" data-expenses-day-carousel="1">
@@ -14633,7 +14690,7 @@ def render_expenses_section(
             <label>Корректировка</label>
             <select name="adjustment">
               <option value=""{" selected" if adjustment_filter == "" else ""}>Все расходы</option>
-              <option value="needs"{" selected" if adjustment_filter == "needs" else ""}>Требуют корректировки</option>
+              <option value="needs"{" selected" if adjustment_filter == "needs" else ""}>Неразнесенные</option>
             </select>
           </div>
         </div>
@@ -19969,7 +20026,7 @@ def app(environ, start_response):
             active_tab = "active"
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
         body = render_expenses_section(storage, current_owner, current_user, active_tab, flash_message, bool(flash_message), project_filter=project_filter, category_filter=category_filter, adjustment_filter=adjustment_filter, selected_day=selected_day)
-        html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
+        html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
@@ -19995,27 +20052,59 @@ def app(environ, start_response):
             if len(upload.data) > 5 * 1024 * 1024:
                 raise ValueError("Файл выписки должен быть не больше 5 МБ")
 
-            meta, documents = parse_bank_1c_export(upload.data)
+            meta, documents, account_sections = parse_bank_1c_export(upload.data)
             statement_account = meta.get("РасчСчет", "").strip()
             imported_count = 0
             duplicate_count = 0
             skipped_count = 0
+            balance_count = 0
+            for account_section in account_sections:
+                try:
+                    account_number = account_section.get("РасчСчет", "").strip() or statement_account
+                    balance_date_raw = account_section.get("ДатаКонца", "").strip() or account_section.get("ДатаНачала", "").strip()
+                    if not account_number or not balance_date_raw:
+                        continue
+                    storage.upsert_bank_account_balance(
+                        current_owner,
+                        account_number,
+                        parse_bank_1c_date(balance_date_raw),
+                        parse_bank_1c_balance_amount(account_section.get("НачальныйОстаток", "")),
+                        parse_bank_1c_balance_amount(account_section.get("ВсегоСписано", "")),
+                        parse_bank_1c_balance_amount(account_section.get("ВсегоПоступило", "")),
+                        parse_bank_1c_balance_amount(account_section.get("КонечныйОстаток", "")),
+                    )
+                    balance_count += 1
+                except ValueError:
+                    continue
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Импорт выписки"
             for document in documents:
                 payer_accounts = {
                     document.get("ПлательщикСчет", "").strip(),
                     document.get("ПлательщикРасчСчет", "").strip(),
                 }
-                if statement_account not in payer_accounts or not document.get("ДатаСписано", "").strip():
+                recipient_accounts = {
+                    document.get("ПолучательСчет", "").strip(),
+                    document.get("ПолучательРасчСчет", "").strip(),
+                }
+                is_expense = statement_account in payer_accounts and bool(document.get("ДатаСписано", "").strip())
+                is_income = statement_account in recipient_accounts and bool(document.get("ДатаПоступило", "").strip())
+                if not is_expense and not is_income:
                     skipped_count += 1
                     continue
                 import_hash = bank_1c_expense_hash(document)
                 if storage.expense_import_hash_exists(current_owner, import_hash):
                     duplicate_count += 1
                     continue
-                expense_date = parse_bank_1c_date(document.get("ДатаСписано", "").strip() or document.get("Дата", "").strip())
+                operation_date = parse_bank_1c_date(
+                    (document.get("ДатаСписано", "") if is_expense else document.get("ДатаПоступило", "")).strip()
+                    or document.get("Дата", "").strip()
+                )
                 amount = parse_bank_1c_amount(document.get("Сумма", ""))
-                recipient = document.get("Получатель", "").strip() or document.get("ПолучательСчет", "").strip() or "Расход из выписки"
+                title = (
+                    document.get("Получатель", "").strip() or document.get("ПолучательСчет", "").strip() or "Расход из выписки"
+                    if is_expense
+                    else document.get("Плательщик", "").strip() or document.get("ПлательщикСчет", "").strip() or "Поступление из выписки"
+                )
                 purpose = document.get("НазначениеПлатежа", "").strip()
                 doc_number = document.get("Номер", "").strip()
                 doc_kind = document.get("СекцияДокумент", "").strip()
@@ -20028,10 +20117,10 @@ def app(environ, start_response):
                 try:
                     storage.add_expense_entry(
                         current_owner,
-                        expense_date,
+                        operation_date,
                         "admin",
-                        "other",
-                        recipient,
+                        "other" if is_expense else "income_unallocated",
+                        title,
                         amount,
                         " | ".join(comment_parts),
                         "bank",
@@ -20041,18 +20130,23 @@ def app(environ, start_response):
                         import_source="1c_bank",
                         import_hash=import_hash,
                         import_doc_number=doc_number,
-                        import_counterparty_inn=document.get("ПолучательИНН", "").strip(),
-                        import_counterparty_account=document.get("ПолучательСчет", "").strip() or document.get("ПолучательРасчСчет", "").strip(),
+                        import_counterparty_inn=(document.get("ПолучательИНН", "") if is_expense else document.get("ПлательщикИНН", "")).strip(),
+                        import_counterparty_account=(
+                            document.get("ПолучательСчет", "").strip() or document.get("ПолучательРасчСчет", "").strip()
+                            if is_expense
+                            else document.get("ПлательщикСчет", "").strip() or document.get("ПлательщикРасчСчет", "").strip()
+                        ),
                         raw_import_text=document.get("raw_import_text", ""),
+                        operation_type="expense" if is_expense else "income",
                     )
                 except sqlite3.IntegrityError:
                     duplicate_count += 1
                     continue
                 imported_count += 1
-            flash = f"Импортировано: {imported_count}. Дублей пропущено: {duplicate_count}. Не расходы/поступления пропущены: {skipped_count}."
+            flash = f"Импортировано операций: {imported_count}. Остатков обновлено: {balance_count}. Дублей пропущено: {duplicate_count}. Не ДДС пропущено: {skipped_count}."
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day)
-            html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
+            html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&flash={quote_plus(flash)}")
@@ -20095,7 +20189,7 @@ def app(environ, start_response):
             storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day)
-            html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
+            html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}")
@@ -20124,6 +20218,7 @@ def app(environ, start_response):
             amount = parse_amount(form.get("amount", "").strip())
             comment = form.get("comment", "").strip()
             payment_source = form.get("payment_source", "bank").strip() or "bank"
+            operation_type = form.get("operation_type", "expense").strip() or "expense"
             needs_adjustment = form.get("needs_adjustment", "").strip() == "1"
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
@@ -20136,12 +20231,14 @@ def app(environ, start_response):
                 raise ValueError("Выберите группу расхода")
             if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
                 raise ValueError("Выберите источник оплаты")
+            if operation_type not in MONEY_OPERATION_TYPE_META:
+                raise ValueError("Выберите тип операции")
             if not title:
                 raise ValueError("Укажите наименование траты")
-            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment)
+            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, operation_type=operation_type)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day)
-            html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
+            html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}")
@@ -20165,7 +20262,7 @@ def app(environ, start_response):
         status = form.get("status", "").strip()
         if status not in EXPENSE_STATUS_META:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, "Нужно выбрать корректный статус", False, project_filter, category_filter, adjustment_filter, selected_day)
-            html = layout("Расходы компании", body, owners, current_owner, "expenses", current_user)
+            html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         storage.update_expense_entry_status(current_owner, entry_id, status)
