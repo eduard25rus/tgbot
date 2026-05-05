@@ -2131,8 +2131,10 @@ def render_jurisprudence_letter_object_cell(storage: Storage, owner_chat_id: int
     object_name, customer = jurisprudence_letter_object_display(storage, owner_chat_id, letter, contract)
     customer_html = escape(customer) if customer else "Заказчик не указан"
     return f"""
+    <div class="jurisprudence-object-cell">
     <div class="timeline-title">{escape(object_name)}</div>
     <div class="contract-table-subtle">{customer_html}</div>
+    </div>
     """
 
 
@@ -5423,6 +5425,19 @@ def layout(
     .contract-stage-table td:nth-child(2) .contract-table-subtle {{
       width: fit-content;
     }}
+    .jurisprudence-letters-table {{
+      table-layout: fixed;
+    }}
+    .jurisprudence-letters-table th:first-child,
+    .jurisprudence-letters-table td:first-child {{
+      width: 230px;
+    }}
+    .jurisprudence-object-cell .timeline-title,
+    .jurisprudence-object-cell .contract-table-subtle {{
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
     .legal-letter-topic {{
       font-weight: 600;
       color: var(--ink);
@@ -7996,7 +8011,7 @@ def render_jurisprudence_letters_section(
           <a class="chip" href="/jurisprudence/letters?owner={owner_chat_id}">Сбросить</a>
         </div>
       </form>
-      <table class="table contract-table">
+      <table class="table contract-table jurisprudence-letters-table">
         <thead>
           <tr>
             <th>Объект</th>
