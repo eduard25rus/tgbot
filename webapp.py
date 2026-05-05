@@ -5429,9 +5429,6 @@ def layout(
       table-layout: fixed;
       width: 100%;
     }}
-    .jurisprudence-letters-table .date-col {{
-      width: 110px;
-    }}
     .jurisprudence-letters-table .type-col {{
       width: 150px;
     }}
@@ -5444,10 +5441,16 @@ def layout(
     .jurisprudence-letters-table .author-col {{
       width: 145px;
     }}
-    .jurisprudence-letters-table th:nth-child(-n+3),
-    .jurisprudence-letters-table td:nth-child(-n+3) {{
+    .jurisprudence-letters-table th:nth-child(-n+2),
+    .jurisprudence-letters-table td:nth-child(-n+2) {{
       padding-left: 6px;
       padding-right: 6px;
+    }}
+    .jurisprudence-letter-date {{
+      color: var(--ink);
+      font-size: 14px;
+      margin-bottom: 8px;
+      white-space: nowrap;
     }}
     .jurisprudence-object-cell .timeline-title,
     .jurisprudence-object-cell .contract-table-subtle {{
@@ -7926,11 +7929,9 @@ def render_jurisprudence_letters_section(
     letters_rows_html = "".join(
         f"""
         <tr>
-          <td class="nowrap">
-            <div>{format_date(letter.letter_date)}</div>
-            {f'<div class="jurisprudence-new-badge">NEW</div>' if letter.letter_date == today else ''}
-          </td>
           <td style="text-align:center;">
+            <div class="jurisprudence-letter-date">{format_date(letter.letter_date)}</div>
+            {f'<div class="jurisprudence-new-badge">NEW</div>' if letter.letter_date == today else ''}
             <span class="{LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[1]}">{escape(LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0])}</span>
             <div class="contract-table-subtle">{escape(LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта"))}</div>
           </td>
@@ -7959,7 +7960,7 @@ def render_jurisprudence_letters_section(
         </tr>
         """
         for letter in letters
-    ) or '<tr><td colspan="6">Писем пока нет.</td></tr>'
+    ) or '<tr><td colspan="5">Писем пока нет.</td></tr>'
     add_letter_button = ""
     if can_edit_jurisprudence(current_user):
         add_letter_button = f"""
@@ -8030,7 +8031,6 @@ def render_jurisprudence_letters_section(
       </form>
       <table class="table contract-table jurisprudence-letters-table">
         <colgroup>
-          <col class="date-col">
           <col class="type-col">
           <col class="object-col">
           <col>
@@ -8039,7 +8039,6 @@ def render_jurisprudence_letters_section(
         </colgroup>
         <thead>
           <tr>
-            <th class="nowrap">Дата</th>
             <th class="nowrap">Тип</th>
             <th>Объект</th>
             <th>О чем письмо</th>
