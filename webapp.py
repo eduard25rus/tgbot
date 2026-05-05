@@ -11723,6 +11723,11 @@ def render_cashoperations_body(
         for code, label in category_options_list
     )
     category_labels = dict(category_options_list)
+    payroll_employees = [employee for employee in storage.list_payroll_employees(owner_chat_id) if employee.is_active]
+    payroll_employee_options = '<option value="">Выберите сотрудника</option>' + "".join(
+        f'<option value="{employee.id}">{escape(employee.full_name)}</option>'
+        for employee in payroll_employees
+    )
 
     cash_income_entries = [
         entry
@@ -11766,11 +11771,17 @@ def render_cashoperations_body(
         title = "Пополнение из банка" if kind == "income" else entry.title
         category = "Вывод в кассу" if kind == "income" else expense_category_label(entry.category_code, category_labels)
         comment = entry.comment if entry.comment else ("Вывод денежных средств в кассу" if kind == "income" else "Без комментария")
+        employee_line = (
+            f'<span>Сотрудник: {escape(entry.payroll_employee_name)}</span>'
+            if kind != "income" and getattr(entry, "payroll_employee_name", "")
+            else ""
+        )
         return f"""
         <article class="cash-mobile-op">
           <div>
             <strong>{escape(title)}</strong>
             <span>{escape(format_date(entry.expense_date))} · {escape(category)}</span>
+            {employee_line}
             <span>{escape(comment)}</span>
           </div>
           <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
@@ -11820,8 +11831,11 @@ def render_cashoperations_body(
             <label>Статья расхода
               <select name="category_code" data-cash-category required>{category_options}</select>
             </label>
-            <label>Объект
+            <label data-cash-project-wrap>Объект
               <select name="project_code" data-cash-project required>{project_options}</select>
+            </label>
+            <label class="is-hidden" data-cash-employee-wrap>Кому? Сотрудник
+              <select name="payroll_employee_id" data-cash-employee>{payroll_employee_options}</select>
             </label>
             <label>Наименование
               <input type="text" name="title" placeholder="Например, материалы / доставка" required>
@@ -12045,6 +12059,9 @@ def render_cashoperations_body(
         background: #eef2ed;
         color: var(--muted);
       }}
+      .cash-mobile-form .is-hidden {{
+        display: none;
+      }}
       .cash-mobile-form textarea {{
         min-height: 86px;
         resize: vertical;
@@ -12153,13 +12170,24 @@ def render_cashoperations_body(
         }});
         const categorySelect = document.querySelector("[data-cash-category]");
         const projectSelect = document.querySelector("[data-cash-project]");
+        const projectWrap = document.querySelector("[data-cash-project-wrap]");
+        const employeeSelect = document.querySelector("[data-cash-employee]");
+        const employeeWrap = document.querySelector("[data-cash-employee-wrap]");
         function syncAdminProject() {{
           if (!categorySelect || !projectSelect) return;
           const isAdmin = categorySelect.value === "admin";
-          if (isAdmin) {{
+          const isSalary = categorySelect.value === "salary";
+          if (isAdmin || isSalary) {{
             projectSelect.value = "admin";
           }}
-          projectSelect.disabled = isAdmin;
+          projectSelect.disabled = isAdmin || isSalary;
+          projectSelect.required = !(isAdmin || isSalary);
+          projectWrap && projectWrap.classList.toggle("is-hidden", isSalary);
+          if (employeeSelect) {{
+            employeeSelect.disabled = !isSalary;
+            employeeSelect.required = isSalary;
+          }}
+          employeeWrap && employeeWrap.classList.toggle("is-hidden", !isSalary);
         }}
         categorySelect && categorySelect.addEventListener("change", syncAdminProject);
         syncAdminProject();
@@ -14660,11 +14688,18 @@ def app(environ, start_response):
             amount = parse_amount(form.get("amount", "").strip())
             project_code = form.get("project_code", "").strip()
             category_code = form.get("category_code", "").strip()
-            if category_code == "admin":
+            payroll_employee_id = None
+            payroll_employee_name = ""
+            if category_code in {"admin", "salary"}:
                 project_code = "admin"
             title = form.get("title", "").strip()
             comment = form.get("comment", "").strip()
             entries = storage.list_expense_entries(current_owner)
+            payroll_employee_lookup = {
+                employee.id: employee
+                for employee in storage.list_payroll_employees(current_owner)
+                if employee.is_active
+            }
             project_codes = {code for code, _label in expense_project_options(storage, current_owner, entries)}
             category_codes = {
                 code
@@ -14675,11 +14710,21 @@ def app(environ, start_response):
                 raise ValueError("Выберите объект")
             if category_code not in category_codes:
                 raise ValueError("Выберите статью расхода")
+            if category_code == "salary":
+                try:
+                    payroll_employee_id = int(form.get("payroll_employee_id", "0"))
+                except ValueError:
+                    payroll_employee_id = 0
+                payroll_employee = payroll_employee_lookup.get(payroll_employee_id)
+                if payroll_employee is None:
+                    raise ValueError("Выберите сотрудника")
+                payroll_employee_name = payroll_employee.full_name
             if not title:
                 raise ValueError("Укажите наименование траты")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             cashbox_marker = f"[{cashbox_labels.get(selected_cashbox, 'Касса')}]"
-            normalized_comment = " ".join(part for part in (cashbox_marker, comment) if part)
+            employee_marker = f"[Сотрудник: {payroll_employee_name}]" if payroll_employee_name else ""
+            normalized_comment = " ".join(part for part in (cashbox_marker, employee_marker, comment) if part)
             storage.add_expense_entry(
                 current_owner,
                 expense_date,
@@ -14692,6 +14737,8 @@ def app(environ, start_response):
                 False,
                 (current_user or {}).get("id"),
                 actor_name,
+                payroll_employee_id=payroll_employee_id,
+                payroll_employee_name=payroll_employee_name,
             )
             flash = "Расход добавлен в кассу и CRM-расходы."
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")

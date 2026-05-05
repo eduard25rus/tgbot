@@ -15,6 +15,7 @@ DEFAULT_EXPENSE_CATEGORIES = (
     ("materials", "Материалы"),
     ("equipment", "Услуги техники"),
     ("labor", "Работы / подряд"),
+    ("salary", "Заработная плата"),
     ("transport", "Транспорт и логистика"),
     ("fuel", "Топливо"),
     ("rent", "Аренда"),
@@ -356,6 +357,8 @@ class ExpenseEntry:
     expense_date: date
     project_code: str
     category_code: str
+    payroll_employee_id: Optional[int]
+    payroll_employee_name: str
     title: str
     amount: float
     comment: str
@@ -896,6 +899,8 @@ class Storage:
                     expense_date TEXT NOT NULL,
                     project_code TEXT NOT NULL DEFAULT 'admin',
                     category_code TEXT NOT NULL DEFAULT 'other',
+                    payroll_employee_id INTEGER,
+                    payroll_employee_name TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL DEFAULT '',
                     amount REAL NOT NULL DEFAULT 0,
                     comment TEXT NOT NULL DEFAULT '',
@@ -1169,6 +1174,8 @@ class Storage:
                 ("expense_date", "TEXT NOT NULL DEFAULT ''"),
                 ("project_code", "TEXT NOT NULL DEFAULT 'admin'"),
                 ("category_code", "TEXT NOT NULL DEFAULT 'other'"),
+                ("payroll_employee_id", "INTEGER"),
+                ("payroll_employee_name", "TEXT NOT NULL DEFAULT ''"),
                 ("title", "TEXT NOT NULL DEFAULT ''"),
                 ("amount", "REAL NOT NULL DEFAULT 0"),
                 ("comment", "TEXT NOT NULL DEFAULT ''"),
@@ -5543,7 +5550,7 @@ class Storage:
                 """
                 SELECT
                     id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
-                    payment_source, needs_adjustment,
+                    payroll_employee_id, payroll_employee_name, payment_source, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
                     import_counterparty_account, raw_import_text
@@ -5636,6 +5643,8 @@ class Storage:
         import_counterparty_inn: str = "",
         import_counterparty_account: str = "",
         raw_import_text: str = "",
+        payroll_employee_id: int | None = None,
+        payroll_employee_name: str = "",
     ) -> int:
         with self.connection() as conn:
             now = datetime.utcnow().isoformat()
@@ -5643,12 +5652,12 @@ class Storage:
                 """
                 INSERT INTO expense_entries (
                     owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
-                    payment_source, needs_adjustment,
+                    payroll_employee_id, payroll_employee_name, payment_source, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
                     import_counterparty_account, raw_import_text
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -5658,6 +5667,8 @@ class Storage:
                     title.strip(),
                     amount,
                     comment.strip(),
+                    payroll_employee_id,
+                    payroll_employee_name.strip(),
                     payment_source.strip() or "bank",
                     1 if needs_adjustment else 0,
                     created_by_user_id,
@@ -6181,6 +6192,8 @@ class Storage:
             expense_date=date.fromisoformat(row["expense_date"]),
             project_code=row["project_code"] or "admin",
             category_code=row["category_code"] or "other",
+            payroll_employee_id=int(row["payroll_employee_id"]) if "payroll_employee_id" in row.keys() and row["payroll_employee_id"] is not None else None,
+            payroll_employee_name=row["payroll_employee_name"] if "payroll_employee_name" in row.keys() else "",
             title=row["title"] or "",
             amount=float(row["amount"]) if row["amount"] is not None else 0.0,
             comment=row["comment"] or "",
