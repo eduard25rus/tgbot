@@ -1880,12 +1880,41 @@ def resolve_jurisprudence_object_record(storage: Storage, owner_chat_id: int, ob
     return None
 
 
+def resolve_contract_object_match(storage: Storage, owner_chat_id: int, object_label: str, contract=None):
+    candidates = [contract] if contract is not None else storage.list_contracts(owner_chat_id)
+    labels_to_match = [normalize_legal_letter_object_label(object_label)]
+    normalized_labels = [label for label in labels_to_match if label]
+    normalized_keys = [compact_object_match_key(label) for label in normalized_labels if compact_object_match_key(label)]
+    for item in candidates:
+        if item is None:
+            continue
+        item_name = (item.object_name.strip() or item.title.strip() or "").strip()
+        if any(item_name.lower() == label.lower() for label in normalized_labels):
+            return item
+        item_short = quoted_object_part(item_name)
+        if item_short and any(item_short.lower() == label.lower() for label in normalized_labels):
+            return item
+    for item in candidates:
+        if item is None:
+            continue
+        item_name = (item.object_name.strip() or item.title.strip() or "").strip()
+        item_key = compact_object_match_key(item_name)
+        item_short_key = compact_object_match_key(quoted_object_part(item_name))
+        if any(key and (key == item_key or key == item_short_key or key in item_key) for key in normalized_keys):
+            return item
+    return None
+
+
 def jurisprudence_letter_object_display(storage: Storage, owner_chat_id: int, letter, contract=None) -> tuple[str, str]:
     object_record = resolve_jurisprudence_object_record(storage, owner_chat_id, letter.object_label, contract)
     if object_record is not None:
         return object_record.name.strip(), object_record.customer.strip()
-    if contract is not None:
-        return (contract.object_name.strip() or contract.title.strip() or letter.object_label.strip() or "Без объекта").strip(), ""
+    contract_match = resolve_contract_object_match(storage, owner_chat_id, letter.object_label, contract)
+    if contract_match is not None:
+        return (
+            contract_match.object_name.strip() or contract_match.title.strip() or letter.object_label.strip() or "Без объекта",
+            contract_match.object_customer.strip(),
+        )
     return normalize_legal_letter_object_label(letter.object_label) or "Без объекта", ""
 
 
@@ -2268,6 +2297,10 @@ def render_contract_title_block(owner_chat_id: int, contract, current_user: dict
           <div class="field">
             <label>Адрес объекта</label>
             <input type="text" name="object_address" value="{escape(contract.object_address)}">
+          </div>
+          <div class="field">
+            <label>Заказчик</label>
+            <input type="text" name="object_customer" value="{escape(contract.object_customer)}">
           </div>
           <div class="field">
             <label>Описание</label>
@@ -8225,11 +8258,35 @@ def render_directories_section(
         f"""
         <tr>
           <td>
-            <div class="timeline-title">{escape(contract.object_name.strip() or contract.title)}</div>
+            <div class="timeline-title">
+              {f'''
+              <details class="status-menu directory-edit-menu">
+                <summary><span class="directory-title-link">{escape(contract.object_name.strip() or contract.title)}</span></summary>
+                <div class="status-popover" style="min-width:420px;">
+                  <form class="form-grid directory-edit-form" method="post" action="/directories/contracts/{contract.id}/update?owner={owner_chat_id}">
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Название объекта</label>
+                      <input type="text" name="object_name" value="{escape(contract.object_name or contract.title)}" required>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Адрес объекта</label>
+                      <input type="text" name="object_address" value="{escape(contract.object_address)}">
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1;">
+                      <label>Заказчик</label>
+                      <input type="text" name="object_customer" value="{escape(contract.object_customer)}" placeholder="Например, МБУ ДО СШ">
+                    </div>
+                    <button class="submit-btn" type="submit">Сохранить объект</button>
+                  </form>
+                </div>
+              </details>
+              ''' if can_edit else escape(contract.object_name.strip() or contract.title)}
+            </div>
+            {f'<div class="contract-table-subtle">Заказчик: {escape(contract.object_customer)}</div>' if contract.object_customer else '<div class="contract-table-subtle">Заказчик: не указан</div>'}
             {f'<div class="contract-table-subtle">{escape(contract.object_address)}</div>' if contract.object_address else ''}
           </td>
           <td><span class="chip">Контракт</span></td>
-          <td><div class="contract-table-subtle">Редактируется в карточке контракта</div></td>
+          <td><div class="contract-table-subtle">Текущий объект контракта. Используется в переписке и карточке контракта.</div></td>
         </tr>
         """
         for contract in contracts
@@ -14121,6 +14178,30 @@ def app(environ, start_response):
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
+    if path.startswith("/directories/contracts/") and path.endswith("/update") and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        try:
+            contract_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            contract_id = -1
+        form = read_post_data(environ)
+        try:
+            object_name = form.get("object_name", "").strip()
+            object_address = form.get("object_address", "").strip()
+            object_customer = form.get("object_customer", "").strip()
+            if not object_name:
+                raise ValueError("Укажите название объекта")
+            if not storage.update_contract_directory_object(current_owner, contract_id, object_name, object_address, object_customer):
+                raise ValueError("Контракт не найден")
+            return redirect(start_response, f"/directories?owner={current_owner}")
+        except Exception as exc:
+            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось обновить объект контракта: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
     if path == "/directories/employees/new" and method == "POST":
         denied = guard("directories", "edit")
         if denied:
@@ -14955,6 +15036,7 @@ def app(environ, start_response):
                 current_owner,
                 object_name,
                 object_address,
+                "",
                 contract_number,
                 eis_url,
                 nmck_amount,
@@ -16023,10 +16105,11 @@ def app(environ, start_response):
             form = read_post_data(environ)
             object_name = form.get("object_name", "").strip()
             object_address = form.get("object_address", "").strip()
+            object_customer = form.get("object_customer", "").strip()
             description = form.get("description", "").strip()
             if not object_name:
                 raise ValueError("Объект обязателен")
-            updated = storage.update_contract_main_info(current_owner, contract_id, object_name, object_address, description)
+            updated = storage.update_contract_main_info(current_owner, contract_id, object_name, object_address, object_customer, description)
             if not updated:
                 raise ValueError("Контракт не найден")
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")

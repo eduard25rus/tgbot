@@ -19,6 +19,7 @@ class Contract:
     title: str
     object_name: str
     object_address: str
+    object_customer: str
     contract_number: str
     eis_url: str
     nmck_amount: float
@@ -427,6 +428,7 @@ class Storage:
                     title TEXT NOT NULL,
                     object_name TEXT NOT NULL DEFAULT '',
                     object_address TEXT NOT NULL DEFAULT '',
+                    object_customer TEXT NOT NULL DEFAULT '',
                     contract_number TEXT NOT NULL DEFAULT '',
                     eis_url TEXT NOT NULL DEFAULT '',
                     nmck_amount REAL NOT NULL DEFAULT 0,
@@ -999,6 +1001,21 @@ class Storage:
                 conn.execute("UPDATE contracts SET object_name = title WHERE object_name = ''")
             if "object_address" not in contract_columns:
                 conn.execute("ALTER TABLE contracts ADD COLUMN object_address TEXT NOT NULL DEFAULT ''")
+            if "object_customer" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN object_customer TEXT NOT NULL DEFAULT ''")
+                conn.execute(
+                    """
+                    UPDATE contracts
+                    SET object_customer = COALESCE((
+                        SELECT jo.customer
+                        FROM jurisprudence_objects jo
+                        WHERE jo.owner_chat_id = contracts.chat_id
+                          AND LOWER(jo.name) = LOWER(COALESCE(NULLIF(contracts.object_name, ''), contracts.title))
+                        LIMIT 1
+                    ), '')
+                    WHERE COALESCE(object_customer, '') = ''
+                    """
+                )
             payroll_alters = [
                 ("advance_card_paid_amount", "REAL NOT NULL DEFAULT 0"),
                 ("advance_card_paid_date", "TEXT"),
@@ -2227,6 +2244,7 @@ class Storage:
         chat_id: int,
         object_name: str,
         object_address: str,
+        object_customer: str,
         contract_number: str,
         eis_url: str,
         nmck_amount: float,
@@ -2246,14 +2264,15 @@ class Storage:
             )
             cursor = conn.execute(
                 """
-                INSERT INTO contracts (chat_id, title, object_name, object_address, contract_number, eis_url, nmck_amount, reduction_percent, description, signed_date, end_date, advance_percent, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO contracts (chat_id, title, object_name, object_address, object_customer, contract_number, eis_url, nmck_amount, reduction_percent, description, signed_date, end_date, advance_percent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
                     f"{object_name.strip()}, {object_address.strip()}" if object_address.strip() else object_name.strip(),
                     object_name.strip(),
                     object_address.strip(),
+                    object_customer.strip(),
                     contract_number.strip(),
                     eis_url.strip(),
                     nmck_amount,
@@ -2537,19 +2556,39 @@ class Storage:
             )
             return cursor.rowcount > 0
 
-    def update_contract_main_info(self, chat_id: int, contract_id: int, object_name: str, object_address: str, description: str) -> bool:
+    def update_contract_main_info(self, chat_id: int, contract_id: int, object_name: str, object_address: str, object_customer: str, description: str) -> bool:
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE contracts
-                SET title = ?, object_name = ?, object_address = ?, description = ?
+                SET title = ?, object_name = ?, object_address = ?, object_customer = ?, description = ?
                 WHERE id = ? AND chat_id = ?
                 """,
                 (
                     f"{object_name.strip()}, {object_address.strip()}" if object_address.strip() else object_name.strip(),
                     object_name.strip(),
                     object_address.strip(),
+                    object_customer.strip(),
                     description.strip(),
+                    contract_id,
+                    chat_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def update_contract_directory_object(self, chat_id: int, contract_id: int, object_name: str, object_address: str, object_customer: str) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE contracts
+                SET title = ?, object_name = ?, object_address = ?, object_customer = ?
+                WHERE id = ? AND chat_id = ?
+                """,
+                (
+                    f"{object_name.strip()}, {object_address.strip()}" if object_address.strip() else object_name.strip(),
+                    object_name.strip(),
+                    object_address.strip(),
+                    object_customer.strip(),
                     contract_id,
                     chat_id,
                 ),
@@ -3678,6 +3717,7 @@ class Storage:
                 "title",
                 "object_name" if "object_name" in contract_columns else "title AS object_name",
                 "object_address" if "object_address" in contract_columns else "'' AS object_address",
+                "object_customer" if "object_customer" in contract_columns else "'' AS object_customer",
                 "contract_number" if "contract_number" in contract_columns else "'' AS contract_number",
                 "eis_url" if "eis_url" in contract_columns else "'' AS eis_url",
                 "nmck_amount" if "nmck_amount" in contract_columns else "0 AS nmck_amount",
@@ -3710,6 +3750,7 @@ class Storage:
                 "title",
                 "object_name" if "object_name" in contract_columns else "title AS object_name",
                 "object_address" if "object_address" in contract_columns else "'' AS object_address",
+                "object_customer" if "object_customer" in contract_columns else "'' AS object_customer",
                 "contract_number" if "contract_number" in contract_columns else "'' AS contract_number",
                 "eis_url" if "eis_url" in contract_columns else "'' AS eis_url",
                 "nmck_amount" if "nmck_amount" in contract_columns else "0 AS nmck_amount",
@@ -3914,6 +3955,7 @@ class Storage:
             title=row["title"],
             object_name=row["object_name"] or row["title"] or "",
             object_address=row["object_address"] or "",
+            object_customer=row["object_customer"] or "",
             contract_number=row["contract_number"] or "",
             eis_url=row["eis_url"] or "",
             nmck_amount=float(row["nmck_amount"]) if row["nmck_amount"] is not None else 0.0,

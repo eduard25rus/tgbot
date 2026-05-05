@@ -36,6 +36,7 @@ def seed_demo_data(db_path: Path) -> str:
         OWNER_CHAT_ID,
         "Smoke object",
         "Smoke address",
+        "",
         "0123456789",
         "https://zakupki.gov.ru/",
         1_500_000,
