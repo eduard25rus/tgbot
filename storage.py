@@ -359,6 +359,8 @@ class ExpenseEntry:
     category_code: str
     payroll_employee_id: Optional[int]
     payroll_employee_name: str
+    receipt_file_name: str
+    receipt_file_path: str
     title: str
     amount: float
     comment: str
@@ -901,6 +903,8 @@ class Storage:
                     category_code TEXT NOT NULL DEFAULT 'other',
                     payroll_employee_id INTEGER,
                     payroll_employee_name TEXT NOT NULL DEFAULT '',
+                    receipt_file_name TEXT NOT NULL DEFAULT '',
+                    receipt_file_path TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL DEFAULT '',
                     amount REAL NOT NULL DEFAULT 0,
                     comment TEXT NOT NULL DEFAULT '',
@@ -917,7 +921,8 @@ class Storage:
                     import_doc_number TEXT NOT NULL DEFAULT '',
                     import_counterparty_inn TEXT NOT NULL DEFAULT '',
                     import_counterparty_account TEXT NOT NULL DEFAULT '',
-                    raw_import_text TEXT NOT NULL DEFAULT ''
+                    raw_import_text TEXT NOT NULL DEFAULT '',
+                    client_request_key TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS expense_categories (
@@ -1176,6 +1181,8 @@ class Storage:
                 ("category_code", "TEXT NOT NULL DEFAULT 'other'"),
                 ("payroll_employee_id", "INTEGER"),
                 ("payroll_employee_name", "TEXT NOT NULL DEFAULT ''"),
+                ("receipt_file_name", "TEXT NOT NULL DEFAULT ''"),
+                ("receipt_file_path", "TEXT NOT NULL DEFAULT ''"),
                 ("title", "TEXT NOT NULL DEFAULT ''"),
                 ("amount", "REAL NOT NULL DEFAULT 0"),
                 ("comment", "TEXT NOT NULL DEFAULT ''"),
@@ -1192,6 +1199,7 @@ class Storage:
                 ("import_counterparty_inn", "TEXT NOT NULL DEFAULT ''"),
                 ("import_counterparty_account", "TEXT NOT NULL DEFAULT ''"),
                 ("raw_import_text", "TEXT NOT NULL DEFAULT ''"),
+                ("client_request_key", "TEXT NOT NULL DEFAULT ''"),
             ]
             for column_name, column_def in expense_alters:
                 if column_name not in expense_columns:
@@ -5550,7 +5558,8 @@ class Storage:
                 """
                 SELECT
                     id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
-                    payroll_employee_id, payroll_employee_name, payment_source, needs_adjustment,
+                    payroll_employee_id, payroll_employee_name, receipt_file_name, receipt_file_path,
+                    payment_source, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
                     import_counterparty_account, raw_import_text
@@ -5645,8 +5654,24 @@ class Storage:
         raw_import_text: str = "",
         payroll_employee_id: int | None = None,
         payroll_employee_name: str = "",
+        client_request_key: str = "",
     ) -> int:
+        cleaned_request_key = client_request_key.strip()
         with self.connection() as conn:
+            if cleaned_request_key:
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM expense_entries
+                    WHERE owner_chat_id = ?
+                      AND client_request_key = ?
+                      AND deleted_at IS NULL
+                    LIMIT 1
+                    """,
+                    (owner_chat_id, cleaned_request_key),
+                ).fetchone()
+                if existing is not None:
+                    return int(existing["id"])
             now = datetime.utcnow().isoformat()
             cursor = conn.execute(
                 """
@@ -5655,9 +5680,9 @@ class Storage:
                     payroll_employee_id, payroll_employee_name, payment_source, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
-                    import_counterparty_account, raw_import_text
+                    import_counterparty_account, raw_import_text, client_request_key
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -5681,9 +5706,34 @@ class Storage:
                     import_counterparty_inn.strip(),
                     import_counterparty_account.strip(),
                     raw_import_text.strip(),
+                    cleaned_request_key,
                 ),
             )
             return int(cursor.lastrowid)
+
+    def update_expense_receipt(self, owner_chat_id: int, entry_id: int, file_name: str, file_path: str) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE expense_entries
+                SET receipt_file_name = ?, receipt_file_path = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (file_name.strip(), file_path.strip(), datetime.utcnow().isoformat(), entry_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
+    def delete_expense_entry(self, owner_chat_id: int, entry_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE expense_entries
+                SET deleted_at = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (datetime.utcnow().isoformat(), datetime.utcnow().isoformat(), entry_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
 
     def expense_import_hash_exists(self, owner_chat_id: int, import_hash: str) -> bool:
         if not import_hash.strip():
@@ -6200,6 +6250,8 @@ class Storage:
             category_code=row["category_code"] or "other",
             payroll_employee_id=int(row["payroll_employee_id"]) if "payroll_employee_id" in row.keys() and row["payroll_employee_id"] is not None else None,
             payroll_employee_name=row["payroll_employee_name"] if "payroll_employee_name" in row.keys() else "",
+            receipt_file_name=row["receipt_file_name"] if "receipt_file_name" in row.keys() else "",
+            receipt_file_path=row["receipt_file_path"] if "receipt_file_path" in row.keys() else "",
             title=row["title"] or "",
             amount=float(row["amount"]) if row["amount"] is not None else 0.0,
             comment=row["comment"] or "",
