@@ -4841,14 +4841,13 @@ def layout(
     .dds-table {{
       table-layout: fixed;
     }}
-    .dds-table th:nth-child(1), .dds-table td:nth-child(1) {{ width: 86px; }}
-    .dds-table th:nth-child(2), .dds-table td:nth-child(2) {{ width: 130px; }}
-    .dds-table th:nth-child(4), .dds-table td:nth-child(4) {{ width: 160px; text-align: right; }}
-    .dds-table th:nth-child(5), .dds-table td:nth-child(5) {{ width: 190px; }}
+    .dds-table th:nth-child(1), .dds-table td:nth-child(1) {{ width: 118px; }}
+    .dds-table th:nth-child(3), .dds-table td:nth-child(3) {{ width: 155px; text-align: right; }}
+    .dds-table th:nth-child(4), .dds-table td:nth-child(4) {{ width: 190px; }}
     .dds-table .timeline-title {{
-      font-size: 17px;
+      font-size: 15px;
       line-height: 1.25;
-      font-weight: 800;
+      font-weight: 700;
       color: var(--ink);
       overflow-wrap: anywhere;
     }}
@@ -4867,7 +4866,8 @@ def layout(
       align-items: center;
     }}
     .dds-amount {{
-      font-weight: 800;
+      font-weight: 600;
+      font-size: 15px;
       white-space: nowrap;
       color: var(--ink);
     }}
@@ -4879,6 +4879,9 @@ def layout(
       flex-direction: column;
       align-items: flex-start;
       gap: 8px;
+    }}
+    .dds-status-stack .status-menu summary {{
+      padding: 0;
     }}
     .construction-section-link {{
       background: linear-gradient(135deg, #f4c44d, #e3a536);
@@ -11971,9 +11974,9 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "") -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None) -> str:
     if not has_permission(current_user, "expenses", "edit"):
-        return f'<div class="timeline-title">{escape(entry.title)}</div>'
+        return summary_html or f'<div class="timeline-title">{escape(entry.title)}</div>'
     project_options = "".join(
         f'<option value="{code}"{" selected" if code == entry.project_code else ""}>{escape(label)}</option>'
         for code, label in project_options_list
@@ -11984,7 +11987,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     )
     return f"""
     <details class="status-menu expense-editor-menu">
-      <summary><span class="timeline-title">{escape(entry.title)}</span></summary>
+      <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
       <div class="status-popover expense-editor-popover">
         <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}">
           <input type="hidden" name="operation_type" value="{escape(entry.operation_type or 'expense')}">
@@ -14684,15 +14687,20 @@ def render_expenses_section(
         for day in day_window
     )
     def render_expense_rows(row_entries) -> str:
+        def status_editor(entry) -> str:
+            status_html = f'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'
+            if has_permission(current_user, "expenses", "edit"):
+                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html)
+            return status_html
         return "".join(
             f"""
             <tr>
               <td class="nowrap">{format_date(entry.expense_date)}</td>
-              <td><span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span></td>
               <td>
-                {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter)}
+                <div class="timeline-title">{escape(entry.title)}</div>
                 <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Назначение не указано"}</div>
                 <div class="dds-meta-row">
+                  <span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span>
                   <span class="chip">{escape(money_operation_type_label(entry.operation_type))}</span>
                   <span class="chip">{escape(expense_category_label(entry.category_code, category_labels))}</span>
                   <span class="chip">{escape(expense_payment_source_label(entry.payment_source))}</span>
@@ -14701,7 +14709,7 @@ def render_expenses_section(
               <td class="nowrap"><span class="dds-amount{' income' if (entry.operation_type or 'expense') == 'income' else ''}">{"+" if (entry.operation_type or "expense") == "income" else "-"}{format_amount(entry.amount)}</span></td>
               <td>
                 <div class="dds-status-stack">
-                  {f'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'}
+                  {status_editor(entry)}
                   <span class="contract-table-subtle">{escape("Автоимпорт выписки" if entry.import_source else (entry.created_by_name or "Автор неизвестен"))}</span>
                 </div>
               </td>
@@ -14718,13 +14726,12 @@ def render_expenses_section(
             <thead>
               <tr>
                 <th class="nowrap">Дата</th>
-                <th>Объект</th>
                 <th>Операция</th>
                 <th class="nowrap">Сумма</th>
                 <th>Статус</th>
               </tr>
             </thead>
-            <tbody>{rows_html or f'<tr><td colspan="5">{escape(empty_text)}</td></tr>'}</tbody>
+            <tbody>{rows_html or f'<tr><td colspan="4">{escape(empty_text)}</td></tr>'}</tbody>
           </table>
         </div>
         """
@@ -14734,11 +14741,11 @@ def render_expenses_section(
             f"""
             <tr>
               <td class="nowrap">{format_date(entry.expense_date)}</td>
-              <td><span class="chip">Приход</span></td>
               <td>
                 <div class="timeline-title">Пополнение кассы: {escape(cash_recipient_label(entry.title, entry.comment))}</div>
                 <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Вывод денежных средств в кассу"}</div>
                 <div class="dds-meta-row">
+                  <span class="chip">Касса</span>
                   <span class="chip">Приход</span>
                   <span class="chip">Расчетный счет</span>
                 </div>
@@ -14758,13 +14765,12 @@ def render_expenses_section(
             <thead>
               <tr>
                 <th class="nowrap">Дата</th>
-                <th>Тип</th>
                 <th>Операция</th>
                 <th class="nowrap">Сумма</th>
                 <th>Источник</th>
               </tr>
             </thead>
-            <tbody>{rows_html or f'<tr><td colspan="5">{escape(empty_text)}</td></tr>'}</tbody>
+            <tbody>{rows_html or f'<tr><td colspan="4">{escape(empty_text)}</td></tr>'}</tbody>
           </table>
         </div>
         """
