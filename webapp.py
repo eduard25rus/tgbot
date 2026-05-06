@@ -4883,6 +4883,11 @@ def layout(
     .dds-status-stack .status-menu summary {{
       padding: 0;
     }}
+    .dds-status-stack .expense-editor-popover {{
+      left: auto;
+      right: 0;
+      width: min(520px, calc(100vw - 48px));
+    }}
     .construction-section-link {{
       background: linear-gradient(135deg, #f4c44d, #e3a536);
       border-color: rgba(181, 111, 23, 0.46);
@@ -11974,7 +11979,7 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None) -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False) -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return summary_html or f'<div class="timeline-title">{escape(entry.title)}</div>'
     project_options = "".join(
@@ -12020,7 +12025,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <textarea name="comment">{escape(entry.comment)}</textarea>
           </div>
           <label class="advance-toggle span-2">
-            <input class="toggle-checkbox" type="checkbox" name="needs_adjustment" value="1" {"checked" if entry.needs_adjustment else ""}> Откорректировать
+            <input class="toggle-checkbox" type="checkbox" name="needs_adjustment" value="1" {"checked" if entry.needs_adjustment and not clear_adjustment_on_open else ""}> Откорректировать
           </label>
           <button class="submit-btn" type="submit">Сохранить изменения</button>
         </form>
@@ -14690,7 +14695,7 @@ def render_expenses_section(
         def status_editor(entry) -> str:
             status_html = f'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'
             if has_permission(current_user, "expenses", "edit"):
-                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html)
+                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry.needs_adjustment)
             return status_html
         return "".join(
             f"""
