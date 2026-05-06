@@ -921,6 +921,112 @@ def bank_1c_expense_hash(document: dict[str, str]) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+@dataclass
+class BankStatementImportResult:
+    imported_count: int = 0
+    duplicate_count: int = 0
+    skipped_count: int = 0
+    balance_count: int = 0
+
+
+def import_bank_1c_statement(
+    storage: Storage,
+    owner_chat_id: int,
+    data: bytes,
+    created_by_user_id: int | None = None,
+    created_by_name: str = "Импорт выписки",
+) -> BankStatementImportResult:
+    meta, documents, account_sections = parse_bank_1c_export(data)
+    statement_account = meta.get("РасчСчет", "").strip()
+    result = BankStatementImportResult()
+    for account_section in account_sections:
+        try:
+            account_number = account_section.get("РасчСчет", "").strip() or statement_account
+            balance_date_raw = account_section.get("ДатаКонца", "").strip() or account_section.get("ДатаНачала", "").strip()
+            if not account_number or not balance_date_raw:
+                continue
+            storage.upsert_bank_account_balance(
+                owner_chat_id,
+                account_number,
+                parse_bank_1c_date(balance_date_raw),
+                parse_bank_1c_balance_amount(account_section.get("НачальныйОстаток", "")),
+                parse_bank_1c_balance_amount(account_section.get("ВсегоСписано", "")),
+                parse_bank_1c_balance_amount(account_section.get("ВсегоПоступило", "")),
+                parse_bank_1c_balance_amount(account_section.get("КонечныйОстаток", "")),
+            )
+            result.balance_count += 1
+        except ValueError:
+            continue
+    actor_name = created_by_name.strip() or "Импорт выписки"
+    for document in documents:
+        payer_accounts = {
+            document.get("ПлательщикСчет", "").strip(),
+            document.get("ПлательщикРасчСчет", "").strip(),
+        }
+        recipient_accounts = {
+            document.get("ПолучательСчет", "").strip(),
+            document.get("ПолучательРасчСчет", "").strip(),
+        }
+        is_expense = statement_account in payer_accounts and bool(document.get("ДатаСписано", "").strip())
+        is_income = statement_account in recipient_accounts and bool(document.get("ДатаПоступило", "").strip())
+        if not is_expense and not is_income:
+            result.skipped_count += 1
+            continue
+        import_hash = bank_1c_expense_hash(document)
+        if storage.expense_import_hash_exists(owner_chat_id, import_hash):
+            result.duplicate_count += 1
+            continue
+        operation_date = parse_bank_1c_date(
+            (document.get("ДатаСписано", "") if is_expense else document.get("ДатаПоступило", "")).strip()
+            or document.get("Дата", "").strip()
+        )
+        amount = parse_bank_1c_amount(document.get("Сумма", ""))
+        title = (
+            document.get("Получатель", "").strip() or document.get("ПолучательСчет", "").strip() or "Расход из выписки"
+            if is_expense
+            else document.get("Плательщик", "").strip() or document.get("ПлательщикСчет", "").strip() or "Поступление из выписки"
+        )
+        purpose = document.get("НазначениеПлатежа", "").strip()
+        doc_number = document.get("Номер", "").strip()
+        doc_kind = document.get("СекцияДокумент", "").strip()
+        comment_parts = []
+        if purpose:
+            comment_parts.append(purpose)
+        doc_label = " ".join(part for part in (doc_kind, f"№ {doc_number}" if doc_number else "") if part)
+        if doc_label:
+            comment_parts.append(doc_label)
+        try:
+            storage.add_expense_entry(
+                owner_chat_id,
+                operation_date,
+                "admin",
+                "other" if is_expense else "income_unallocated",
+                title,
+                amount,
+                " | ".join(comment_parts),
+                "bank",
+                True,
+                created_by_user_id,
+                actor_name,
+                import_source="1c_bank",
+                import_hash=import_hash,
+                import_doc_number=doc_number,
+                import_counterparty_inn=(document.get("ПолучательИНН", "") if is_expense else document.get("ПлательщикИНН", "")).strip(),
+                import_counterparty_account=(
+                    document.get("ПолучательСчет", "").strip() or document.get("ПолучательРасчСчет", "").strip()
+                    if is_expense
+                    else document.get("ПлательщикСчет", "").strip() or document.get("ПлательщикРасчСчет", "").strip()
+                ),
+                raw_import_text=document.get("raw_import_text", ""),
+                operation_type="expense" if is_expense else "income",
+            )
+        except sqlite3.IntegrityError:
+            result.duplicate_count += 1
+            continue
+        result.imported_count += 1
+    return result
+
+
 def hash_password(password: str, salt: str | None = None) -> str:
     salt = salt or secrets.token_hex(16)
     derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 200_000)
@@ -14657,6 +14763,48 @@ def render_expenses_section(
         """
     else:
         registry_tables_html = render_expenses_table(filtered_entries, "Пока нет операций ДДС в этом срезе.")
+    mail_imports_html = ""
+    if has_permission(current_user, "expenses", "edit"):
+        mail_imports = storage.list_bank_statement_mail_imports(owner_chat_id, 5)
+        mail_import_rows = "".join(
+            f"""
+            <tr>
+              <td class="nowrap">{escape(format_datetime(item.processed_at.astimezone(VLADIVOSTOK_TZ)))}</td>
+              <td>
+                <div class="timeline-title">{escape(item.attachment_filename or item.message_subject or 'Выписка из почты')}</div>
+                <div class="contract-table-subtle" style="margin-top:4px;">{escape(item.mailbox)} · {escape(item.mailbox_folder)}</div>
+              </td>
+              <td><span class="chip{' ok' if item.status == 'processed' else ' danger'}">{'Обработано' if item.status == 'processed' else 'Ошибка'}</span></td>
+              <td class="nowrap">{item.imported_count} / {item.duplicate_count} / {item.skipped_count}</td>
+              <td>{escape(item.error_message) if item.error_message else f'Остатков обновлено: {item.balance_count}'}</td>
+            </tr>
+            """
+            for item in mail_imports
+        )
+        mail_imports_html = f"""
+        <div style="margin-top:18px;">
+          <div class="panel-head" style="margin-bottom:10px;">
+            <div>
+              <h3 class="panel-title">Автоимпорт из почты</h3>
+              <div class="panel-sub">Последние TXT-выписки, которые CRM забрала из почтового ящика.</div>
+            </div>
+          </div>
+          <div class="expenses-table-wrap">
+            <table class="table contract-table">
+              <thead>
+                <tr>
+                  <th class="nowrap">Когда</th>
+                  <th>Файл</th>
+                  <th>Статус</th>
+                  <th class="nowrap">Новые / дубли / пропущено</th>
+                  <th>Итог</th>
+                </tr>
+              </thead>
+              <tbody>{mail_import_rows or '<tr><td colspan="5">Автоимпорт еще не запускался.</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>
+        """
     add_section = ""
     if has_permission(current_user, "expenses", "edit") and active_tab != "archive":
         add_section = f"""
@@ -14674,6 +14822,7 @@ def render_expenses_section(
             </div>
             <button class="submit-btn" type="submit">Загрузить выписку</button>
           </form>
+          {mail_imports_html}
         </section>
         <section class="card panel" style="margin-top:22px;">
           <div class="panel-head">
@@ -20161,98 +20310,9 @@ def app(environ, start_response):
             if len(upload.data) > 5 * 1024 * 1024:
                 raise ValueError("Файл выписки должен быть не больше 5 МБ")
 
-            meta, documents, account_sections = parse_bank_1c_export(upload.data)
-            statement_account = meta.get("РасчСчет", "").strip()
-            imported_count = 0
-            duplicate_count = 0
-            skipped_count = 0
-            balance_count = 0
-            for account_section in account_sections:
-                try:
-                    account_number = account_section.get("РасчСчет", "").strip() or statement_account
-                    balance_date_raw = account_section.get("ДатаКонца", "").strip() or account_section.get("ДатаНачала", "").strip()
-                    if not account_number or not balance_date_raw:
-                        continue
-                    storage.upsert_bank_account_balance(
-                        current_owner,
-                        account_number,
-                        parse_bank_1c_date(balance_date_raw),
-                        parse_bank_1c_balance_amount(account_section.get("НачальныйОстаток", "")),
-                        parse_bank_1c_balance_amount(account_section.get("ВсегоСписано", "")),
-                        parse_bank_1c_balance_amount(account_section.get("ВсегоПоступило", "")),
-                        parse_bank_1c_balance_amount(account_section.get("КонечныйОстаток", "")),
-                    )
-                    balance_count += 1
-                except ValueError:
-                    continue
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Импорт выписки"
-            for document in documents:
-                payer_accounts = {
-                    document.get("ПлательщикСчет", "").strip(),
-                    document.get("ПлательщикРасчСчет", "").strip(),
-                }
-                recipient_accounts = {
-                    document.get("ПолучательСчет", "").strip(),
-                    document.get("ПолучательРасчСчет", "").strip(),
-                }
-                is_expense = statement_account in payer_accounts and bool(document.get("ДатаСписано", "").strip())
-                is_income = statement_account in recipient_accounts and bool(document.get("ДатаПоступило", "").strip())
-                if not is_expense and not is_income:
-                    skipped_count += 1
-                    continue
-                import_hash = bank_1c_expense_hash(document)
-                if storage.expense_import_hash_exists(current_owner, import_hash):
-                    duplicate_count += 1
-                    continue
-                operation_date = parse_bank_1c_date(
-                    (document.get("ДатаСписано", "") if is_expense else document.get("ДатаПоступило", "")).strip()
-                    or document.get("Дата", "").strip()
-                )
-                amount = parse_bank_1c_amount(document.get("Сумма", ""))
-                title = (
-                    document.get("Получатель", "").strip() or document.get("ПолучательСчет", "").strip() or "Расход из выписки"
-                    if is_expense
-                    else document.get("Плательщик", "").strip() or document.get("ПлательщикСчет", "").strip() or "Поступление из выписки"
-                )
-                purpose = document.get("НазначениеПлатежа", "").strip()
-                doc_number = document.get("Номер", "").strip()
-                doc_kind = document.get("СекцияДокумент", "").strip()
-                comment_parts = []
-                if purpose:
-                    comment_parts.append(purpose)
-                doc_label = " ".join(part for part in (doc_kind, f"№ {doc_number}" if doc_number else "") if part)
-                if doc_label:
-                    comment_parts.append(doc_label)
-                try:
-                    storage.add_expense_entry(
-                        current_owner,
-                        operation_date,
-                        "admin",
-                        "other" if is_expense else "income_unallocated",
-                        title,
-                        amount,
-                        " | ".join(comment_parts),
-                        "bank",
-                        True,
-                        (current_user or {}).get("id"),
-                        actor_name,
-                        import_source="1c_bank",
-                        import_hash=import_hash,
-                        import_doc_number=doc_number,
-                        import_counterparty_inn=(document.get("ПолучательИНН", "") if is_expense else document.get("ПлательщикИНН", "")).strip(),
-                        import_counterparty_account=(
-                            document.get("ПолучательСчет", "").strip() or document.get("ПолучательРасчСчет", "").strip()
-                            if is_expense
-                            else document.get("ПлательщикСчет", "").strip() or document.get("ПлательщикРасчСчет", "").strip()
-                        ),
-                        raw_import_text=document.get("raw_import_text", ""),
-                        operation_type="expense" if is_expense else "income",
-                    )
-                except sqlite3.IntegrityError:
-                    duplicate_count += 1
-                    continue
-                imported_count += 1
-            flash = f"Импортировано операций: {imported_count}. Остатков обновлено: {balance_count}. Дублей пропущено: {duplicate_count}. Не ДДС пропущено: {skipped_count}."
+            result = import_bank_1c_statement(storage, current_owner, upload.data, (current_user or {}).get("id"), actor_name)
+            flash = f"Импортировано операций: {result.imported_count}. Остатков обновлено: {result.balance_count}. Дублей пропущено: {result.duplicate_count}. Не распознано как ДДС: {result.skipped_count}."
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)

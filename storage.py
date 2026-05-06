@@ -383,6 +383,28 @@ class ExpenseEntry:
 
 
 @dataclass
+class BankStatementMailImport:
+    id: int
+    owner_chat_id: int
+    mailbox: str
+    mailbox_folder: str
+    message_uid: str
+    message_subject: str
+    message_from: str
+    message_date: str
+    attachment_filename: str
+    attachment_hash: str
+    status: str
+    imported_count: int
+    duplicate_count: int
+    skipped_count: int
+    balance_count: int
+    error_message: str
+    processed_at: datetime
+    created_at: datetime
+
+
+@dataclass
 class ExpenseCategory:
     id: int
     owner_chat_id: int
@@ -943,6 +965,27 @@ class Storage:
                     UNIQUE(owner_chat_id, account_number, balance_date)
                 );
 
+                CREATE TABLE IF NOT EXISTS bank_statement_mail_imports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    mailbox TEXT NOT NULL DEFAULT '',
+                    mailbox_folder TEXT NOT NULL DEFAULT '',
+                    message_uid TEXT NOT NULL DEFAULT '',
+                    message_subject TEXT NOT NULL DEFAULT '',
+                    message_from TEXT NOT NULL DEFAULT '',
+                    message_date TEXT NOT NULL DEFAULT '',
+                    attachment_filename TEXT NOT NULL DEFAULT '',
+                    attachment_hash TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'processed',
+                    imported_count INTEGER NOT NULL DEFAULT 0,
+                    duplicate_count INTEGER NOT NULL DEFAULT 0,
+                    skipped_count INTEGER NOT NULL DEFAULT 0,
+                    balance_count INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT NOT NULL DEFAULT '',
+                    processed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS expense_categories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_chat_id INTEGER NOT NULL,
@@ -1023,6 +1066,9 @@ class Storage:
             }
             bank_balance_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(bank_account_balances)").fetchall()
+            }
+            bank_mail_import_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(bank_statement_mail_imports)").fetchall()
             }
             mobile_cash_access_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(mobile_cash_access)").fetchall()
@@ -1253,6 +1299,28 @@ class Storage:
             for column_name, column_def in bank_balance_alters:
                 if column_name not in bank_balance_columns:
                     conn.execute(f"ALTER TABLE bank_account_balances ADD COLUMN {column_name} {column_def}")
+            bank_mail_import_alters = [
+                ("owner_chat_id", "INTEGER NOT NULL DEFAULT 0"),
+                ("mailbox", "TEXT NOT NULL DEFAULT ''"),
+                ("mailbox_folder", "TEXT NOT NULL DEFAULT ''"),
+                ("message_uid", "TEXT NOT NULL DEFAULT ''"),
+                ("message_subject", "TEXT NOT NULL DEFAULT ''"),
+                ("message_from", "TEXT NOT NULL DEFAULT ''"),
+                ("message_date", "TEXT NOT NULL DEFAULT ''"),
+                ("attachment_filename", "TEXT NOT NULL DEFAULT ''"),
+                ("attachment_hash", "TEXT NOT NULL DEFAULT ''"),
+                ("status", "TEXT NOT NULL DEFAULT 'processed'"),
+                ("imported_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("duplicate_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("skipped_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("balance_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("error_message", "TEXT NOT NULL DEFAULT ''"),
+                ("processed_at", "TEXT NOT NULL DEFAULT ''"),
+                ("created_at", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in bank_mail_import_alters:
+                if column_name not in bank_mail_import_columns:
+                    conn.execute(f"ALTER TABLE bank_statement_mail_imports ADD COLUMN {column_name} {column_def}")
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_entries_import_hash
@@ -1270,6 +1338,19 @@ class Storage:
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_account_balances_owner_account_date
                 ON bank_account_balances(owner_chat_id, account_number, balance_date)
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_mail_imports_attachment_hash
+                ON bank_statement_mail_imports(owner_chat_id, attachment_hash)
+                WHERE attachment_hash != ''
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_bank_statement_mail_imports_owner_created
+                ON bank_statement_mail_imports(owner_chat_id, created_at DESC)
                 """
             )
             legal_letter_contract_notnull = any(
@@ -5684,6 +5765,113 @@ class Storage:
             "created_at": datetime.fromisoformat(row["created_at"]),
             "updated_at": datetime.fromisoformat(row["updated_at"]),
         }
+
+    def bank_statement_mail_attachment_exists(self, owner_chat_id: int, attachment_hash: str) -> bool:
+        cleaned_hash = attachment_hash.strip()
+        if not cleaned_hash:
+            return False
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM bank_statement_mail_imports
+                WHERE owner_chat_id = ? AND attachment_hash = ? AND status = 'processed'
+                LIMIT 1
+                """,
+                (owner_chat_id, cleaned_hash),
+            ).fetchone()
+        return row is not None
+
+    def add_bank_statement_mail_import(
+        self,
+        owner_chat_id: int,
+        mailbox: str,
+        mailbox_folder: str,
+        message_uid: str,
+        message_subject: str,
+        message_from: str,
+        message_date: str,
+        attachment_filename: str,
+        attachment_hash: str,
+        status: str,
+        imported_count: int,
+        duplicate_count: int,
+        skipped_count: int,
+        balance_count: int,
+        error_message: str = "",
+    ) -> int:
+        now = datetime.utcnow().isoformat()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO bank_statement_mail_imports (
+                    owner_chat_id, mailbox, mailbox_folder, message_uid, message_subject,
+                    message_from, message_date, attachment_filename, attachment_hash,
+                    status, imported_count, duplicate_count, skipped_count, balance_count,
+                    error_message, processed_at, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_chat_id,
+                    mailbox.strip(),
+                    mailbox_folder.strip(),
+                    message_uid.strip(),
+                    message_subject.strip(),
+                    message_from.strip(),
+                    message_date.strip(),
+                    attachment_filename.strip(),
+                    attachment_hash.strip(),
+                    status.strip() or "processed",
+                    int(imported_count),
+                    int(duplicate_count),
+                    int(skipped_count),
+                    int(balance_count),
+                    error_message.strip(),
+                    now,
+                    now,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def list_bank_statement_mail_imports(self, owner_chat_id: int, limit: int = 10) -> list[BankStatementMailImport]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, mailbox, mailbox_folder, message_uid, message_subject,
+                       message_from, message_date, attachment_filename, attachment_hash, status,
+                       imported_count, duplicate_count, skipped_count, balance_count,
+                       error_message, processed_at, created_at
+                FROM bank_statement_mail_imports
+                WHERE owner_chat_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (owner_chat_id, max(1, int(limit))),
+            ).fetchall()
+        return [
+            BankStatementMailImport(
+                id=int(row["id"]),
+                owner_chat_id=int(row["owner_chat_id"]),
+                mailbox=row["mailbox"] or "",
+                mailbox_folder=row["mailbox_folder"] or "",
+                message_uid=row["message_uid"] or "",
+                message_subject=row["message_subject"] or "",
+                message_from=row["message_from"] or "",
+                message_date=row["message_date"] or "",
+                attachment_filename=row["attachment_filename"] or "",
+                attachment_hash=row["attachment_hash"] or "",
+                status=row["status"] or "",
+                imported_count=int(row["imported_count"] or 0),
+                duplicate_count=int(row["duplicate_count"] or 0),
+                skipped_count=int(row["skipped_count"] or 0),
+                balance_count=int(row["balance_count"] or 0),
+                error_message=row["error_message"] or "",
+                processed_at=datetime.fromisoformat(row["processed_at"]),
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
 
     def add_cash_reconciliation(
         self,
