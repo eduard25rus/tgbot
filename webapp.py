@@ -4858,6 +4858,10 @@ def layout(
       line-height: 1.45;
       max-width: 760px;
     }}
+    .dds-source-inline {{
+      color: var(--muted);
+      white-space: nowrap;
+    }}
     .dds-meta-row {{
       margin-top: 9px;
       display: flex;
@@ -11839,27 +11843,30 @@ def finance_status_control(owner_chat_id: int, entry, current_user: dict | None,
 def expense_project_options(storage: Storage, owner_chat_id: int, entries: Iterable | None = None) -> list[tuple[str, str]]:
     options: list[tuple[str, str]] = [("admin", "Админ")]
     seen = {"admin"}
+    seen_labels = {"админ"}
+    def add_option(code: str, label: str) -> None:
+        normalized_label = " ".join(label.casefold().split())
+        if code in seen or normalized_label in seen_labels:
+            return
+        options.append((code, label))
+        seen.add(code)
+        seen_labels.add(normalized_label)
     for contract in storage.list_contracts(owner_chat_id):
         label = (contract.object_name.strip() or contract.title.strip()).strip()
         if not label:
             continue
         code = f"contract:{contract.id}"
-        if code not in seen:
-            options.append((code, label))
-            seen.add(code)
+        add_option(code, label)
     for object_item in storage.list_jurisprudence_object_records(owner_chat_id):
         label = object_item.name.strip()
         if not label:
             continue
         code = f"object:{object_item.id}"
-        if code not in seen:
-            options.append((code, label))
-            seen.add(code)
+        add_option(code, label)
     for entry in entries or ():
         code = (entry.project_code or "").strip()
-        if code and code not in seen:
-            options.append((code, EXPENSE_PROJECT_META.get(code, code)))
-            seen.add(code)
+        if code:
+            add_option(code, EXPENSE_PROJECT_META.get(code, code))
     return options
 
 
@@ -14714,16 +14721,14 @@ def render_expenses_section(
     )
     def render_cash_income_row(entry) -> str:
         source_label = "Банк" if (entry.payment_source or "bank") == "bank" and entry.import_source else "Мобильное приложение"
-        source_chip = "Расчетный счет" if source_label == "Банк" else "Касса"
         return f"""
             <tr>
               <td class="nowrap">{format_date(entry.expense_date)}</td>
               <td>
                 <div class="timeline-title">Пополнение кассы: {escape(cash_recipient_label(entry.title, entry.comment))}</div>
-                <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Вывод денежных средств в кассу"}</div>
+                <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Вывод денежных средств в кассу"} <span class="dds-source-inline">· Касса</span></div>
                 <div class="dds-meta-row">
                   <span class="chip">Касса</span>
-                  <span class="chip">{escape(source_chip)}</span>
                 </div>
               </td>
               <td class="nowrap"><span class="dds-amount income">+{format_amount(entry.amount)}</span></td>
@@ -14739,6 +14744,10 @@ def render_expenses_section(
             return status_html
         def row_is_income_display(entry) -> bool:
             return (entry.operation_type or "expense") == "income" or (cash_withdrawal_as_income and is_cash_income_display(entry))
+        def project_chip(entry) -> str:
+            if is_cash_income_display(entry):
+                return ""
+            return f'<span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span>'
         def render_single_entry(entry) -> str:
             amount_is_income = row_is_income_display(entry)
             return f"""
@@ -14746,11 +14755,10 @@ def render_expenses_section(
                   <td class="nowrap">{format_date(entry.expense_date)}</td>
                   <td>
                     <div class="timeline-title">{escape(entry.title)}</div>
-                    <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Назначение не указано"}</div>
+                    <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Назначение не указано"} <span class="dds-source-inline">· {escape(expense_payment_source_label(entry.payment_source))}</span></div>
                     <div class="dds-meta-row">
-                      <span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span>
+                      {project_chip(entry)}
                       <span class="chip">{escape(expense_category_label(entry.category_code, category_labels))}</span>
-                      <span class="chip">{escape(expense_payment_source_label(entry.payment_source))}</span>
                     </div>
                   </td>
                   <td class="nowrap"><span class="dds-amount{' income' if amount_is_income else ''}">{"+" if amount_is_income else "-"}{format_amount(entry.amount)}</span></td>
