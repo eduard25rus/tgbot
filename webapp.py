@@ -14788,6 +14788,9 @@ def render_expenses_section(
               <h3 class="panel-title">Автоимпорт из почты</h3>
               <div class="panel-sub">Последние TXT-выписки, которые CRM забрала из почтового ящика.</div>
             </div>
+          <form method="post" action="/expenses/mail-import?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment=needs" style="margin:0;">
+              <button class="secondary-btn mini" type="submit">Проверить почту сейчас</button>
+            </form>
           </div>
           <div class="expenses-table-wrap">
             <table class="table contract-table">
@@ -14943,7 +14946,7 @@ def render_expenses_section(
         </div>
         <div class="action-row expenses-filters-actions">
           <button class="secondary-btn" type="submit">Показать</button>
-          {f'<a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}&tab={active_tab}">Показать весь реестр</a>' if project_filter or category_filter or adjustment_filter or selected_day else ""}
+          {f'<a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}&tab={active_tab}">Показать весь реестр</a>' if project_filter or category_filter or adjustment_filter or selected_day else ''}
         </div>
       </form>
       {flash_html}
@@ -20287,6 +20290,32 @@ def app(environ, start_response):
         html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
+
+    if path == "/expenses/mail-import" and method == "POST":
+        denied = guard("expenses", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        project_filter = query.get("project", [""])[0].strip()
+        category_filter = query.get("category", [""])[0].strip()
+        adjustment_filter = query.get("adjustment", ["needs"])[0].strip() or "needs"
+        selected_day_raw = query.get("day", [""])[0].strip()
+        selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        try:
+            from scripts.import_bank_mail import run_bank_mail_import
+            imported_files, skipped_files, error_files = run_bank_mail_import()
+            success = error_files == 0
+            flash = f"Проверка почты: обработано файлов {imported_files}, уже обработано {skipped_files}, ошибок {error_files}."
+        except Exception as exc:
+            success = False
+            flash = f"Не удалось проверить почту: {exc}"
+        if not success:
+            body = render_expenses_section(storage, current_owner, current_user, active_tab, flash, False, project_filter, category_filter, adjustment_filter, selected_day)
+            html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&flash={quote_plus(flash)}")
 
     if path == "/expenses/import" and method == "POST":
         denied = guard("expenses", "edit")
