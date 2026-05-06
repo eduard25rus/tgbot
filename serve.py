@@ -21,6 +21,8 @@ logging.basicConfig(
     level=logging.INFO,
 )
 LOGGER = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def resolve_web_bind() -> tuple[str, int]:
