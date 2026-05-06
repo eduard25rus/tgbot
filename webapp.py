@@ -4869,7 +4869,7 @@ def layout(
       font-weight: 600;
       font-size: 15px;
       white-space: nowrap;
-      color: var(--ink);
+      color: #9f2f36;
     }}
     .dds-amount.income {{
       color: var(--brand);
@@ -14697,6 +14697,12 @@ def render_expenses_section(
             if has_permission(current_user, "expenses", "edit"):
                 return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry.needs_adjustment)
             return status_html
+        def is_cash_income_display(entry) -> bool:
+            return entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+        def is_income_display(entry) -> bool:
+            return (entry.operation_type or "expense") == "income" or is_cash_income_display(entry)
+        def operation_type_display(entry) -> str:
+            return "Пополнение кассы" if is_cash_income_display(entry) else money_operation_type_label(entry.operation_type)
         return "".join(
             f"""
             <tr>
@@ -14706,12 +14712,12 @@ def render_expenses_section(
                 <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Назначение не указано"}</div>
                 <div class="dds-meta-row">
                   <span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span>
-                  <span class="chip">{escape(money_operation_type_label(entry.operation_type))}</span>
+                  <span class="chip">{escape(operation_type_display(entry))}</span>
                   <span class="chip">{escape(expense_category_label(entry.category_code, category_labels))}</span>
                   <span class="chip">{escape(expense_payment_source_label(entry.payment_source))}</span>
                 </div>
               </td>
-              <td class="nowrap"><span class="dds-amount{' income' if (entry.operation_type or 'expense') == 'income' else ''}">{"+" if (entry.operation_type or "expense") == "income" else "-"}{format_amount(entry.amount)}</span></td>
+              <td class="nowrap"><span class="dds-amount{' income' if is_income_display(entry) else ''}">{"+" if is_income_display(entry) else "-"}{format_amount(entry.amount)}</span></td>
               <td>
                 <div class="dds-status-stack">
                   {status_editor(entry)}
