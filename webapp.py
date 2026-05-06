@@ -469,8 +469,24 @@ def format_discount_percent(value: float) -> str:
     return "-" + format_percent(value)
 
 
+RU_MONTH_GENITIVE_NAMES = {
+    1: "января",
+    2: "февраля",
+    3: "марта",
+    4: "апреля",
+    5: "мая",
+    6: "июня",
+    7: "июля",
+    8: "августа",
+    9: "сентября",
+    10: "октября",
+    11: "ноября",
+    12: "декабря",
+}
+
+
 def format_date(value: date) -> str:
-    return value.strftime("%d-%m-%Y")
+    return f"{value.day} {RU_MONTH_GENITIVE_NAMES[value.month]} {value.year}г."
 
 
 RU_MONTH_NAMES = {
@@ -5629,7 +5645,7 @@ def layout(
     }}
     .jurisprudence-letter-date {{
       color: var(--ink);
-      font-size: 14px;
+      font-size: 12px;
       margin-bottom: 8px;
       white-space: nowrap;
     }}
