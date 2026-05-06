@@ -7,11 +7,16 @@ import email
 import hashlib
 import imaplib
 import os
+import re
 import sys
+from html import unescape
 from email.header import decode_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from urllib.parse import unquote
+from urllib.request import Request
+from urllib.request import urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +73,54 @@ def iter_txt_attachments(message: Message):
             yield filename or "bank-statement.txt", payload
 
 
+def iter_html_parts(message: Message):
+    for part in message.walk():
+        if part.is_multipart() or part.get_content_type() != "text/html":
+            continue
+        payload = part.get_payload(decode=True)
+        if payload:
+            yield payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+
+
+def iter_sber_statement_links(message: Message):
+    seen: set[str] = set()
+    for html in iter_html_parts(message):
+        for raw_link in re.findall(r"""href=["']([^"']+)""", html, flags=re.IGNORECASE):
+            link = unescape(raw_link).strip()
+            if "sbi.sberbank.ru" not in link or "/statements/download/mail/reports/" not in link:
+                continue
+            if link in seen:
+                continue
+            seen.add(link)
+            yield link
+
+
+def filename_from_content_disposition(raw: str | None) -> str:
+    if not raw:
+        return ""
+    filename_star = re.search(r"filename\*=UTF-8''([^;]+)", raw, flags=re.IGNORECASE)
+    if filename_star:
+        return unquote(filename_star.group(1).strip().strip('"'))
+    filename = re.search(r'filename="?([^";]+)"?', raw, flags=re.IGNORECASE)
+    if filename:
+        return decode_mime_header(filename.group(1).strip())
+    return ""
+
+
+def download_statement_link(link: str) -> tuple[str, bytes]:
+    request = Request(link, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=30) as response:
+        data = response.read()
+        filename = filename_from_content_disposition(response.headers.get("Content-Disposition"))
+    return filename or "kl_to_1c.txt", data
+
+
+def iter_statement_sources(message: Message):
+    yield from iter_txt_attachments(message)
+    for link in iter_sber_statement_links(message):
+        yield download_statement_link(link)
+
+
 def imap_ok(response) -> bool:
     return bool(response) and response[0] == "OK"
 
@@ -83,6 +136,7 @@ def main() -> int:
     sender_filter = os.getenv("BANK_MAIL_SENDER", "").strip().casefold()
     limit = int(os.getenv("BANK_MAIL_LIMIT", "20"))
     mark_seen = os.getenv("BANK_MAIL_MARK_SEEN", "1").strip().lower() not in {"0", "false", "no"}
+    search_query = os.getenv("BANK_MAIL_SEARCH", "UNSEEN").strip() or "UNSEEN"
 
     storage = Storage(db_path)
     imported_files = 0
@@ -94,12 +148,12 @@ def main() -> int:
         status, _ = imap.select(folder)
         if status != "OK":
             raise RuntimeError(f"Не удалось открыть папку IMAP: {folder}")
-        status, data = imap.uid("search", None, "UNSEEN")
+        status, data = imap.uid("search", None, search_query)
         if status != "OK":
             raise RuntimeError("Не удалось найти новые письма в IMAP")
         uids = (data[0] or b"").split()[:limit]
         for uid in uids:
-            status, fetched = imap.uid("fetch", uid, "(RFC822)")
+            status, fetched = imap.uid("fetch", uid, "(BODY.PEEK[])")
             if status != "OK" or not fetched:
                 continue
             raw_message = next((item[1] for item in fetched if isinstance(item, tuple) and len(item) > 1), None)
@@ -111,10 +165,10 @@ def main() -> int:
                 continue
             subject = decode_mime_header(message.get("Subject"))
             uid_text = uid.decode("ascii", errors="ignore")
-            message_had_attachment = False
+            message_had_statement = False
             message_had_errors = False
-            for filename, payload in iter_txt_attachments(message):
-                message_had_attachment = True
+            for filename, payload in iter_statement_sources(message):
+                message_had_statement = True
                 attachment_hash = hashlib.sha256(payload).hexdigest()
                 if storage.bank_statement_mail_attachment_exists(owner_chat_id, attachment_hash):
                     skipped_files += 1
@@ -164,7 +218,7 @@ def main() -> int:
                         0,
                         str(exc),
                     )
-            if mark_seen and message_had_attachment and not message_had_errors:
+            if mark_seen and message_had_statement and not message_had_errors:
                 imap.uid("store", uid, "+FLAGS", r"(\Seen)")
         imap.logout()
 
