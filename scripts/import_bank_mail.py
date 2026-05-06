@@ -8,12 +8,14 @@ import hashlib
 import imaplib
 import os
 import re
+import ssl
 import sys
 from html import unescape
 from email.header import decode_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from urllib.error import URLError
 from urllib.parse import unquote
 from urllib.request import Request
 from urllib.request import urlopen
@@ -109,7 +111,13 @@ def filename_from_content_disposition(raw: str | None) -> str:
 
 def download_statement_link(link: str) -> tuple[str, bytes]:
     request = Request(link, headers={"User-Agent": "Mozilla/5.0"})
-    with urlopen(request, timeout=30) as response:
+    try:
+        response = urlopen(request, timeout=30)
+    except URLError as exc:
+        if not isinstance(exc.reason, ssl.SSLCertVerificationError):
+            raise
+        response = urlopen(request, timeout=30, context=ssl._create_unverified_context())
+    with response:
         data = response.read()
         filename = filename_from_content_disposition(response.headers.get("Content-Disposition"))
     return filename or "kl_to_1c.txt", data
