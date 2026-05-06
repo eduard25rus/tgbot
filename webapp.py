@@ -4872,7 +4872,7 @@ def layout(
       color: #9f2f36;
     }}
     .dds-amount.income {{
-      color: var(--brand);
+      color: #1f7a4d;
     }}
     .dds-status-stack {{
       display: flex;
@@ -14674,16 +14674,13 @@ def render_expenses_section(
         balance = sum(dds_signed_amount(entry) for entry in day_entries)
         prefix = "+" if balance > 0.009 else ""
         return f"{prefix}{format_amount(balance)}"
-    active_income_entries = [entry for entry in active_entries if is_income_display(entry)]
-    active_expense_entries = [entry for entry in active_entries if not is_income_display(entry)]
     today = datetime.now(VLADIVOSTOK_TZ).date()
-    today_income_total = sum(entry.amount for entry in active_income_entries if entry.expense_date == today)
-    today_expense_total = sum(entry.amount for entry in active_expense_entries if entry.expense_date == today)
-    today_balance = today_income_total - today_expense_total
     latest_bank_balance = storage.latest_bank_account_balance(owner_chat_id)
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     eduard_cash_balance = cashbox_balance_for_code(active_entries, cashboxes, "eduard")
     denis_cash_balance = cashbox_balance_for_code(active_entries, cashboxes, "denis")
+    bank_cash_balance = latest_bank_balance["closing_balance"] if latest_bank_balance else None
+    company_money_total = (bank_cash_balance + eduard_cash_balance + denis_cash_balance) if bank_cash_balance is not None else None
     anchor_day = today
     day_window = [anchor_day - timedelta(days=offset) for offset in range(20, -1, -1)]
     active_selected_day = selected_day if selected_day in day_window else None
@@ -14716,6 +14713,8 @@ def render_expenses_section(
         for day in day_window
     )
     def render_cash_income_row(entry) -> str:
+        source_label = "Банк" if (entry.payment_source or "bank") == "bank" and entry.import_source else "Мобильное приложение"
+        source_chip = "Расчетный счет" if source_label == "Банк" else "Касса"
         return f"""
             <tr>
               <td class="nowrap">{format_date(entry.expense_date)}</td>
@@ -14724,12 +14723,11 @@ def render_expenses_section(
                 <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Вывод денежных средств в кассу"}</div>
                 <div class="dds-meta-row">
                   <span class="chip">Касса</span>
-                  <span class="chip">Приход</span>
-                  <span class="chip">Расчетный счет</span>
+                  <span class="chip">{escape(source_chip)}</span>
                 </div>
               </td>
               <td class="nowrap"><span class="dds-amount income">+{format_amount(entry.amount)}</span></td>
-              <td><span class="contract-table-subtle">Банк</span></td>
+              <td><span class="contract-table-subtle">{escape(source_label)}</span></td>
             </tr>
         """
 
@@ -14739,8 +14737,6 @@ def render_expenses_section(
             if has_permission(current_user, "expenses", "edit"):
                 return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry.needs_adjustment)
             return status_html
-        def operation_type_display(entry) -> str:
-            return "Пополнение кассы" if cash_withdrawal_as_income and is_cash_income_display(entry) else money_operation_type_label(entry.operation_type)
         def row_is_income_display(entry) -> bool:
             return (entry.operation_type or "expense") == "income" or (cash_withdrawal_as_income and is_cash_income_display(entry))
         def render_single_entry(entry) -> str:
@@ -14753,7 +14749,6 @@ def render_expenses_section(
                     <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Назначение не указано"}</div>
                     <div class="dds-meta-row">
                       <span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span>
-                      <span class="chip">{escape(operation_type_display(entry))}</span>
                       <span class="chip">{escape(expense_category_label(entry.category_code, category_labels))}</span>
                       <span class="chip">{escape(expense_payment_source_label(entry.payment_source))}</span>
                     </div>
@@ -14980,9 +14975,9 @@ def render_expenses_section(
         <div class="stat-note">Расчетный остаток по кассовым операциям</div>
       </article>
       <article class="card stat-card">
-        <div class="stat-label">Баланс сегодня</div>
-        <div class="stat-value">{format_amount(today_balance)}</div>
-        <div class="stat-note">Приход {format_amount(today_income_total)} · расход {format_amount(today_expense_total)}</div>
+        <div class="stat-label">Итого денег</div>
+        <div class="stat-value">{format_amount(company_money_total) if company_money_total is not None else "—"}</div>
+        <div class="stat-note">Счет {format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"} · кассы {format_amount(eduard_cash_balance + denis_cash_balance)}</div>
       </article>
     </section>
     <section class="card panel" style="margin-top:22px;">
