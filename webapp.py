@@ -4097,6 +4097,11 @@ JURISPRUDENCE_NAV_SECTIONS = [
     ("jurisprudence_courts", "Суды", "/jurisprudence/courts"),
 ]
 
+SETTINGS_NAV_SECTIONS = [
+    ("directories", "Справочники", "/directories"),
+    ("access", "Доступы", "/access"),
+]
+
 SECTION_LABELS = {section_id: label for section_id, label, _ in SECTIONS}
 
 
@@ -4144,6 +4149,10 @@ SECTION_HERO = {
     "jurisprudence": (
         "Юриспруденция",
         "Общий юридический контур компании: переписки, суды и связанная история по текущим и прошлым объектам.",
+    ),
+    "settings": (
+        "Настройки",
+        "Служебная зона CRM: справочники, пользователи, роли и доступы собраны в одном месте.",
     ),
 }
 
@@ -4199,8 +4208,14 @@ def layout(
         """
     finance_nav_ids = {item[0] for item in FINANCE_NAV_SECTIONS}
     jurisprudence_nav_ids = {item[0] for item in JURISPRUDENCE_NAV_SECTIONS}
+    settings_nav_ids = {item[0] for item in SETTINGS_NAV_SECTIONS}
     show_finance_group = bool(current_user and current_user.get("is_super_admin"))
     show_jurisprudence_group = bool(current_user and has_permission(current_user, "jurisprudence", "view"))
+    settings_links_source = [
+        item for item in SETTINGS_NAV_SECTIONS
+        if current_user is not None and has_permission(current_user, item[0], "view")
+    ]
+    show_settings_group = bool(settings_links_source)
     visible_sections = []
     for section_id, label, href in SECTIONS:
         if current_user is not None and not has_permission(current_user, section_id, "view"):
@@ -4208,6 +4223,8 @@ def layout(
         if show_finance_group and section_id in {"finance", "payables", "expenses"}:
             continue
         if show_jurisprudence_group and section_id == "jurisprudence":
+            continue
+        if show_settings_group and section_id in settings_nav_ids:
             continue
         visible_sections.append((section_id, label, href))
     nav_links = "".join(
@@ -4244,6 +4261,23 @@ def layout(
         <details class="nav-group"{" open" if active_jurisprudence_key else ""}>
           <summary class="nav-link nav-group-link{' active' if active_jurisprudence_key else ''}">Юриспруденция</summary>
           <div class="nav-subnav">{jurisprudence_links}</div>
+        </details>
+        """
+    if show_settings_group:
+        active_settings_key = (
+            active_subsection
+            if active_subsection in settings_nav_ids
+            else (active_section if active_section in settings_nav_ids else "")
+        )
+        settings_active = bool(active_settings_key or active_section == "settings")
+        settings_links = "".join(
+            f'<a class="nav-sublink{" active" if code == active_settings_key else ""}" href="{href}">{label}</a>'
+            for code, label, href in settings_links_source
+        )
+        nav_links += f"""
+        <details class="nav-group"{" open" if settings_active else ""}>
+          <summary class="nav-link nav-group-link{' active' if settings_active else ''}"><a class="nav-group-title" href="/settings">Настройки</a></summary>
+          <div class="nav-subnav">{settings_links}</div>
         </details>
         """
     hero_title, hero_copy = SECTION_HERO.get(active_section, SECTION_HERO["contracts"])
@@ -4460,6 +4494,12 @@ def layout(
       cursor: pointer;
       position: relative;
       padding-right: 38px;
+    }}
+    .nav-group-title {{
+      color: inherit;
+      text-decoration: none;
+      display: inline-block;
+      max-width: 100%;
     }}
     .nav-group-link::after {{
       content: "▾";
@@ -8507,6 +8547,44 @@ def render_court_case_detail(
       <div class="timeline">{timeline_rows}</div>
     </section>
     {add_event_block}
+    """
+
+
+def render_settings_section(current_user: dict | None) -> str:
+    cards = []
+    if has_permission(current_user, "directories", "view"):
+        cards.append(
+            """
+            <a class="card mini-card contract-table-link" href="/directories">
+              <div class="stat-label">Справочники</div>
+              <div class="timeline-title" style="margin-top:10px;">Объекты, сотрудники и категории</div>
+              <div class="contract-table-subtle">Единая база, откуда CRM подтягивает данные в рабочие разделы.</div>
+            </a>
+            """
+        )
+    if has_permission(current_user, "access", "view"):
+        cards.append(
+            """
+            <a class="card mini-card contract-table-link" href="/access">
+              <div class="stat-label">Доступы</div>
+              <div class="timeline-title" style="margin-top:10px;">Пользователи и права</div>
+              <div class="contract-table-subtle">Роли, разрешения по разделам и служебные настройки входа.</div>
+            </a>
+            """
+        )
+    cards_html = "".join(cards) or '<div class="empty">Нет доступных настроек.</div>'
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Настройки CRM</h2>
+          <div class="panel-sub">Выберите, что нужно настроить: справочники или доступы пользователей.</div>
+        </div>
+      </div>
+      <div class="stats" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+        {cards_html}
+      </div>
+    </section>
     """
 
 
@@ -15414,6 +15492,17 @@ def app(environ, start_response):
         body = render_forbidden_body(SECTION_LABELS.get(section_id, section_id))
         html = layout("Доступ запрещен", body, owners, current_owner, section_id, current_user)
         start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/settings" and method == "GET":
+        if not (has_permission(current_user, "directories", "view") or has_permission(current_user, "access", "view")):
+            body = render_forbidden_body("Настройки")
+            html = layout("Доступ запрещен", body, owners, current_owner, "settings", current_user)
+            start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        body = render_settings_section(current_user)
+        html = layout("Настройки", body, owners, current_owner, "settings", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
     if path == "/cashoperations" and method == "GET":
