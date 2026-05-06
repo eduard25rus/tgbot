@@ -4838,6 +4838,48 @@ def layout(
       margin-top: 8px;
       display: inline-flex;
     }}
+    .dds-table {{
+      table-layout: fixed;
+    }}
+    .dds-table th:nth-child(1), .dds-table td:nth-child(1) {{ width: 86px; }}
+    .dds-table th:nth-child(2), .dds-table td:nth-child(2) {{ width: 130px; }}
+    .dds-table th:nth-child(4), .dds-table td:nth-child(4) {{ width: 160px; text-align: right; }}
+    .dds-table th:nth-child(5), .dds-table td:nth-child(5) {{ width: 190px; }}
+    .dds-table .timeline-title {{
+      font-size: 17px;
+      line-height: 1.25;
+      font-weight: 800;
+      color: var(--ink);
+      overflow-wrap: anywhere;
+    }}
+    .dds-purpose {{
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      max-width: 760px;
+    }}
+    .dds-meta-row {{
+      margin-top: 9px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }}
+    .dds-amount {{
+      font-weight: 800;
+      white-space: nowrap;
+      color: var(--ink);
+    }}
+    .dds-amount.income {{
+      color: var(--brand);
+    }}
+    .dds-status-stack {{
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+    }}
     .construction-section-link {{
       background: linear-gradient(135deg, #f4c44d, #e3a536);
       border-color: rgba(181, 111, 23, 0.46);
@@ -14649,17 +14691,19 @@ def render_expenses_section(
               <td><span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span></td>
               <td>
                 {expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter)}
-                <div class="contract-table-subtle" style="margin-top:4px;">{escape(money_operation_type_label(entry.operation_type))}</div>
-                <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_category_label(entry.category_code, category_labels))}</div>
-                <div class="contract-table-subtle" style="margin-top:4px;">{escape(expense_payment_source_label(entry.payment_source))}</div>
-                {f'<div class="chip warn expenses-adjustment-chip">Требует корректировки</div>' if entry.needs_adjustment else ''}
+                <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Назначение не указано"}</div>
+                <div class="dds-meta-row">
+                  <span class="chip">{escape(money_operation_type_label(entry.operation_type))}</span>
+                  <span class="chip">{escape(expense_category_label(entry.category_code, category_labels))}</span>
+                  <span class="chip">{escape(expense_payment_source_label(entry.payment_source))}</span>
+                </div>
               </td>
-              <td class="nowrap" style="text-align:center;">{"+" if (entry.operation_type or "expense") == "income" else "-"}{format_amount(entry.amount)}</td>
-              <td>{escape(entry.comment) if entry.comment else "Без комментария"}</td>
-              <td class="nowrap">
-                <span class="status-chip-tooltip" data-tooltip="Добавил: {escape(entry.created_by_name or 'Автор неизвестен')}&#10;Когда: {escape(format_datetime(entry.created_at.astimezone(VLADIVOSTOK_TZ)))}">
-                  {escape(entry.created_by_name or "Автор неизвестен")}
-                </span>
+              <td class="nowrap"><span class="dds-amount{' income' if (entry.operation_type or 'expense') == 'income' else ''}">{"+" if (entry.operation_type or "expense") == "income" else "-"}{format_amount(entry.amount)}</span></td>
+              <td>
+                <div class="dds-status-stack">
+                  {f'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'}
+                  <span class="contract-table-subtle">{escape("Автоимпорт выписки" if entry.import_source else (entry.created_by_name or "Автор неизвестен"))}</span>
+                </div>
               </td>
             </tr>
             """
@@ -14670,18 +14714,17 @@ def render_expenses_section(
         rows_html = render_expense_rows(row_entries)
         return f"""
         <div class="expenses-table-wrap">
-          <table class="table contract-table">
+          <table class="table contract-table dds-table">
             <thead>
               <tr>
                 <th class="nowrap">Дата</th>
                 <th>Объект</th>
-                <th>Наименование</th>
+                <th>Операция</th>
                 <th class="nowrap">Сумма</th>
-                <th>Комментарий</th>
-                <th>Добавил</th>
+                <th>Статус</th>
               </tr>
             </thead>
-            <tbody>{rows_html or f'<tr><td colspan="6">{escape(empty_text)}</td></tr>'}</tbody>
+            <tbody>{rows_html or f'<tr><td colspan="5">{escape(empty_text)}</td></tr>'}</tbody>
           </table>
         </div>
         """
@@ -14694,12 +14737,14 @@ def render_expenses_section(
               <td><span class="chip">Приход</span></td>
               <td>
                 <div class="timeline-title">Пополнение кассы: {escape(cash_recipient_label(entry.title, entry.comment))}</div>
-                <div class="contract-table-subtle" style="margin-top:4px;">Из расчетного счета</div>
-                <div class="contract-table-subtle" style="margin-top:4px;">{escape(entry.title)}</div>
+                <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Вывод денежных средств в кассу"}</div>
+                <div class="dds-meta-row">
+                  <span class="chip">Приход</span>
+                  <span class="chip">Расчетный счет</span>
+                </div>
               </td>
-              <td class="nowrap" style="text-align:center;">{format_amount(entry.amount)}</td>
-              <td>{escape(entry.comment) if entry.comment else "Вывод денежных средств в кассу"}</td>
-              <td class="nowrap">Банк</td>
+              <td class="nowrap"><span class="dds-amount income">+{format_amount(entry.amount)}</span></td>
+              <td><span class="contract-table-subtle">Банк</span></td>
             </tr>
             """
             for entry in row_entries
@@ -14709,18 +14754,17 @@ def render_expenses_section(
         rows_html = render_cash_income_rows(cash_income_entries) + render_expense_rows(cash_expense_entries)
         return f"""
         <div class="expenses-table-wrap">
-          <table class="table contract-table">
+          <table class="table contract-table dds-table">
             <thead>
               <tr>
                 <th class="nowrap">Дата</th>
                 <th>Тип</th>
-                <th>Наименование</th>
+                <th>Операция</th>
                 <th class="nowrap">Сумма</th>
-                <th>Комментарий</th>
                 <th>Источник</th>
               </tr>
             </thead>
-            <tbody>{rows_html or f'<tr><td colspan="6">{escape(empty_text)}</td></tr>'}</tbody>
+            <tbody>{rows_html or f'<tr><td colspan="5">{escape(empty_text)}</td></tr>'}</tbody>
           </table>
         </div>
         """
