@@ -120,6 +120,23 @@ BOT_TOKEN=...
 BOT_TIMEZONE=Asia/Vladivostok
 ```
 
+Для ежедневного автоимпорта 1С-выписок из почты добавьте переменные:
+
+```env
+BANK_MAIL_OWNER_CHAT_ID=329457823
+BANK_MAIL_IMAP_HOST=imap.mail.ru
+BANK_MAIL_IMAP_PORT=993
+BANK_MAIL_LOGIN=felis.bank.statement@mail.ru
+BANK_MAIL_PASSWORD=пароль_приложения_mail_ru
+BANK_MAIL_FOLDER=INBOX
+BANK_MAIL_AUTO_IMPORT_ENABLED=1
+BANK_MAIL_DAILY_TIME=08:30
+BANK_MAIL_RUN_ON_STARTUP=1
+```
+
+При старте сервиса CRM сразу проверит почту, затем будет запускать импорт каждый день
+в `BANK_MAIL_DAILY_TIME` по часовому поясу `BOT_TIMEZONE`.
+
 3. Если хотите красивую правильную ссылку установки пароля для сотрудников, добавьте:
 
 ```env

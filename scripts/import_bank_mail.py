@@ -125,7 +125,7 @@ def imap_ok(response) -> bool:
     return bool(response) and response[0] == "OK"
 
 
-def main() -> int:
+def run_bank_mail_import() -> tuple[int, int, int]:
     db_path = os.getenv("DB_PATH", "contracts.db")
     owner_chat_id = int(env_required("BANK_MAIL_OWNER_CHAT_ID"))
     login = env_required("BANK_MAIL_LOGIN")
@@ -226,6 +226,11 @@ def main() -> int:
         "Bank mail import finished: "
         f"processed={imported_files}, already_processed={skipped_files}, errors={error_files}"
     )
+    return imported_files, skipped_files, error_files
+
+
+def main() -> int:
+    _imported_files, _skipped_files, error_files = run_bank_mail_import()
     return 0 if error_files == 0 else 1
 
 
