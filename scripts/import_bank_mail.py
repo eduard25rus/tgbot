@@ -136,7 +136,7 @@ def run_bank_mail_import() -> tuple[int, int, int]:
     sender_filter = os.getenv("BANK_MAIL_SENDER", "").strip().casefold()
     limit = int(os.getenv("BANK_MAIL_LIMIT", "20"))
     mark_seen = os.getenv("BANK_MAIL_MARK_SEEN", "1").strip().lower() not in {"0", "false", "no"}
-    search_query = os.getenv("BANK_MAIL_SEARCH", "UNSEEN").strip() or "UNSEEN"
+    search_query = os.getenv("BANK_MAIL_SEARCH", "ALL").strip() or "ALL"
 
     storage = Storage(db_path)
     imported_files = 0
@@ -151,7 +151,7 @@ def run_bank_mail_import() -> tuple[int, int, int]:
         status, data = imap.uid("search", None, search_query)
         if status != "OK":
             raise RuntimeError("Не удалось найти новые письма в IMAP")
-        uids = (data[0] or b"").split()[:limit]
+        uids = (data[0] or b"").split()[-limit:]
         for uid in uids:
             status, fetched = imap.uid("fetch", uid, "(BODY.PEEK[])")
             if status != "OK" or not fetched:
