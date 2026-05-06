@@ -5636,7 +5636,7 @@ def layout(
       width: 210px;
     }}
     .jurisprudence-letters-table .author-col {{
-      width: 145px;
+      width: 1%;
     }}
     .jurisprudence-letters-table th:nth-child(-n+2),
     .jurisprudence-letters-table td:nth-child(-n+2) {{
@@ -5657,6 +5657,10 @@ def layout(
     }}
     .jurisprudence-letters-table th:nth-child(2),
     .jurisprudence-letters-table td:nth-child(2) {{
+      white-space: nowrap;
+    }}
+    .jurisprudence-letters-table th:nth-child(5),
+    .jurisprudence-letters-table td:nth-child(5) {{
       white-space: nowrap;
     }}
     .legal-letter-topic {{
