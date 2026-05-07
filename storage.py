@@ -1070,6 +1070,7 @@ class Storage:
                     preview_password_hash TEXT NOT NULL DEFAULT '',
                     can_view_all_cashboxes INTEGER NOT NULL DEFAULT 0,
                     can_add_expense INTEGER NOT NULL DEFAULT 0,
+                    can_modify_other_cashboxes INTEGER NOT NULL DEFAULT 0,
                     can_reconcile INTEGER NOT NULL DEFAULT 0,
                     can_receive_push INTEGER NOT NULL DEFAULT 0,
                     push_detail_mode TEXT NOT NULL DEFAULT 'safe',
@@ -1135,6 +1136,8 @@ class Storage:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN preview_password_hash TEXT NOT NULL DEFAULT ''")
             if "can_receive_push" not in mobile_cash_access_columns:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_receive_push INTEGER NOT NULL DEFAULT 0")
+            if "can_modify_other_cashboxes" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_modify_other_cashboxes INTEGER NOT NULL DEFAULT 0")
             if "push_detail_mode" not in mobile_cash_access_columns:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN push_detail_mode TEXT NOT NULL DEFAULT 'safe'")
             if "can_view_letters" not in mobile_cash_access_columns:
@@ -1787,7 +1790,7 @@ class Storage:
                 """
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
-                       can_view_all_cashboxes, can_add_expense,
+                       can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
                        can_reconcile, can_receive_push, push_detail_mode, can_view_letters, updated_at
                 FROM mobile_cash_access
                 WHERE owner_chat_id = ? AND user_id IN (
@@ -1813,7 +1816,7 @@ class Storage:
                 """
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
-                       can_view_all_cashboxes, can_add_expense,
+                       can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
                        can_reconcile, can_receive_push, push_detail_mode, can_view_letters, updated_at
                 FROM mobile_cash_access
                 WHERE user_id = ?
@@ -1839,6 +1842,7 @@ class Storage:
         can_receive_push: bool = False,
         push_detail_mode: str = "safe",
         can_view_letters: bool = False,
+        can_modify_other_cashboxes: bool = False,
     ) -> bool:
         user = self.get_web_user_by_id(user_id)
         if user is None or int(user["owner_chat_id"]) != owner_chat_id:
@@ -1850,8 +1854,6 @@ class Storage:
         normalized_allowed = [code for code in allowed_cashbox_codes if code in known_codes]
         if default_cashbox_code and default_cashbox_code not in normalized_allowed:
             normalized_allowed.append(default_cashbox_code)
-        if can_view_all_cashboxes:
-            normalized_allowed = [item["code"] for item in cashboxes]
         if role not in {"owner", "manager", "limited"}:
             role = "limited"
         if push_detail_mode not in {"safe", "amount"}:
@@ -1874,10 +1876,10 @@ class Storage:
                 INSERT INTO mobile_cash_access (
                     user_id, owner_chat_id, enabled, role, default_cashbox_code,
                     allowed_cashbox_codes, preview_login, preview_password_hash,
-                    can_view_all_cashboxes, can_add_expense,
+                    can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
                     can_reconcile, can_receive_push, push_detail_mode, can_view_letters, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     owner_chat_id = excluded.owner_chat_id,
                     enabled = excluded.enabled,
@@ -1888,6 +1890,7 @@ class Storage:
                     preview_password_hash = excluded.preview_password_hash,
                     can_view_all_cashboxes = excluded.can_view_all_cashboxes,
                     can_add_expense = excluded.can_add_expense,
+                    can_modify_other_cashboxes = excluded.can_modify_other_cashboxes,
                     can_reconcile = excluded.can_reconcile,
                     can_receive_push = excluded.can_receive_push,
                     push_detail_mode = excluded.push_detail_mode,
@@ -1903,8 +1906,9 @@ class Storage:
                     ",".join(normalized_allowed),
                     cleaned_preview_login,
                     stored_preview_password_hash,
-                    1 if can_view_all_cashboxes else 0,
+                    0,
                     1 if can_add_expense else 0,
+                    1 if can_modify_other_cashboxes else 0,
                     1 if can_reconcile else 0,
                     1 if can_receive_push else 0,
                     push_detail_mode,
@@ -7317,8 +7321,9 @@ class Storage:
                 "allowed_cashbox_codes": ["eduard", "denis"],
                 "preview_login": "eduard",
                 "preview_password_hash": "",
-                "can_view_all_cashboxes": True,
+                "can_view_all_cashboxes": False,
                 "can_add_expense": True,
+                "can_modify_other_cashboxes": True,
                 "can_reconcile": True,
                 "can_receive_push": False,
                 "push_detail_mode": "safe",
@@ -7337,6 +7342,7 @@ class Storage:
                 "preview_password_hash": "",
                 "can_view_all_cashboxes": False,
                 "can_add_expense": True,
+                "can_modify_other_cashboxes": False,
                 "can_reconcile": True,
                 "can_receive_push": False,
                 "push_detail_mode": "safe",
@@ -7354,6 +7360,7 @@ class Storage:
             "preview_password_hash": "",
             "can_view_all_cashboxes": False,
             "can_add_expense": False,
+            "can_modify_other_cashboxes": False,
             "can_reconcile": False,
             "can_receive_push": False,
             "push_detail_mode": "safe",
@@ -7373,6 +7380,7 @@ class Storage:
             "preview_password_hash": row["preview_password_hash"],
             "can_view_all_cashboxes": bool(row["can_view_all_cashboxes"]),
             "can_add_expense": bool(row["can_add_expense"]),
+            "can_modify_other_cashboxes": bool(row["can_modify_other_cashboxes"]) if "can_modify_other_cashboxes" in row.keys() else False,
             "can_reconcile": bool(row["can_reconcile"]),
             "can_receive_push": bool(row["can_receive_push"]) if "can_receive_push" in row.keys() else False,
             "push_detail_mode": row["push_detail_mode"] if "push_detail_mode" in row.keys() and row["push_detail_mode"] in {"safe", "amount"} else "safe",

@@ -12981,7 +12981,9 @@ def mobile_cash_can_modify_cashbox(cash_access: dict | None, cashbox_code: str) 
         return False
     if cash_access.get("role") == "owner":
         return True
-    return cashbox_code == cash_access.get("default_cashbox_code")
+    if cashbox_code == cash_access.get("default_cashbox_code"):
+        return True
+    return bool(cash_access.get("can_modify_other_cashboxes") and cashbox_code in set(cash_access.get("allowed_cashbox_codes") or []))
 
 
 def mobile_cash_can_reconcile_cashbox(cash_access: dict | None, cashbox_code: str) -> bool:
@@ -13102,7 +13104,7 @@ def render_cashoperations_body(
         """
     push_public_key = cash_push_public_key(storage)
     push_allowed = bool(cash_access.get("can_receive_push") and push_public_key)
-    allowed_cashboxes = cashboxes if cash_access["can_view_all_cashboxes"] else [
+    allowed_cashboxes = [
         item for item in cashboxes if item["code"] in set(cash_access["allowed_cashbox_codes"])
     ]
     if not allowed_cashboxes:
@@ -15919,7 +15921,7 @@ def render_access_section(
         cashbox_checks = "".join(
             f"""
             <label>
-              <input type="checkbox" name="cashbox_{escape(cashbox["code"])}" value="1" {"checked" if user_access["can_view_all_cashboxes"] or cashbox["code"] in allowed_codes else ""}>
+              <input type="checkbox" name="cashbox_{escape(cashbox["code"])}" value="1" {"checked" if cashbox["code"] in allowed_codes else ""}>
               {escape(cashbox["label"])}
             </label>
             """
@@ -15971,14 +15973,14 @@ def render_access_section(
                     <div class="field-hint">Сейчас: {"задан" if user_access["preview_password_hash"] else "не задан"}. Работает только для мобильной кассы.</div>
                   </div>
                   <div class="permission-box cash-setting"{cash_settings_hidden}>
-                    <strong>Доступные кассы</strong>
+                    <strong>Доступные кассы для просмотра</strong>
                     <div class="check-row">{cashbox_checks}</div>
                   </div>
                   <div class="permission-box cash-setting"{cash_settings_hidden}>
                     <strong>Права в приложении</strong>
                     <div class="check-row">
-                      <label><input type="checkbox" name="can_view_all_cashboxes" value="1" {"checked" if user_access["can_view_all_cashboxes"] else ""}> Видит все кассы</label>
-                      <label><input type="checkbox" name="can_add_expense" value="1" {"checked" if user_access["can_add_expense"] else ""}> Может добавлять расходы</label>
+                      <label><input type="checkbox" name="can_add_expense" value="1" {"checked" if user_access["can_add_expense"] else ""}> Расходы в своей кассе</label>
+                      <label><input type="checkbox" name="can_modify_other_cashboxes" value="1" {"checked" if user_access.get("can_modify_other_cashboxes") else ""}> Может менять чужие кассы</label>
                       <label><input type="checkbox" name="can_reconcile" value="1" {"checked" if user_access["can_reconcile"] else ""}> Может сверять кассу</label>
                       <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Получает пуши</label>
                       <label><input type="checkbox" name="can_view_letters" value="1" {"checked" if user_access.get("can_view_letters") else ""}> Доступны письма</label>
@@ -17458,7 +17460,7 @@ self.addEventListener("notificationclick", (event) => {
         if not cash_access or not cash_access["enabled"]:
             start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Cash access denied"]
-        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        allowed_codes = set(cash_access["allowed_cashbox_codes"])
         try:
             receipt_entry_id = int(path.split("/")[3])
             entries = storage.list_expense_entries(current_owner)
@@ -17497,7 +17499,7 @@ self.addEventListener("notificationclick", (event) => {
         if not cash_access or not cash_access["enabled"] or not cash_access["can_add_expense"]:
             return redirect(start_response, "/cashoperations?flash=Нет прав на добавление поступлений")
         selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
-        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        allowed_codes = set(cash_access["allowed_cashbox_codes"])
         if selected_cashbox not in allowed_codes:
             selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (next(iter(allowed_codes), ""))
         if not mobile_cash_can_modify_cashbox(cash_access, selected_cashbox):
@@ -17581,7 +17583,7 @@ self.addEventListener("notificationclick", (event) => {
         cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
         if not cash_access or not cash_access["enabled"] or not cash_access["can_add_expense"]:
             return redirect(start_response, "/cashoperations?flash=Нет прав на удаление поступлений")
-        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        allowed_codes = set(cash_access["allowed_cashbox_codes"])
         selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
         try:
             income_id = int(form.get("income_id", "0") or "0")
@@ -17613,7 +17615,7 @@ self.addEventListener("notificationclick", (event) => {
         if not cash_access or not cash_access["enabled"] or not cash_access["can_add_expense"]:
             return redirect(start_response, "/cashoperations?flash=Нет прав на добавление расходов")
         selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
-        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        allowed_codes = set(cash_access["allowed_cashbox_codes"])
         if selected_cashbox not in allowed_codes:
             selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (next(iter(allowed_codes), ""))
         if not mobile_cash_can_modify_cashbox(cash_access, selected_cashbox):
@@ -17735,7 +17737,7 @@ self.addEventListener("notificationclick", (event) => {
         cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
         if not cash_access or not cash_access["enabled"] or not cash_access["can_add_expense"]:
             return redirect(start_response, "/cashoperations?flash=Нет прав на удаление расходов")
-        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        allowed_codes = set(cash_access["allowed_cashbox_codes"])
         selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
         try:
             expense_id = int(form.get("expense_id", "0") or "0")
@@ -17763,7 +17765,7 @@ self.addEventListener("notificationclick", (event) => {
         if not cash_access or not cash_access["enabled"] or not cash_access["can_reconcile"]:
             return redirect(start_response, "/cashoperations?flash=Нет прав на сверку кассы")
         selected_cashbox = form.get("cashbox", "denis").strip() or "denis"
-        allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
+        allowed_codes = set(cash_access["allowed_cashbox_codes"])
         if selected_cashbox not in allowed_codes:
             selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (next(iter(allowed_codes), ""))
         if not mobile_cash_can_reconcile_cashbox(cash_access, selected_cashbox):
@@ -20444,12 +20446,13 @@ self.addEventListener("notificationclick", (event) => {
                 allowed_cashbox_codes,
                 form.get("preview_login", ""),
                 hash_password(form.get("preview_password", "").strip()) if form.get("preview_password", "").strip() else None,
-                form.get("can_view_all_cashboxes") == "1",
+                False,
                 form.get("can_add_expense") == "1",
                 form.get("can_reconcile") == "1",
                 form.get("can_receive_push") == "1",
                 form.get("push_detail_mode", "safe"),
                 form.get("can_view_letters") == "1",
+                form.get("can_modify_other_cashboxes") == "1",
             )
             if not updated:
                 raise ValueError("Пользователь не найден")
