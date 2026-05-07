@@ -4828,6 +4828,40 @@ def layout(
       justify-content: flex-end;
       flex: 0 0 auto;
     }}
+    .dds-top-actions {{
+      gap: 10px;
+      align-items: flex-start;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      margin: 0;
+    }}
+    .dds-action-menu {{
+      position: relative;
+    }}
+    .dds-action-menu summary {{
+      list-style: none;
+      cursor: pointer;
+    }}
+    .dds-action-menu summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .dds-action-popover {{
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      width: min(720px, calc(100vw - 48px));
+      max-height: min(78vh, 760px);
+      overflow: auto;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18);
+      padding: 18px;
+      z-index: 220;
+    }}
+    .dds-action-menu[open] {{
+      z-index: 230;
+    }}
     .expenses-table-wrap {{
       margin-top: 18px;
       max-width: 100%;
@@ -14935,73 +14969,79 @@ def render_expenses_section(
           </div>
         </div>
         """
-    add_section = ""
+    dds_actions_html = ""
     if has_permission(current_user, "expenses", "edit") and active_tab != "archive":
-        add_section = f"""
-        <section class="card panel" style="margin-top:22px;">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Импорт выписки 1С</h2>
-              <div class="panel-sub">TXT выгрузка Клиент-Банк для 1С: формат 1.03, кодировка WIN. Поступления и списания попадут в неразнесенные операции ДДС.</div>
+        dds_actions_html = f"""
+          <details class="dds-action-menu">
+            <summary class="secondary-btn mini">Импорт выписки</summary>
+            <div class="dds-action-popover">
+              <div class="panel-head" style="margin-bottom:14px;">
+                <div>
+                  <h3 class="panel-title">Импорт выписки 1С</h3>
+                  <div class="panel-sub">TXT выгрузка Клиент-Банк для 1С: формат 1.03, кодировка WIN. Поступления и списания попадут в неразнесенные операции ДДС.</div>
+                </div>
+              </div>
+              <form class="form-grid" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment=needs">
+                <div class="field span-2">
+                  <label>TXT выписка</label>
+                  <input type="file" name="bank_statement" accept=".txt,text/plain" required>
+                </div>
+                <button class="submit-btn" type="submit">Загрузить выписку</button>
+              </form>
+              {mail_imports_html}
             </div>
-          </div>
-          <form class="form-grid" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment=needs">
-            <div class="field span-2">
-              <label>TXT выписка</label>
-              <input type="file" name="bank_statement" accept=".txt,text/plain" required>
+          </details>
+          <details class="dds-action-menu">
+            <summary class="secondary-btn mini">Добавить расход</summary>
+            <div class="dds-action-popover">
+              <div class="panel-head" style="margin-bottom:14px;">
+                <div>
+                  <h3 class="panel-title">Добавить расход</h3>
+                  <div class="panel-sub">Ручное добавление списания в ДДС: объект, группа, сумма, источник и комментарий.</div>
+                </div>
+              </div>
+              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}">
+                <div class="field">
+                  <label>Дата расхода</label>
+                  <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
+                </div>
+                <div class="field">
+                  <label>Объект</label>
+                  <select name="project_code" required>
+                    {project_options}
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Группа расхода</label>
+                  <select name="category_code" required>
+                    {category_options}
+                  </select>
+                </div>
+                <div class="field span-2">
+                  <label>Наименование траты</label>
+                  <input type="text" name="title" placeholder="Например, закупка кабеля / аренда манипулятора / канцелярия" required>
+                </div>
+                <div class="field">
+                  <label>Сумма, ₽</label>
+                  <input type="text" name="amount" data-money-input="1" placeholder="Например, 125000" required>
+                </div>
+                <div class="field">
+                  <label>Источник оплаты</label>
+                  <select name="payment_source">
+                    {expense_payment_source_options("cash")}
+                  </select>
+                </div>
+                <div class="field span-2">
+                  <label>Комментарий</label>
+                  <textarea name="comment" placeholder="Коротко фиксируем, на что именно ушли деньги"></textarea>
+                </div>
+                <label class="advance-toggle span-2">
+                  <input class="toggle-checkbox" type="checkbox" name="needs_adjustment" value="1"> Откорректировать
+                </label>
+                <button class="submit-btn" type="submit">Добавить расход</button>
+              </form>
             </div>
-            <button class="submit-btn" type="submit">Загрузить выписку</button>
-          </form>
-          {mail_imports_html}
-        </section>
-        <section class="card panel" style="margin-top:22px;">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Добавить расход</h2>
-              <div class="panel-sub">Ручное добавление списания в ДДС: объект, группа, сумма, источник и комментарий.</div>
-            </div>
-          </div>
-          <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}">
-            <div class="field">
-              <label>Дата расхода</label>
-              <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
-            </div>
-            <div class="field">
-              <label>Объект</label>
-              <select name="project_code" required>
-                {project_options}
-              </select>
-            </div>
-            <div class="field">
-              <label>Группа расхода</label>
-              <select name="category_code" required>
-                {category_options}
-              </select>
-            </div>
-            <div class="field span-2">
-              <label>Наименование траты</label>
-              <input type="text" name="title" placeholder="Например, закупка кабеля / аренда манипулятора / канцелярия" required>
-            </div>
-            <div class="field">
-              <label>Сумма, ₽</label>
-              <input type="text" name="amount" data-money-input="1" placeholder="Например, 125000" required>
-            </div>
-            <div class="field">
-              <label>Источник оплаты</label>
-              <select name="payment_source">
-                {expense_payment_source_options("cash")}
-              </select>
-            </div>
-            <div class="field span-2">
-              <label>Комментарий</label>
-              <textarea name="comment" placeholder="Коротко фиксируем, на что именно ушли деньги"></textarea>
-            </div>
-            <label class="advance-toggle span-2">
-              <input class="toggle-checkbox" type="checkbox" name="needs_adjustment" value="1"> Откорректировать
-            </label>
-            <button class="submit-btn" type="submit">Добавить расход</button>
-          </form>
-        </section>
+          </details>
         """
     return f"""
     <section class="stats">
@@ -15032,7 +15072,8 @@ def render_expenses_section(
           <h2 class="panel-title">Реестр ДДС</h2>
           <div class="panel-sub">Единый реестр ДДС: поступления, списания, касса и неразнесенные операции.</div>
         </div>
-        <div class="action-row" style="margin:0;">
+        <div class="action-row dds-top-actions">
+          {dds_actions_html}
           <a class="secondary-btn mini" href="{build_expenses_href(adjustment='needs', day=None)}">Неразнесенные</a>
           <a class="secondary-btn mini" href="{build_expenses_href(adjustment='', day=None)}">Все операции</a>
         </div>
@@ -15078,7 +15119,6 @@ def render_expenses_section(
       {flash_html}
       {registry_tables_html}
     </section>
-    {add_section}
     """
 
 
