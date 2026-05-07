@@ -805,7 +805,13 @@ def resolve_cash_receipt_file(storage: Storage, entry) -> tuple[Path, str, str]:
     return absolute_path, safe_filename, content_type
 
 
-def send_cash_push(storage: Storage, owner_chat_id: int, safe_payload: dict, amount_payload: dict | None = None) -> tuple[int, int]:
+def send_cash_push(
+    storage: Storage,
+    owner_chat_id: int,
+    safe_payload: dict,
+    amount_payload: dict | None = None,
+    require_letters_access: bool = False,
+) -> tuple[int, int]:
     public_key = cash_push_public_key(storage)
     private_key = cash_push_private_key(storage)
     if not public_key or not private_key:
@@ -823,6 +829,8 @@ def send_cash_push(storage: Storage, owner_chat_id: int, safe_payload: dict, amo
         "sub": os.getenv("CASH_PUSH_VAPID_SUBJECT", os.getenv("VAPID_SUBJECT", "mailto:admin@felisgroup.ru")).strip(),
     }
     for subscription in subscriptions:
+        if require_letters_access and not subscription.get("can_view_letters"):
+            continue
         payload = safe_payload
         if amount_payload and subscription.get("push_detail_mode") == "amount":
             payload = amount_payload
@@ -909,6 +917,29 @@ def notify_cash_income_created(storage: Storage, owner_chat_id: int, amount: flo
         actor_name=actor_name,
         tag="cash-income-created",
     )
+
+
+def notify_legal_letter_created(storage: Storage, owner_chat_id: int, direction: str, actor_name: str) -> tuple[int, int]:
+    direction_label = "входящее письмо" if direction == "incoming" else "исходящее письмо"
+    safe_payload = {
+        "title": f"Новое {direction_label}",
+        "body": "Откройте приложение для просмотра",
+        "tag": "legal-letter-created",
+        "url": "/cashoperations?screen=letters",
+        "data": {
+            "kind": "legal_letter",
+        },
+    }
+    detailed_payload = {
+        "title": f"Новое {direction_label}",
+        "body": f"{actor_name.strip() or 'Пользователь'} добавил {direction_label}",
+        "tag": "legal-letter-created",
+        "url": "/cashoperations?screen=letters",
+        "data": {
+            "kind": "legal_letter",
+        },
+    }
+    return send_cash_push(storage, owner_chat_id, safe_payload, detailed_payload, require_letters_access=True)
 
 
 def parse_amount(raw: str) -> float:
@@ -1408,6 +1439,16 @@ def can_edit_jurisprudence(current_user: dict | None) -> bool:
 
 def can_view_any_legal_registry(current_user: dict | None) -> bool:
     return can_view_legal_correspondence(current_user) or can_view_jurisprudence(current_user)
+
+
+def can_view_mobile_cash_letters(storage: Storage, current_user: dict | None) -> bool:
+    if not current_user:
+        return False
+    try:
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+    except Exception:
+        return False
+    return bool(cash_access and cash_access.get("enabled") and cash_access.get("can_view_letters"))
 
 
 def can_edit_any_legal_registry(current_user: dict | None) -> bool:
@@ -13224,6 +13265,62 @@ def render_cashoperations_body(
         operation_card(kind, entry)
         for kind, entry in operations
     ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
+    can_view_letters = bool(cash_access.get("can_view_letters"))
+    letters_screen_html = ""
+    letters_nav_html = ""
+    if can_view_letters:
+        legal_letters = storage.list_legal_letters(owner_chat_id)[:50]
+        legal_attachments = storage.list_legal_letter_attachments(owner_chat_id)
+        legal_attachment_map: dict[int, list] = {}
+        for attachment in legal_attachments:
+            legal_attachment_map.setdefault(attachment.letter_id, []).append(attachment)
+
+        def letter_card(letter) -> str:
+            direction_label = LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0]
+            channel_label = LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта")
+            attachments = legal_attachment_map.get(letter.id, [])
+            file_count = len(attachments) or (1 if letter.file_path else 0)
+            file_link = '<span class="cash-mobile-op-receipt">Файлов нет</span>'
+            if attachments:
+                first_attachment = attachments[0]
+                file_link = (
+                    f'<a class="cash-mobile-letter-file" href="/contracts/letter-files/{first_attachment.id}/preview?owner={owner_chat_id}" '
+                    f'target="_blank" rel="noopener">Файлы: {file_count}</a>'
+                )
+            elif letter.file_path:
+                file_link = (
+                    f'<a class="cash-mobile-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}" '
+                    f'target="_blank" rel="noopener">Файл</a>'
+                )
+            comment_html = f'<span class="cash-mobile-op-comment">{escape(letter.comment)}</span>' if letter.comment else ""
+            author_html = (
+                f'<span class="cash-mobile-op-meta">Добавил: {escape(letter.created_by_name.strip())}</span>'
+                if letter.created_by_name.strip()
+                else ""
+            )
+            return f"""
+            <article class="cash-mobile-op cash-mobile-letter">
+              <div class="cash-mobile-op-main">
+                <span class="cash-mobile-op-date">{escape(format_date(letter.letter_date))}</span>
+                <span class="cash-mobile-op-title"><strong>{escape(letter.subject or "Без темы")}</strong><span> · {escape(direction_label)} · {escape(channel_label)}</span></span>
+                <span class="cash-mobile-op-meta">{escape(letter.object_label or "Без объекта")}</span>
+                {comment_html}
+                {author_html}
+              </div>
+              <div class="cash-mobile-op-side">{file_link}</div>
+            </article>
+            """
+
+        letters_rows = "".join(letter_card(letter) for letter in legal_letters) or '<div class="cash-mobile-empty">Писем пока нет.</div>'
+        letters_screen_html = f"""
+        <section id="cashScreenLetters" class="cash-mobile-screen">
+          <section class="cash-mobile-panel">
+            <div class="cash-mobile-section-head"><h2>Письма</h2></div>
+            {letters_rows}
+          </section>
+        </section>
+        """
+        letters_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="letters">Письма</button>'
 
     cashbox_tabs = "".join(
         f'<a class="cash-mobile-tab{" active" if item["code"] == selected_cashbox else ""}" href="/cashoperations?cashbox={item["code"]}">{escape(item["label"])}</a>'
@@ -13597,6 +13694,20 @@ def render_cashoperations_body(
       }}
       .cash-mobile-op b.income {{ color: #186844; }}
       .cash-mobile-op b.expense {{ color: #9b2f2f; }}
+      .cash-mobile-letter-file {{
+        display: inline-grid;
+        place-items: center;
+        min-height: 32px;
+        padding: 6px 9px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        color: #186844;
+        background: #e3f2e9;
+        text-decoration: none;
+        font-size: 12px;
+        font-weight: 800;
+        white-space: nowrap;
+      }}
       .cash-mobile-empty {{
         color: var(--muted);
         padding: 14px 0 4px;
@@ -13688,7 +13799,7 @@ def render_cashoperations_body(
         width: min(100%, 560px);
         transform: translateX(-50%);
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat({"4" if can_view_letters else "3"}, 1fr);
         gap: 6px;
         padding: 9px 10px calc(9px + env(safe-area-inset-bottom));
         background: rgba(255,255,255,.96);
@@ -13785,6 +13896,7 @@ def render_cashoperations_body(
       </section>
       <section id="cashScreenExpense" class="cash-mobile-screen">{expense_screen}</section>
       <section id="cashScreenIncome" class="cash-mobile-screen">{income_screen}</section>
+      {letters_screen_html}
       <section id="cashScreenHistory" class="cash-mobile-screen">
         <section class="cash-mobile-panel">
           <div class="cash-mobile-section-head"><h2>История операций</h2></div>
@@ -13795,7 +13907,7 @@ def render_cashoperations_body(
     </section>
     <nav class="cash-mobile-bottom-tabs">
       <button class="cash-mobile-nav active" type="button" data-cash-screen="home">Касса</button>
-      <button class="cash-mobile-nav" type="button" data-cash-screen="expense" data-cash-new-expense="1">Расход</button>
+      {letters_nav_html}
       <button class="cash-mobile-nav" type="button" data-cash-screen="history">История</button>
       <button class="cash-mobile-nav" type="button" data-cash-screen="reconcile">Сверка</button>
     </nav>
@@ -13812,6 +13924,7 @@ def render_cashoperations_body(
           home: document.querySelector("#cashScreenHome"),
           expense: document.querySelector("#cashScreenExpense"),
           income: document.querySelector("#cashScreenIncome"),
+          letters: document.querySelector("#cashScreenLetters"),
           history: document.querySelector("#cashScreenHistory"),
           reconcile: document.querySelector("#cashScreenReconcile")
         }};
@@ -14189,9 +14302,17 @@ def render_cashoperations_body(
           if (submitter) submitter.textContent = submitter.dataset.cashIncomeDelete ? "Удаляем..." : "Сохраняем...";
         }});
         syncAdminProject();
+        let usedInitialScreen = false;
+        try {{
+          const requestedScreen = new URLSearchParams(window.location.search).get("screen");
+          if (requestedScreen && screens[requestedScreen]) {{
+            show(requestedScreen);
+            usedInitialScreen = true;
+          }}
+        }} catch (_err) {{}}
         try {{
           const nextScreen = sessionStorage.getItem("cashNextScreen");
-          if (nextScreen && screens[nextScreen]) {{
+          if (!usedInitialScreen && nextScreen && screens[nextScreen]) {{
             sessionStorage.removeItem("cashNextScreen");
             show(nextScreen);
           }}
@@ -15588,6 +15709,7 @@ def render_access_section(
                     <span class="badge">{escape(user_access["role"])}</span>
                     <span class="badge{" warn" if user_access["can_receive_push"] and push_device_count == 0 else ""}">Пуш-устройств: {push_device_count}</span>
                     <span class="badge">Пуши: {push_mode_label}</span>
+                    <span class="badge">Письма: {"да" if user_access.get("can_view_letters") else "нет"}</span>
                   </div>
                 </div>
                 <div class="access-cash-grid is-collapsed">
@@ -15629,6 +15751,7 @@ def render_access_section(
                       <label><input type="checkbox" name="can_add_expense" value="1" {"checked" if user_access["can_add_expense"] else ""}> Может добавлять расходы</label>
                       <label><input type="checkbox" name="can_reconcile" value="1" {"checked" if user_access["can_reconcile"] else ""}> Может сверять кассу</label>
                       <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Получает пуши</label>
+                      <label><input type="checkbox" name="can_view_letters" value="1" {"checked" if user_access.get("can_view_letters") else ""}> Доступны письма</label>
                     </div>
                   </div>
                   <div class="field span-2 cash-setting"{cash_settings_hidden}>
@@ -20080,6 +20203,7 @@ self.addEventListener("notificationclick", (event) => {
                 form.get("can_reconcile") == "1",
                 form.get("can_receive_push") == "1",
                 form.get("push_detail_mode", "safe"),
+                form.get("can_view_letters") == "1",
             )
             if not updated:
                 raise ValueError("Пользователь не найден")
@@ -20915,6 +21039,7 @@ self.addEventListener("notificationclick", (event) => {
             uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
             if not uploads:
                 raise ValueError("Прикрепите хотя бы один файл")
+            actor_name = current_user.get("full_name", "").strip() if current_user else ""
             created = storage.add_legal_letter(
                 current_owner,
                 contract_id,
@@ -20927,7 +21052,7 @@ self.addEventListener("notificationclick", (event) => {
                 uploads[0].filename.strip(),
                 "",
                 current_user.get("id") if current_user else None,
-                current_user.get("full_name", "").strip() if current_user else "",
+                actor_name,
             )
             if created is None:
                 raise ValueError("Не удалось сохранить письмо")
@@ -20953,10 +21078,11 @@ self.addEventListener("notificationclick", (event) => {
                 "legal_incoming" if direction == "incoming" else "legal_outgoing",
                 subject,
                 description=form.get("comment", ""),
-                actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                actor_name=actor_name,
                 source_kind="legal_letter_create",
                 source_ref=str(created),
             )
+            notify_legal_letter_created(storage, current_owner, direction, actor_name)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить письмо: {exc}")
@@ -21048,6 +21174,7 @@ self.addEventListener("notificationclick", (event) => {
             uploads = [item for item in files.get("pdf_file", []) if item.filename.strip()]
             if not uploads:
                 raise ValueError("Прикрепите хотя бы один файл")
+            actor_name = current_user.get("full_name", "").strip() if current_user else ""
             created = storage.add_legal_letter(
                 current_owner,
                 contract_id,
@@ -21060,7 +21187,7 @@ self.addEventListener("notificationclick", (event) => {
                 uploads[0].filename.strip(),
                 "",
                 current_user.get("id") if current_user else None,
-                current_user.get("full_name", "").strip() if current_user else "",
+                actor_name,
             )
             if created is None:
                 raise ValueError("Не удалось сохранить письмо")
@@ -21085,10 +21212,11 @@ self.addEventListener("notificationclick", (event) => {
                     "legal_incoming" if direction == "incoming" else "legal_outgoing",
                     subject,
                     description=form.get("comment", ""),
-                    actor_name=current_user.get("full_name", "").strip() if current_user else "",
+                    actor_name=actor_name,
                     source_kind="legal_letter_create",
                     source_ref=str(created),
                 )
+            notify_legal_letter_created(storage, current_owner, direction, actor_name)
             return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
         except Exception as exc:
             body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось добавить письмо: {exc}")
@@ -21580,7 +21708,7 @@ self.addEventListener("notificationclick", (event) => {
             return [html.encode("utf-8")]
 
     if path.startswith("/contracts/letters/") and path.endswith("/file") and method == "GET":
-        if not can_view_any_legal_registry(current_user):
+        if not (can_view_any_legal_registry(current_user) or can_view_mobile_cash_letters(storage, current_user)):
             body = render_forbidden_body("Юриспруденция")
             html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -21605,7 +21733,7 @@ self.addEventListener("notificationclick", (event) => {
             return [b"Not found"]
 
     if path.startswith("/contracts/letter-files/") and path.endswith("/file") and method == "GET":
-        if not can_view_any_legal_registry(current_user):
+        if not (can_view_any_legal_registry(current_user) or can_view_mobile_cash_letters(storage, current_user)):
             body = render_forbidden_body("Юриспруденция")
             html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -21627,7 +21755,7 @@ self.addEventListener("notificationclick", (event) => {
             return [b"Not found"]
 
     if path.startswith("/contracts/letter-files/") and path.endswith("/download") and method == "GET":
-        if not can_view_any_legal_registry(current_user):
+        if not (can_view_any_legal_registry(current_user) or can_view_mobile_cash_letters(storage, current_user)):
             body = render_forbidden_body("Юриспруденция")
             html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -21653,7 +21781,7 @@ self.addEventListener("notificationclick", (event) => {
             return [b"Not found"]
 
     if path.startswith("/contracts/letter-files/") and path.endswith("/preview") and method == "GET":
-        if not can_view_any_legal_registry(current_user):
+        if not (can_view_any_legal_registry(current_user) or can_view_mobile_cash_letters(storage, current_user)):
             body = render_forbidden_body("Юриспруденция")
             html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -21678,7 +21806,7 @@ self.addEventListener("notificationclick", (event) => {
             return [b"Not found"]
 
     if path.startswith("/contracts/letters/") and path.endswith("/download") and method == "GET":
-        if not can_view_any_legal_registry(current_user):
+        if not (can_view_any_legal_registry(current_user) or can_view_mobile_cash_letters(storage, current_user)):
             body = render_forbidden_body("Юриспруденция")
             html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])
@@ -21704,7 +21832,7 @@ self.addEventListener("notificationclick", (event) => {
             return [b"Not found"]
 
     if path.startswith("/contracts/letters/") and path.endswith("/preview") and method == "GET":
-        if not can_view_any_legal_registry(current_user):
+        if not (can_view_any_legal_registry(current_user) or can_view_mobile_cash_letters(storage, current_user)):
             body = render_forbidden_body("Юриспруденция")
             html = layout("Доступ запрещен", body, owners, current_owner, "jurisprudence", current_user)
             start_response("403 Forbidden", [("Content-Type", "text/html; charset=utf-8")])

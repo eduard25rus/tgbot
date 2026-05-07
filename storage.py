@@ -1073,6 +1073,7 @@ class Storage:
                     can_reconcile INTEGER NOT NULL DEFAULT 0,
                     can_receive_push INTEGER NOT NULL DEFAULT 0,
                     push_detail_mode TEXT NOT NULL DEFAULT 'safe',
+                    can_view_letters INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
                 );
@@ -1136,6 +1137,24 @@ class Storage:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_receive_push INTEGER NOT NULL DEFAULT 0")
             if "push_detail_mode" not in mobile_cash_access_columns:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN push_detail_mode TEXT NOT NULL DEFAULT 'safe'")
+            if "can_view_letters" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_view_letters INTEGER NOT NULL DEFAULT 0")
+                conn.execute(
+                    """
+                    UPDATE mobile_cash_access
+                    SET can_view_letters = 1
+                    WHERE user_id IN (
+                        SELECT id
+                        FROM web_users
+                        WHERE COALESCE(is_super_admin, 0) = 1
+                           OR LOWER(COALESCE(email, '')) LIKE '%eduard%'
+                           OR LOWER(COALESCE(email, '')) LIKE '%bigboss%'
+                           OR LOWER(COALESCE(full_name, '')) LIKE '%эдуард%'
+                           OR LOWER(COALESCE(full_name, '')) LIKE '%шевченко%'
+                           OR LOWER(COALESCE(full_name, '')) LIKE '%shevchenko%'
+                    )
+                    """
+                )
             if "needs_adjustment" not in expense_columns:
                 conn.execute("ALTER TABLE expense_entries ADD COLUMN needs_adjustment INTEGER NOT NULL DEFAULT 0")
             legal_letter_columns = {
@@ -1769,7 +1788,7 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense,
-                       can_reconcile, can_receive_push, push_detail_mode, updated_at
+                       can_reconcile, can_receive_push, push_detail_mode, can_view_letters, updated_at
                 FROM mobile_cash_access
                 WHERE owner_chat_id = ? AND user_id IN (
                     SELECT id FROM web_users WHERE owner_chat_id = ?
@@ -1795,7 +1814,7 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense,
-                       can_reconcile, can_receive_push, push_detail_mode, updated_at
+                       can_reconcile, can_receive_push, push_detail_mode, can_view_letters, updated_at
                 FROM mobile_cash_access
                 WHERE user_id = ?
                 """,
@@ -1819,6 +1838,7 @@ class Storage:
         can_reconcile: bool,
         can_receive_push: bool = False,
         push_detail_mode: str = "safe",
+        can_view_letters: bool = False,
     ) -> bool:
         user = self.get_web_user_by_id(user_id)
         if user is None or int(user["owner_chat_id"]) != owner_chat_id:
@@ -1855,9 +1875,9 @@ class Storage:
                     user_id, owner_chat_id, enabled, role, default_cashbox_code,
                     allowed_cashbox_codes, preview_login, preview_password_hash,
                     can_view_all_cashboxes, can_add_expense,
-                    can_reconcile, can_receive_push, push_detail_mode, updated_at
+                    can_reconcile, can_receive_push, push_detail_mode, can_view_letters, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     owner_chat_id = excluded.owner_chat_id,
                     enabled = excluded.enabled,
@@ -1871,6 +1891,7 @@ class Storage:
                     can_reconcile = excluded.can_reconcile,
                     can_receive_push = excluded.can_receive_push,
                     push_detail_mode = excluded.push_detail_mode,
+                    can_view_letters = excluded.can_view_letters,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1887,6 +1908,7 @@ class Storage:
                     1 if can_reconcile else 0,
                     1 if can_receive_push else 0,
                     push_detail_mode,
+                    1 if can_view_letters else 0,
                     datetime.utcnow().isoformat(),
                 ),
             )
@@ -1978,7 +2000,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT s.id, s.owner_chat_id, s.user_id, s.endpoint, s.p256dh, s.auth,
-                       s.user_agent, s.created_at, s.updated_at, a.push_detail_mode,
+                       s.user_agent, s.created_at, s.updated_at, a.push_detail_mode, a.can_view_letters,
                        u.full_name, u.email
                 FROM cash_push_subscriptions s
                 JOIN web_users u ON u.id = s.user_id
@@ -2003,6 +2025,7 @@ class Storage:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "push_detail_mode": row["push_detail_mode"] if "push_detail_mode" in row.keys() else "safe",
+                "can_view_letters": bool(row["can_view_letters"]) if "can_view_letters" in row.keys() else False,
                 "full_name": row["full_name"],
                 "login": row["email"],
             }
@@ -7299,6 +7322,7 @@ class Storage:
                 "can_reconcile": True,
                 "can_receive_push": False,
                 "push_detail_mode": "safe",
+                "can_view_letters": True,
                 "updated_at": "",
             }
         if "денис" in login_name or "denis" in login_name or "учайкин" in login_name:
@@ -7316,6 +7340,7 @@ class Storage:
                 "can_reconcile": True,
                 "can_receive_push": False,
                 "push_detail_mode": "safe",
+                "can_view_letters": False,
                 "updated_at": "",
             }
         return {
@@ -7332,6 +7357,7 @@ class Storage:
             "can_reconcile": False,
             "can_receive_push": False,
             "push_detail_mode": "safe",
+            "can_view_letters": False,
             "updated_at": "",
         }
 
@@ -7350,6 +7376,7 @@ class Storage:
             "can_reconcile": bool(row["can_reconcile"]),
             "can_receive_push": bool(row["can_receive_push"]) if "can_receive_push" in row.keys() else False,
             "push_detail_mode": row["push_detail_mode"] if "push_detail_mode" in row.keys() and row["push_detail_mode"] in {"safe", "amount"} else "safe",
+            "can_view_letters": bool(row["can_view_letters"]) if "can_view_letters" in row.keys() else False,
             "updated_at": row["updated_at"],
         }
 
