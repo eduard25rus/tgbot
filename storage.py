@@ -1,5 +1,6 @@
 from __future__ import annotations
 import hashlib
+import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -415,6 +416,23 @@ class ExpenseCategory:
     deleted_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass
+class ExpenseCategoryEvent:
+    id: int
+    owner_chat_id: int
+    action_type: str
+    category_id: Optional[int]
+    category_code: str
+    category_label: str
+    affected_count: int
+    affected_amount: float
+    target_summary: str
+    details: dict
+    actor_user_id: Optional[int]
+    actor_name: str
+    created_at: datetime
 
 
 @dataclass
@@ -1000,6 +1018,22 @@ class Storage:
                     UNIQUE(owner_chat_id, code)
                 );
 
+                CREATE TABLE IF NOT EXISTS expense_category_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    action_type TEXT NOT NULL DEFAULT '',
+                    category_id INTEGER,
+                    category_code TEXT NOT NULL DEFAULT '',
+                    category_label TEXT NOT NULL DEFAULT '',
+                    affected_count INTEGER NOT NULL DEFAULT 0,
+                    affected_amount REAL NOT NULL DEFAULT 0,
+                    target_summary TEXT NOT NULL DEFAULT '',
+                    details_json TEXT NOT NULL DEFAULT '',
+                    actor_user_id INTEGER,
+                    actor_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS cash_reconciliations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_chat_id INTEGER NOT NULL,
@@ -1081,6 +1115,9 @@ class Storage:
             }
             expense_category_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(expense_categories)").fetchall()
+            }
+            expense_category_event_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(expense_category_events)").fetchall()
             }
             bank_balance_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(bank_account_balances)").fetchall()
@@ -1308,6 +1345,23 @@ class Storage:
             for column_name, column_def in expense_category_alters:
                 if column_name not in expense_category_columns:
                     conn.execute(f"ALTER TABLE expense_categories ADD COLUMN {column_name} {column_def}")
+            expense_category_event_alters = [
+                ("owner_chat_id", "INTEGER NOT NULL DEFAULT 0"),
+                ("action_type", "TEXT NOT NULL DEFAULT ''"),
+                ("category_id", "INTEGER"),
+                ("category_code", "TEXT NOT NULL DEFAULT ''"),
+                ("category_label", "TEXT NOT NULL DEFAULT ''"),
+                ("affected_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("affected_amount", "REAL NOT NULL DEFAULT 0"),
+                ("target_summary", "TEXT NOT NULL DEFAULT ''"),
+                ("details_json", "TEXT NOT NULL DEFAULT ''"),
+                ("actor_user_id", "INTEGER"),
+                ("actor_name", "TEXT NOT NULL DEFAULT ''"),
+                ("created_at", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in expense_category_event_alters:
+                if column_name not in expense_category_event_columns:
+                    conn.execute(f"ALTER TABLE expense_category_events ADD COLUMN {column_name} {column_def}")
             bank_balance_alters = [
                 ("owner_chat_id", "INTEGER NOT NULL DEFAULT 0"),
                 ("account_number", "TEXT NOT NULL DEFAULT ''"),
@@ -5824,6 +5878,68 @@ class Storage:
             ).fetchone()
         return self._expense_category_from_row(row) if row is not None else None
 
+    def record_expense_category_event(
+        self,
+        owner_chat_id: int,
+        action_type: str,
+        category_id: int | None,
+        category_code: str,
+        category_label: str,
+        affected_count: int,
+        affected_amount: float,
+        target_summary: str,
+        details: dict | None = None,
+        actor_user_id: int | None = None,
+        actor_name: str = "",
+    ) -> int:
+        cleaned_action = action_type.strip()
+        if not cleaned_action:
+            cleaned_action = "category_event"
+        created_at = datetime.utcnow().isoformat()
+        details_json = json.dumps(details or {}, ensure_ascii=False, sort_keys=True)
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO expense_category_events (
+                    owner_chat_id, action_type, category_id, category_code, category_label,
+                    affected_count, affected_amount, target_summary, details_json,
+                    actor_user_id, actor_name, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_chat_id,
+                    cleaned_action,
+                    category_id,
+                    category_code.strip(),
+                    category_label.strip(),
+                    int(affected_count),
+                    round(float(affected_amount), 2),
+                    target_summary.strip(),
+                    details_json,
+                    actor_user_id,
+                    actor_name.strip(),
+                    created_at,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def list_expense_category_events(self, owner_chat_id: int, limit: int = 20) -> list[ExpenseCategoryEvent]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, action_type, category_id, category_code, category_label,
+                       affected_count, affected_amount, target_summary, details_json,
+                       actor_user_id, actor_name, created_at
+                FROM expense_category_events
+                WHERE owner_chat_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (owner_chat_id, max(1, int(limit))),
+            ).fetchall()
+        return [self._expense_category_event_from_row(row) for row in rows]
+
     def list_expense_entries_by_category(self, owner_chat_id: int, category_code: str) -> list[ExpenseEntry]:
         cleaned_code = category_code.strip()
         if not cleaned_code:
@@ -6847,6 +6963,30 @@ class Storage:
             deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _expense_category_event_from_row(row: sqlite3.Row) -> ExpenseCategoryEvent:
+        try:
+            details = json.loads(row["details_json"] or "{}")
+        except json.JSONDecodeError:
+            details = {}
+        if not isinstance(details, dict):
+            details = {}
+        return ExpenseCategoryEvent(
+            id=int(row["id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            action_type=row["action_type"] or "",
+            category_id=int(row["category_id"]) if row["category_id"] is not None else None,
+            category_code=row["category_code"] or "",
+            category_label=row["category_label"] or "",
+            affected_count=int(row["affected_count"] or 0),
+            affected_amount=float(row["affected_amount"] or 0),
+            target_summary=row["target_summary"] or "",
+            details=details,
+            actor_user_id=int(row["actor_user_id"]) if row["actor_user_id"] is not None else None,
+            actor_name=row["actor_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
     @staticmethod

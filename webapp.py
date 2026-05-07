@@ -9550,6 +9550,34 @@ def render_directories_section(
         </details>
         """
 
+    def expense_category_description(category) -> str:
+        descriptions_by_code = {
+            "materials": "Материалы, комплектующие, расходники, закупки для объекта и склада.",
+            "equipment": "Услуги спецтехники, механизмов, аренда техники с оператором и смены машин.",
+            "labor": "Работы подрядчиков, субподряд, акты выполненных работ и разовые услуги по объекту.",
+            "salary": "Начисления и выплаты сотрудникам, зарплатные платежи и связанные кадровые выплаты.",
+            "transport": "Доставка, перевозки, логистика, грузчики, перемещение материалов и оборудования.",
+            "fuel": "Бензин, дизель, ГСМ, топливные карты и заправки транспорта или техники.",
+            "rent": "Аренда помещений, площадок, оборудования, инструментов и прочих ресурсов.",
+            "admin": "Офисные и управленческие расходы: канцелярия, сервисы, хозяйственные мелочи.",
+            "taxes": "Налоги, госпошлины, страховые взносы, обязательные платежи и сборы.",
+            "utilities": "Связь, интернет, телефония, коммунальные платежи и регулярные сервисы.",
+            "bank_commission": "Комиссии банка, эквайринг, обслуживание счетов, платежные и переводные комиссии.",
+            "cash_withdrawal": "Вывод денег в кассу или подотчет, когда списание с банка становится наличными.",
+            "income_unallocated": "Поступления, которые еще нужно разобрать и привязать к объекту или основанию.",
+            "other": "Редкие расходы, которые пока не подходят ни под одну отдельную категорию.",
+        }
+        descriptions_by_label = {
+            "штрафы": "Штрафы, пени, санкции, административные взыскания и прочие обязательные удержания.",
+            "оплата работяг": "Выплаты рабочим бригадам и исполнителям, если их не ведем через зарплатный блок.",
+        }
+        normalized_label = " ".join(category.label.strip().lower().split())
+        return (
+            descriptions_by_code.get(category.code)
+            or descriptions_by_label.get(normalized_label)
+            or "Используйте для платежей, которые команда договорилась относить именно к этой группе."
+        )
+
     contract_object_cards = "".join(
         render_directory_card(
             contract.object_name.strip() or contract.title,
@@ -9628,7 +9656,7 @@ def render_directories_section(
         render_directory_card(
             category.label,
             [],
-            [],
+            [expense_category_description(category)],
             f"""
             <div class="directory-edit-form">
             <form id="expense-category-update-{category.id}" class="form-grid" method="post" action="/directories/expense-categories/{category.id}/update?owner={owner_chat_id}">
@@ -9664,6 +9692,54 @@ def render_directories_section(
           </div>
         </details>
         """
+
+    expense_category_event_rows = ""
+    if can_edit:
+        event_action_labels = {
+            "delete_blocked": "Удаление остановлено",
+            "reassign": "Перенос платежей",
+            "delete": "Удаление категории",
+        }
+        expense_category_events = storage.list_expense_category_events(owner_chat_id, 12)
+        expense_category_event_rows = "".join(
+            f"""
+            <tr>
+              <td>{escape(format_datetime(event.created_at.astimezone(VLADIVOSTOK_TZ)))}</td>
+              <td><span class="chip">{escape(event_action_labels.get(event.action_type, event.action_type or "Операция"))}</span></td>
+              <td>
+                <div class="timeline-title">{escape(event.category_label or event.category_code or "Категория")}</div>
+                <div class="contract-table-subtle">{escape(event.actor_name or "Автор неизвестен")}</div>
+              </td>
+              <td class="nowrap">{event.affected_count}</td>
+              <td class="nowrap">{escape(format_amount(event.affected_amount))}</td>
+              <td>{escape(event.target_summary or "Без переноса")}</td>
+            </tr>
+            """
+            for event in expense_category_events
+        ) or '<tr><td colspan="6">Опасных операций по категориям пока не было.</td></tr>'
+    expense_category_events_html = (
+        f"""
+        <details class="status-menu" style="margin-top:16px;">
+          <summary><span class="secondary-btn mini">Журнал переносов и удалений</span></summary>
+          <div class="status-popover align-right" style="min-width:min(960px, 92vw);">
+            <table class="table contract-table">
+              <thead>
+                <tr>
+                  <th>Когда</th>
+                  <th>Операция</th>
+                  <th>Категория</th>
+                  <th class="nowrap">Платежей</th>
+                  <th class="nowrap">Сумма</th>
+                  <th>Куда перенесли / что произошло</th>
+                </tr>
+              </thead>
+              <tbody>{expense_category_event_rows}</tbody>
+            </table>
+          </div>
+        </details>
+        """
+        if can_edit else ""
+    )
 
     employee_group_counts = {
         group_code: (
@@ -9854,6 +9930,7 @@ def render_directories_section(
       <div class="directory-card-grid">
         {expense_category_cards}
       </div>
+      {expense_category_events_html}
     </section>
     """
     employees_section = f"""
@@ -18230,13 +18307,49 @@ self.addEventListener("notificationclick", (event) => {
         try:
             if category is None:
                 raise ValueError("Категория не найдена")
+            actor_user_id = current_user.get("id") if current_user else None
+            actor_name = (
+                (current_user or {}).get("full_name", "").strip()
+                or (current_user or {}).get("display_name", "").strip()
+                or (current_user or {}).get("login", "").strip()
+                or "Автор неизвестен"
+            )
             linked_entries = storage.list_expense_entries_by_category(current_owner, category.code)
             if linked_entries:
                 total = sum(entry.amount for entry in linked_entries)
+                storage.record_expense_category_event(
+                    current_owner,
+                    "delete_blocked",
+                    category.id,
+                    category.code,
+                    category.label,
+                    len(linked_entries),
+                    total,
+                    "Удаление остановлено: категория используется в ДДС.",
+                    {
+                        "entry_ids": [entry.id for entry in linked_entries],
+                        "entry_titles": [entry.title for entry in linked_entries[:20]],
+                    },
+                    actor_user_id,
+                    actor_name,
+                )
                 message = f"Категория используется в ДДС: {len(linked_entries)} платежей на сумму {format_amount(total)}. Сначала перенесите платежи на другую категорию."
                 return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-category-transfer&category_id={category_id}&flash={quote_plus(message)}")
             if not storage.delete_expense_category(current_owner, category_id):
                 raise ValueError("Категория не найдена или уже используется")
+            storage.record_expense_category_event(
+                current_owner,
+                "delete",
+                category.id,
+                category.code,
+                category.label,
+                0,
+                0,
+                "Категория удалена без связанных платежей.",
+                {},
+                actor_user_id,
+                actor_name,
+            )
             return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, "expense-categories", "admin", f"Не удалось удалить категорию расходов: {exc}")
@@ -18257,6 +18370,13 @@ self.addEventListener("notificationclick", (event) => {
         try:
             if category is None:
                 raise ValueError("Категория не найдена")
+            actor_user_id = current_user.get("id") if current_user else None
+            actor_name = (
+                (current_user or {}).get("full_name", "").strip()
+                or (current_user or {}).get("display_name", "").strip()
+                or (current_user or {}).get("login", "").strip()
+                or "Автор неизвестен"
+            )
             linked_entries = storage.list_expense_entries_by_category(current_owner, category.code)
             replacements = {}
             for entry in linked_entries:
@@ -18269,6 +18389,49 @@ self.addEventListener("notificationclick", (event) => {
             changed_count = storage.reassign_expense_entries(current_owner, category.code, replacements)
             if changed_count <= 0:
                 raise ValueError("Не удалось перенести платежи")
+            category_labels = {item.code: item.label for item in storage.list_expense_categories(current_owner)}
+            transfer_groups: dict[str, dict[str, object]] = {}
+            for entry in linked_entries:
+                target_code = replacements.get(entry.id, "").strip()
+                if not target_code or target_code == category.code:
+                    continue
+                target_label = category_labels.get(target_code, target_code)
+                group = transfer_groups.setdefault(
+                    target_code,
+                    {"label": target_label, "count": 0, "amount": 0.0, "entry_ids": []},
+                )
+                group["count"] = int(group["count"]) + 1
+                group["amount"] = float(group["amount"]) + float(entry.amount)
+                group["entry_ids"].append(entry.id)
+            target_summary = "; ".join(
+                f"{group['label']}: {group['count']} платежей на {format_amount(float(group['amount']))}"
+                for group in transfer_groups.values()
+            )
+            storage.record_expense_category_event(
+                current_owner,
+                "reassign",
+                category.id,
+                category.code,
+                category.label,
+                changed_count,
+                sum(float(group["amount"]) for group in transfer_groups.values()),
+                target_summary or "Платежи перенесены на другие категории.",
+                {
+                    "from_category": {"id": category.id, "code": category.code, "label": category.label},
+                    "targets": [
+                        {
+                            "code": target_code,
+                            "label": str(group["label"]),
+                            "count": int(group["count"]),
+                            "amount": round(float(group["amount"]), 2),
+                            "entry_ids": list(group["entry_ids"]),
+                        }
+                        for target_code, group in transfer_groups.items()
+                    ],
+                },
+                actor_user_id,
+                actor_name,
+            )
             remaining_entries = storage.list_expense_entries_by_category(current_owner, category.code)
             flash = f"Платежи перенесены: {changed_count}."
             if remaining_entries:
