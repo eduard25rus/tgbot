@@ -1812,13 +1812,15 @@ def render_access_role_select(
     owner_chat_id: int,
     selected_role: str = "",
     disabled: bool = False,
+    auto_submit: bool = False,
 ) -> str:
     selected_role = canonical_role_label(selected_role)
     options = "".join(
         f'<option value="{escape(role)}"{" selected" if role == selected_role else ""}>{escape(role)}</option>'
         for role in access_role_options(storage, owner_chat_id, selected_role)
     )
-    return f'<select name="role_name"{" disabled" if disabled else ""}>{options}</select>'
+    onchange = ' onchange="this.form.submit()"' if auto_submit and not disabled else ""
+    return f'<select name="role_name"{" disabled" if disabled else ""}{onchange}>{options}</select>'
 
 
 def normalize_access_role_value(storage: Storage, owner_chat_id: int, role_name: str) -> str:
@@ -6550,6 +6552,43 @@ def layout(
       overflow: auto;
       padding-right: 4px;
     }}
+    .access-permissions-popover {{
+      min-width: min(1040px, calc(100vw - 64px));
+      max-width: min(1120px, calc(100vw - 64px));
+      padding: 14px;
+    }}
+    .access-permissions-popover .permissions-grid {{
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }}
+    .access-permissions-popover .permission-box {{
+      gap: 8px;
+      padding: 10px 12px;
+    }}
+    .access-permissions-popover .check-row {{
+      gap: 10px;
+    }}
+    .access-password-popover {{
+      min-width: min(520px, calc(100vw - 64px));
+      max-width: min(620px, calc(100vw - 64px));
+      padding: 14px;
+    }}
+    .access-cash-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      align-items: start;
+    }}
+    .access-cash-grid .advance-toggle,
+    .access-cash-grid .field,
+    .access-cash-grid .permission-box {{
+      min-width: 0;
+    }}
+    .access-cash-grid .span-2 {{
+      grid-column: 1 / -1;
+    }}
+    .access-cash-actions {{
+      justify-content: flex-end;
+    }}
     .access-user-actions {{
       flex-wrap: nowrap;
       align-items: flex-start;
@@ -6563,6 +6602,15 @@ def layout(
       white-space: nowrap;
     }}
     @media (max-width: 720px) {{
+      .access-permissions-popover .permissions-grid {{
+        grid-template-columns: 1fr;
+      }}
+      .access-cash-grid {{
+        grid-template-columns: 1fr;
+      }}
+      .access-cash-grid .span-2 {{
+        grid-column: auto;
+      }}
       .access-user-actions {{
         flex-wrap: wrap;
       }}
@@ -14822,10 +14870,19 @@ def render_access_section(
         """
         settings_block = f"""
         <details class="status-menu settings-menu">
-          <summary><span class="settings-trigger">Настроить доступы и пароль</span></summary>
-          <div class="settings-popover">
+          <summary><span class="settings-trigger">Настроить доступы</span></summary>
+          <div class="settings-popover access-permissions-popover">
             <div class="permissions-grid">{''.join(permission_boxes)}</div>
-            <div class="settings-divider"></div>
+            <div class="action-row" style="justify-content:flex-end;">
+              <button class="submit-btn" type="submit">Сохранить</button>
+            </div>
+          </div>
+        </details>
+        """
+        password_block = f"""
+        <details class="status-menu settings-menu">
+          <summary><span class="settings-trigger">Пароль</span></summary>
+          <div class="settings-popover access-password-popover">
             <div class="action-row">{reset_button}</div>
             <div class="field">
               <label>Ссылка для установки пароля</label>
@@ -14843,7 +14900,7 @@ def render_access_section(
             else f"""
             <div class="action-row access-user-actions">
               {settings_block}
-              <button class="submit-btn" type="submit">Сохранить права</button>
+              {password_block}
               <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/toggle?owner={owner_chat_id}&mode=general" formmethod="post">{"Запретить доступ" if user["is_active"] else "Вернуть доступ"}</button>
               <button class="secondary-btn danger" type="submit" formaction="/access/users/{user["id"]}/delete?owner={owner_chat_id}&mode=general" formmethod="post">Удалить пользователя</button>
             </div>
@@ -14878,7 +14935,7 @@ def render_access_section(
                 <input type="hidden" name="full_name" value="{escape(user["full_name"])}">
                 <div class="field">
                   <label>Роль</label>
-                  {render_access_role_select(storage, owner_chat_id, user["role_name"], bool(user["is_super_admin"]))}
+                  {render_access_role_select(storage, owner_chat_id, user["role_name"], bool(user["is_super_admin"]), True)}
                 </div>
                 {action_buttons}
               </form>
@@ -14925,52 +14982,56 @@ def render_access_section(
                     <span class="badge">Пуши: {push_mode_label}</span>
                   </div>
                 </div>
-                <label class="advance-toggle">
-                  <input class="toggle-checkbox" type="checkbox" name="enabled" value="1" {"checked" if user_access["enabled"] else ""}> Разрешить вход в мобильную кассу
-                </label>
-                <div class="field">
-                  <label>Роль в кассе</label>
-                  <select name="role">
-                    <option value="owner"{" selected" if user_access["role"] == "owner" else ""}>owner / admin</option>
-                    <option value="manager"{" selected" if user_access["role"] == "manager" else ""}>manager</option>
-                    <option value="limited"{" selected" if user_access["role"] == "limited" else ""}>limited</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label>Касса по умолчанию</label>
-                  <select name="default_cashbox_code">{cashbox_select_options_cache[user_access["user_id"]]}</select>
-                </div>
-                <div class="field">
-                  <label>Резервный логин для входа в кассу</label>
-                  <input type="text" name="preview_login" value="{escape(user_access["preview_login"])}" placeholder="{escape(user["login"])}">
-                </div>
-                <div class="field">
-                  <label>Новый резервный пароль</label>
-                  <input type="text" name="preview_password" placeholder="Оставьте пустым, если менять не нужно">
-                  <div class="field-hint">Сейчас: {"задан" if user_access["preview_password_hash"] else "не задан"}. Работает только для мобильной кассы.</div>
-                </div>
-                <div class="permission-box">
-                  <strong>Доступные кассы</strong>
-                  <div class="check-row">{cashbox_checks}</div>
-                </div>
-                <div class="permission-box">
-                  <strong>Права в приложении</strong>
-                  <div class="check-row">
-                    <label><input type="checkbox" name="can_view_all_cashboxes" value="1" {"checked" if user_access["can_view_all_cashboxes"] else ""}> Видит все кассы</label>
-                    <label><input type="checkbox" name="can_add_expense" value="1" {"checked" if user_access["can_add_expense"] else ""}> Может добавлять расходы</label>
-                    <label><input type="checkbox" name="can_reconcile" value="1" {"checked" if user_access["can_reconcile"] else ""}> Может сверять кассу</label>
-                    <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Получает пуши</label>
+                <div class="access-cash-grid">
+                  <label class="advance-toggle span-2">
+                    <input class="toggle-checkbox" type="checkbox" name="enabled" value="1" {"checked" if user_access["enabled"] else ""}> Разрешить вход в мобильную кассу
+                  </label>
+                  <div class="field">
+                    <label>Роль в кассе</label>
+                    <select name="role">
+                      <option value="owner"{" selected" if user_access["role"] == "owner" else ""}>owner / admin</option>
+                      <option value="manager"{" selected" if user_access["role"] == "manager" else ""}>manager</option>
+                      <option value="limited"{" selected" if user_access["role"] == "limited" else ""}>limited</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Касса по умолчанию</label>
+                    <select name="default_cashbox_code">{cashbox_select_options_cache[user_access["user_id"]]}</select>
+                  </div>
+                  <div class="field">
+                    <label>Резервный логин для входа в кассу</label>
+                    <input type="text" name="preview_login" value="{escape(user_access["preview_login"])}" placeholder="{escape(user["login"])}">
+                  </div>
+                  <div class="field">
+                    <label>Новый резервный пароль</label>
+                    <input type="text" name="preview_password" placeholder="Оставьте пустым, если менять не нужно">
+                    <div class="field-hint">Сейчас: {"задан" if user_access["preview_password_hash"] else "не задан"}. Работает только для мобильной кассы.</div>
+                  </div>
+                  <div class="permission-box">
+                    <strong>Доступные кассы</strong>
+                    <div class="check-row">{cashbox_checks}</div>
+                  </div>
+                  <div class="permission-box">
+                    <strong>Права в приложении</strong>
+                    <div class="check-row">
+                      <label><input type="checkbox" name="can_view_all_cashboxes" value="1" {"checked" if user_access["can_view_all_cashboxes"] else ""}> Видит все кассы</label>
+                      <label><input type="checkbox" name="can_add_expense" value="1" {"checked" if user_access["can_add_expense"] else ""}> Может добавлять расходы</label>
+                      <label><input type="checkbox" name="can_reconcile" value="1" {"checked" if user_access["can_reconcile"] else ""}> Может сверять кассу</label>
+                      <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Получает пуши</label>
+                    </div>
+                  </div>
+                  <div class="field span-2">
+                    <label>Режим push-уведомлений</label>
+                    <select name="push_detail_mode">
+                      <option value="safe"{" selected" if push_detail_mode == "safe" else ""}>Без деталей</option>
+                      <option value="amount"{" selected" if push_detail_mode == "amount" else ""}>С суммой и автором</option>
+                    </select>
+                    <div class="field-hint">Подробности могут быть видны на экране блокировки, если так настроен iPhone.</div>
                   </div>
                 </div>
-                <div class="field">
-                  <label>Режим push-уведомлений</label>
-                  <select name="push_detail_mode">
-                    <option value="safe"{" selected" if push_detail_mode == "safe" else ""}>Без деталей</option>
-                    <option value="amount"{" selected" if push_detail_mode == "amount" else ""}>С суммой и автором</option>
-                  </select>
-                  <div class="field-hint">Подробности могут быть видны на экране блокировки, если так настроен iPhone.</div>
+                <div class="action-row access-cash-actions">
+                  <button class="submit-btn" type="submit">Сохранить кассовый доступ</button>
                 </div>
-                <button class="submit-btn" type="submit">Сохранить кассовый доступ</button>
               </form>
             </article>
             """
