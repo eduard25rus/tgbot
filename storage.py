@@ -1036,6 +1036,7 @@ class Storage:
                     can_add_expense INTEGER NOT NULL DEFAULT 0,
                     can_reconcile INTEGER NOT NULL DEFAULT 0,
                     can_receive_push INTEGER NOT NULL DEFAULT 0,
+                    push_detail_mode TEXT NOT NULL DEFAULT 'safe',
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
                 );
@@ -1094,6 +1095,8 @@ class Storage:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN preview_password_hash TEXT NOT NULL DEFAULT ''")
             if "can_receive_push" not in mobile_cash_access_columns:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_receive_push INTEGER NOT NULL DEFAULT 0")
+            if "push_detail_mode" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN push_detail_mode TEXT NOT NULL DEFAULT 'safe'")
             if "needs_adjustment" not in expense_columns:
                 conn.execute("ALTER TABLE expense_entries ADD COLUMN needs_adjustment INTEGER NOT NULL DEFAULT 0")
             legal_letter_columns = {
@@ -1708,7 +1711,7 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense,
-                       can_reconcile, can_receive_push, updated_at
+                       can_reconcile, can_receive_push, push_detail_mode, updated_at
                 FROM mobile_cash_access
                 WHERE owner_chat_id = ? AND user_id IN (
                     SELECT id FROM web_users WHERE owner_chat_id = ?
@@ -1734,7 +1737,7 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense,
-                       can_reconcile, can_receive_push, updated_at
+                       can_reconcile, can_receive_push, push_detail_mode, updated_at
                 FROM mobile_cash_access
                 WHERE user_id = ?
                 """,
@@ -1757,6 +1760,7 @@ class Storage:
         can_add_expense: bool,
         can_reconcile: bool,
         can_receive_push: bool = False,
+        push_detail_mode: str = "safe",
     ) -> bool:
         user = self.get_web_user_by_id(user_id)
         if user is None or int(user["owner_chat_id"]) != owner_chat_id:
@@ -1772,6 +1776,8 @@ class Storage:
             normalized_allowed = [item["code"] for item in cashboxes]
         if role not in {"owner", "manager", "limited"}:
             role = "limited"
+        if push_detail_mode not in {"safe", "amount"}:
+            push_detail_mode = "safe"
         cleaned_preview_login = preview_login.strip().lower()
         if not cleaned_preview_login:
             cleaned_preview_login = user.get("login", "").strip().lower()
@@ -1791,9 +1797,9 @@ class Storage:
                     user_id, owner_chat_id, enabled, role, default_cashbox_code,
                     allowed_cashbox_codes, preview_login, preview_password_hash,
                     can_view_all_cashboxes, can_add_expense,
-                    can_reconcile, can_receive_push, updated_at
+                    can_reconcile, can_receive_push, push_detail_mode, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     owner_chat_id = excluded.owner_chat_id,
                     enabled = excluded.enabled,
@@ -1806,6 +1812,7 @@ class Storage:
                     can_add_expense = excluded.can_add_expense,
                     can_reconcile = excluded.can_reconcile,
                     can_receive_push = excluded.can_receive_push,
+                    push_detail_mode = excluded.push_detail_mode,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1821,6 +1828,7 @@ class Storage:
                     1 if can_add_expense else 0,
                     1 if can_reconcile else 0,
                     1 if can_receive_push else 0,
+                    push_detail_mode,
                     datetime.utcnow().isoformat(),
                 ),
             )
@@ -1912,7 +1920,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT s.id, s.owner_chat_id, s.user_id, s.endpoint, s.p256dh, s.auth,
-                       s.user_agent, s.created_at, s.updated_at,
+                       s.user_agent, s.created_at, s.updated_at, a.push_detail_mode,
                        u.full_name, u.email
                 FROM cash_push_subscriptions s
                 JOIN web_users u ON u.id = s.user_id
@@ -1936,6 +1944,7 @@ class Storage:
                 "user_agent": row["user_agent"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
+                "push_detail_mode": row["push_detail_mode"] if "push_detail_mode" in row.keys() else "safe",
                 "full_name": row["full_name"],
                 "login": row["email"],
             }
@@ -7022,6 +7031,7 @@ class Storage:
                 "can_add_expense": True,
                 "can_reconcile": True,
                 "can_receive_push": False,
+                "push_detail_mode": "safe",
                 "updated_at": "",
             }
         if "денис" in login_name or "denis" in login_name or "учайкин" in login_name:
@@ -7038,6 +7048,7 @@ class Storage:
                 "can_add_expense": True,
                 "can_reconcile": True,
                 "can_receive_push": False,
+                "push_detail_mode": "safe",
                 "updated_at": "",
             }
         return {
@@ -7053,6 +7064,7 @@ class Storage:
             "can_add_expense": False,
             "can_reconcile": False,
             "can_receive_push": False,
+            "push_detail_mode": "safe",
             "updated_at": "",
         }
 
@@ -7070,6 +7082,7 @@ class Storage:
             "can_add_expense": bool(row["can_add_expense"]),
             "can_reconcile": bool(row["can_reconcile"]),
             "can_receive_push": bool(row["can_receive_push"]) if "can_receive_push" in row.keys() else False,
+            "push_detail_mode": row["push_detail_mode"] if "push_detail_mode" in row.keys() and row["push_detail_mode"] in {"safe", "amount"} else "safe",
             "updated_at": row["updated_at"],
         }
 

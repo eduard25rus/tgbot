@@ -805,7 +805,7 @@ def resolve_cash_receipt_file(storage: Storage, entry) -> tuple[Path, str, str]:
     return absolute_path, safe_filename, content_type
 
 
-def send_cash_push(storage: Storage, owner_chat_id: int, payload: dict) -> tuple[int, int]:
+def send_cash_push(storage: Storage, owner_chat_id: int, safe_payload: dict, amount_payload: dict | None = None) -> tuple[int, int]:
     public_key = cash_push_public_key(storage)
     private_key = cash_push_private_key(storage)
     if not public_key or not private_key:
@@ -822,8 +822,11 @@ def send_cash_push(storage: Storage, owner_chat_id: int, payload: dict) -> tuple
     vapid_claims = {
         "sub": os.getenv("CASH_PUSH_VAPID_SUBJECT", os.getenv("VAPID_SUBJECT", "mailto:admin@felisgroup.ru")).strip(),
     }
-    data = json.dumps(payload, ensure_ascii=False)
     for subscription in subscriptions:
+        payload = safe_payload
+        if amount_payload and subscription.get("push_detail_mode") == "amount":
+            payload = amount_payload
+        data = json.dumps(payload, ensure_ascii=False)
         webpush_subscription = {
             "endpoint": subscription["endpoint"],
             "keys": {
@@ -850,13 +853,33 @@ def send_cash_push(storage: Storage, owner_chat_id: int, payload: dict) -> tuple
     return sent_count, failed_count
 
 
-def notify_cash_operation_created(storage: Storage, owner_chat_id: int, title: str, tag: str) -> tuple[int, int]:
+def notify_cash_operation_created(
+    storage: Storage,
+    owner_chat_id: int,
+    *,
+    operation_label: str,
+    amount: float,
+    actor_name: str,
+    tag: str,
+) -> tuple[int, int]:
+    safe_title = f"Добавлен новый {operation_label}"
+    amount_title = f"{operation_label.capitalize()} — {format_amount(amount)}"
+    actor_label = actor_name.strip() or "Пользователь"
     return send_cash_push(
         storage,
         owner_chat_id,
         {
-            "title": title,
+            "title": safe_title,
             "body": "Откройте приложение для просмотра",
+            "tag": tag,
+            "url": "/cashoperations",
+            "data": {
+                "kind": "cash_update",
+            },
+        },
+        {
+            "title": amount_title,
+            "body": f"{actor_label} добавил {operation_label}",
             "tag": tag,
             "url": "/cashoperations",
             "data": {
@@ -866,12 +889,26 @@ def notify_cash_operation_created(storage: Storage, owner_chat_id: int, title: s
     )
 
 
-def notify_cash_expense_created(storage: Storage, owner_chat_id: int) -> tuple[int, int]:
-    return notify_cash_operation_created(storage, owner_chat_id, "Добавлен новый расход", "cash-expense-created")
+def notify_cash_expense_created(storage: Storage, owner_chat_id: int, amount: float, actor_name: str) -> tuple[int, int]:
+    return notify_cash_operation_created(
+        storage,
+        owner_chat_id,
+        operation_label="расход",
+        amount=amount,
+        actor_name=actor_name,
+        tag="cash-expense-created",
+    )
 
 
-def notify_cash_income_created(storage: Storage, owner_chat_id: int) -> tuple[int, int]:
-    return notify_cash_operation_created(storage, owner_chat_id, "Добавлен новый приход", "cash-income-created")
+def notify_cash_income_created(storage: Storage, owner_chat_id: int, amount: float, actor_name: str) -> tuple[int, int]:
+    return notify_cash_operation_created(
+        storage,
+        owner_chat_id,
+        operation_label="приход",
+        amount=amount,
+        actor_name=actor_name,
+        tag="cash-income-created",
+    )
 
 
 def parse_amount(raw: str) -> float:
@@ -14720,6 +14757,8 @@ def render_access_section(
         user = user_access["user"]
         allowed_codes = set(user_access["allowed_cashbox_codes"])
         push_device_count = storage.count_cash_push_subscriptions_for_user(owner_chat_id, user["id"])
+        push_detail_mode = user_access.get("push_detail_mode") if user_access.get("push_detail_mode") in {"safe", "amount"} else "safe"
+        push_mode_label = "с суммой" if push_detail_mode == "amount" else "без деталей"
         cashbox_checks = "".join(
             f"""
             <label>
@@ -14742,6 +14781,7 @@ def render_access_section(
                     <span class="badge{" danger" if not user_access["enabled"] else ""}">{"Касса включена" if user_access["enabled"] else "Касса отключена"}</span>
                     <span class="badge">{escape(user_access["role"])}</span>
                     <span class="badge{" warn" if user_access["can_receive_push"] and push_device_count == 0 else ""}">Пуш-устройств: {push_device_count}</span>
+                    <span class="badge">Пуши: {push_mode_label}</span>
                   </div>
                 </div>
                 <label class="advance-toggle">
@@ -14780,6 +14820,14 @@ def render_access_section(
                     <label><input type="checkbox" name="can_reconcile" value="1" {"checked" if user_access["can_reconcile"] else ""}> Может сверять кассу</label>
                     <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Получает пуши</label>
                   </div>
+                </div>
+                <div class="field">
+                  <label>Режим push-уведомлений</label>
+                  <select name="push_detail_mode">
+                    <option value="safe"{" selected" if push_detail_mode == "safe" else ""}>Без деталей</option>
+                    <option value="amount"{" selected" if push_detail_mode == "amount" else ""}>С суммой и автором</option>
+                  </select>
+                  <div class="field-hint">Подробности могут быть видны на экране блокировки, если так настроен iPhone.</div>
                 </div>
                 <button class="submit-btn" type="submit">Сохранить кассовый доступ</button>
               </form>
@@ -16229,7 +16277,7 @@ self.addEventListener("notificationclick", (event) => {
                 actor_name,
                 client_request_key=form.get("request_key", ""),
             )
-            notify_cash_income_created(storage, current_owner)
+            notify_cash_income_created(storage, current_owner, amount, actor_name)
             flash = "Поступление добавлено в кассу."
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
@@ -16374,7 +16422,7 @@ self.addEventListener("notificationclick", (event) => {
             )
             upload = next((item for item in files.get("receipt_file", []) if item.data), None)
             save_cash_receipt_upload(storage, current_owner, saved_expense_id, upload)
-            notify_cash_expense_created(storage, current_owner)
+            notify_cash_expense_created(storage, current_owner, amount, actor_name)
             flash = "Расход добавлен в кассу и CRM-расходы."
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
@@ -18908,6 +18956,7 @@ self.addEventListener("notificationclick", (event) => {
                 form.get("can_add_expense") == "1",
                 form.get("can_reconcile") == "1",
                 form.get("can_receive_push") == "1",
+                form.get("push_detail_mode", "safe"),
             )
             if not updated:
                 raise ValueError("Пользователь не найден")
