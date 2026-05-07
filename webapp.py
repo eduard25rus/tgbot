@@ -850,23 +850,28 @@ def send_cash_push(storage: Storage, owner_chat_id: int, payload: dict) -> tuple
     return sent_count, failed_count
 
 
-def notify_cash_expense_created(
-    storage: Storage,
-    owner_chat_id: int,
-) -> tuple[int, int]:
+def notify_cash_operation_created(storage: Storage, owner_chat_id: int, title: str, tag: str) -> tuple[int, int]:
     return send_cash_push(
         storage,
         owner_chat_id,
         {
-            "title": "Касса",
-            "body": "В мобильной кассе появилось обновление.",
-            "tag": "cash-expense-created",
+            "title": title,
+            "body": "Откройте приложение для просмотра",
+            "tag": tag,
             "url": "/cashoperations",
             "data": {
                 "kind": "cash_update",
             },
         },
     )
+
+
+def notify_cash_expense_created(storage: Storage, owner_chat_id: int) -> tuple[int, int]:
+    return notify_cash_operation_created(storage, owner_chat_id, "Добавлен новый расход", "cash-expense-created")
+
+
+def notify_cash_income_created(storage: Storage, owner_chat_id: int) -> tuple[int, int]:
+    return notify_cash_operation_created(storage, owner_chat_id, "Добавлен новый приход", "cash-income-created")
 
 
 def parse_amount(raw: str) -> float:
@@ -16221,6 +16226,7 @@ self.addEventListener("notificationclick", (event) => {
                 actor_name,
                 client_request_key=form.get("request_key", ""),
             )
+            notify_cash_income_created(storage, current_owner)
             flash = "Поступление добавлено в кассу."
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
