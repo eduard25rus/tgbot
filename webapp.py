@@ -4786,48 +4786,6 @@ def layout(
       overflow: visible;
       box-sizing: border-box;
     }}
-    .expenses-filters {{
-      justify-content: flex-start;
-      align-items: center;
-      margin-top: 14px;
-      padding: 18px 20px;
-      width: 100%;
-      min-width: 0;
-      box-sizing: border-box;
-      background: #f1f3f6;
-      border-radius: 8px;
-      gap: 18px;
-    }}
-    .expenses-filters-main {{
-      gap: 16px;
-      align-items: center;
-      flex-wrap: wrap;
-      min-width: 0;
-      flex: 1 1 auto;
-    }}
-    .expenses-filter-field {{
-      min-width: 220px;
-      margin: 0;
-    }}
-    .expenses-filter-field label {{
-      display: none;
-    }}
-    .expenses-filter-field select {{
-      min-height: 40px;
-      border-radius: 8px;
-      border: 1px solid #d3d9e1;
-      background-color: #fff;
-      padding: 0 42px 0 14px;
-      font-size: 15px;
-      color: var(--ink);
-      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-    }}
-    .expenses-filters-actions {{
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-      flex: 0 0 auto;
-    }}
     .dds-top-actions {{
       gap: 10px;
       align-items: flex-start;
@@ -8050,16 +8008,6 @@ function initExpensesDayCarousel() {{
   }});
 }}
 
-function initExpensesFilterForms() {{
-  document.querySelectorAll('[data-expenses-filter-form="1"]').forEach((form) => {{
-    form.querySelectorAll("select").forEach((select) => {{
-      select.addEventListener("change", () => {{
-        form.requestSubmit();
-      }});
-    }});
-  }});
-}}
-
 document.addEventListener("change", (event) => {{
   const employeeStatusSelect = event.target.closest('.employee-status-select');
   if (employeeStatusSelect) {{
@@ -8099,7 +8047,6 @@ document.addEventListener("change", (event) => {{
 window.addEventListener("load", () => {{
   restoreSidebarScroll();
   initExpensesDayCarousel();
-  initExpensesFilterForms();
   document.querySelectorAll('.contract-create-form').forEach((form) => {{
     const stageCountInput = form.querySelector('[data-stage-count-input]');
     buildContractStageFields(form, stageCountInput ? stageCountInput.value : 1);
@@ -15063,7 +15010,7 @@ def render_expenses_section(
       <article class="card stat-card">
         <div class="stat-label">Итого денег</div>
         <div class="stat-value">{format_amount(company_money_total) if company_money_total is not None else "—"}</div>
-        <div class="stat-note">Счет {format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"} · кассы {format_amount(eduard_cash_balance + denis_cash_balance)}</div>
+        <div class="stat-note">Счет {format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}<br>Кассы {format_amount(eduard_cash_balance + denis_cash_balance)}</div>
       </article>
     </section>
     <section class="card panel" style="margin-top:22px;">
@@ -15085,37 +15032,6 @@ def render_expenses_section(
         </div>
         <button class="secondary-btn mini expenses-day-arrow" type="button" data-expenses-day-next="1" aria-label="Показать следующие дни">→</button>
       </div>
-      <form class="action-row expenses-filters" method="get" action="/expenses" data-expenses-filter-form="1">
-        <input type="hidden" name="owner" value="{owner_chat_id}">
-        <input type="hidden" name="tab" value="{active_tab}">
-        <input type="hidden" name="day" value="{selected_day.isoformat() if selected_day else ''}">
-        <div class="action-row expenses-filters-main">
-          <div class="field expenses-filter-field">
-            <label>Объект</label>
-            <select name="project">
-              <option value="">Все объекты</option>
-              {project_options}
-            </select>
-          </div>
-            <div class="field expenses-filter-field">
-              <label>Группа</label>
-              <select name="category">
-                <option value="">Все группы</option>
-                {category_options}
-              </select>
-            </div>
-          <div class="field expenses-filter-field">
-            <label>Корректировка</label>
-            <select name="adjustment">
-              <option value=""{" selected" if adjustment_filter == "" else ""}>Все операции</option>
-              <option value="needs"{" selected" if adjustment_filter == "needs" else ""}>Неразнесенные</option>
-            </select>
-          </div>
-        </div>
-        <div class="action-row expenses-filters-actions">
-          {f'<a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}&tab={active_tab}">Показать весь реестр</a>' if project_filter or category_filter or adjustment_filter or selected_day else ''}
-        </div>
-      </form>
       {flash_html}
       {registry_tables_html}
     </section>
