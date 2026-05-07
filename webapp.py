@@ -4190,10 +4190,6 @@ SECTIONS = [
 
 FINANCE_NAV_SECTIONS = [
     ("finance", "Финанализ", "/finance-analysis"),
-    ("payables", "Кредиторка", "/payables"),
-    ("finance_receivables", "Дебиторка", "/finance-receivables"),
-    ("finance_loans", "Кредиты и займы", "/finance-loans"),
-    ("finance_liabilities", "Прочие обязательства", "/finance-liabilities"),
     ("expenses", "ДДС", "/expenses"),
     ("cashoperations", "Кассы", "/cashoperations"),
 ]
