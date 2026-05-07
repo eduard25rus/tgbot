@@ -1035,7 +1035,22 @@ class Storage:
                     can_view_all_cashboxes INTEGER NOT NULL DEFAULT 0,
                     can_add_expense INTEGER NOT NULL DEFAULT 0,
                     can_reconcile INTEGER NOT NULL DEFAULT 0,
+                    can_receive_push INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS cash_push_subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    p256dh TEXT NOT NULL DEFAULT '',
+                    auth TEXT NOT NULL DEFAULT '',
+                    user_agent TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, endpoint),
                     FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
                 );
                 """
@@ -1077,6 +1092,8 @@ class Storage:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN preview_login TEXT NOT NULL DEFAULT ''")
             if "preview_password_hash" not in mobile_cash_access_columns:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN preview_password_hash TEXT NOT NULL DEFAULT ''")
+            if "can_receive_push" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_receive_push INTEGER NOT NULL DEFAULT 0")
             if "needs_adjustment" not in expense_columns:
                 conn.execute("ALTER TABLE expense_entries ADD COLUMN needs_adjustment INTEGER NOT NULL DEFAULT 0")
             legal_letter_columns = {
@@ -1691,7 +1708,7 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense,
-                       can_reconcile, updated_at
+                       can_reconcile, can_receive_push, updated_at
                 FROM mobile_cash_access
                 WHERE owner_chat_id = ? AND user_id IN (
                     SELECT id FROM web_users WHERE owner_chat_id = ?
@@ -1717,7 +1734,7 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense,
-                       can_reconcile, updated_at
+                       can_reconcile, can_receive_push, updated_at
                 FROM mobile_cash_access
                 WHERE user_id = ?
                 """,
@@ -1739,6 +1756,7 @@ class Storage:
         can_view_all_cashboxes: bool,
         can_add_expense: bool,
         can_reconcile: bool,
+        can_receive_push: bool = False,
     ) -> bool:
         user = self.get_web_user_by_id(user_id)
         if user is None or int(user["owner_chat_id"]) != owner_chat_id:
@@ -1773,9 +1791,9 @@ class Storage:
                     user_id, owner_chat_id, enabled, role, default_cashbox_code,
                     allowed_cashbox_codes, preview_login, preview_password_hash,
                     can_view_all_cashboxes, can_add_expense,
-                    can_reconcile, updated_at
+                    can_reconcile, can_receive_push, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     owner_chat_id = excluded.owner_chat_id,
                     enabled = excluded.enabled,
@@ -1787,6 +1805,7 @@ class Storage:
                     can_view_all_cashboxes = excluded.can_view_all_cashboxes,
                     can_add_expense = excluded.can_add_expense,
                     can_reconcile = excluded.can_reconcile,
+                    can_receive_push = excluded.can_receive_push,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1801,6 +1820,7 @@ class Storage:
                     1 if can_view_all_cashboxes else 0,
                     1 if can_add_expense else 0,
                     1 if can_reconcile else 0,
+                    1 if can_receive_push else 0,
                     datetime.utcnow().isoformat(),
                 ),
             )
@@ -1835,6 +1855,104 @@ class Storage:
                 (user_id,),
             ).fetchone()
         return row["preview_password_hash"] if row else ""
+
+    def upsert_cash_push_subscription(
+        self,
+        owner_chat_id: int,
+        user_id: int,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+        user_agent: str = "",
+    ) -> bool:
+        endpoint = endpoint.strip()
+        if not endpoint:
+            return False
+        user = self.get_web_user_by_id(user_id)
+        if user is None or int(user["owner_chat_id"]) != owner_chat_id:
+            return False
+        now = datetime.utcnow().isoformat()
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO cash_push_subscriptions (
+                    owner_chat_id, user_id, endpoint, p256dh, auth, user_agent, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_chat_id, endpoint) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    p256dh = excluded.p256dh,
+                    auth = excluded.auth,
+                    user_agent = excluded.user_agent,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    owner_chat_id,
+                    user_id,
+                    endpoint,
+                    p256dh.strip(),
+                    auth.strip(),
+                    user_agent.strip()[:500],
+                    now,
+                    now,
+                ),
+            )
+        return True
+
+    def delete_cash_push_subscription(self, owner_chat_id: int, endpoint: str) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM cash_push_subscriptions WHERE owner_chat_id = ? AND endpoint = ?",
+                (owner_chat_id, endpoint.strip()),
+            )
+            return cursor.rowcount > 0
+
+    def list_cash_push_subscriptions_for_recipients(self, owner_chat_id: int) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT s.id, s.owner_chat_id, s.user_id, s.endpoint, s.p256dh, s.auth,
+                       s.user_agent, s.created_at, s.updated_at,
+                       u.full_name, u.email
+                FROM cash_push_subscriptions s
+                JOIN web_users u ON u.id = s.user_id
+                JOIN mobile_cash_access a ON a.user_id = s.user_id
+                WHERE s.owner_chat_id = ?
+                  AND u.is_active = 1
+                  AND a.enabled = 1
+                  AND a.can_receive_push = 1
+                ORDER BY s.updated_at DESC, s.id DESC
+                """,
+                (owner_chat_id,),
+            ).fetchall()
+        return [
+            {
+                "id": int(row["id"]),
+                "owner_chat_id": int(row["owner_chat_id"]),
+                "user_id": int(row["user_id"]),
+                "endpoint": row["endpoint"],
+                "p256dh": row["p256dh"],
+                "auth": row["auth"],
+                "user_agent": row["user_agent"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "full_name": row["full_name"],
+                "login": row["email"],
+            }
+            for row in rows
+        ]
+
+    def count_cash_push_subscriptions_for_user(self, owner_chat_id: int, user_id: int) -> int:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM cash_push_subscriptions
+                WHERE owner_chat_id = ? AND user_id = ?
+                """,
+                (owner_chat_id, user_id),
+            ).fetchone()
+        return int(row["count"] or 0) if row else 0
 
     def list_web_users(self, owner_chat_id: int) -> list[dict]:
         with self.connection() as conn:
@@ -6903,6 +7021,7 @@ class Storage:
                 "can_view_all_cashboxes": True,
                 "can_add_expense": True,
                 "can_reconcile": True,
+                "can_receive_push": False,
                 "updated_at": "",
             }
         if "денис" in login_name or "denis" in login_name or "учайкин" in login_name:
@@ -6918,6 +7037,7 @@ class Storage:
                 "can_view_all_cashboxes": False,
                 "can_add_expense": True,
                 "can_reconcile": True,
+                "can_receive_push": False,
                 "updated_at": "",
             }
         return {
@@ -6932,6 +7052,7 @@ class Storage:
             "can_view_all_cashboxes": False,
             "can_add_expense": False,
             "can_reconcile": False,
+            "can_receive_push": False,
             "updated_at": "",
         }
 
@@ -6948,6 +7069,7 @@ class Storage:
             "can_view_all_cashboxes": bool(row["can_view_all_cashboxes"]),
             "can_add_expense": bool(row["can_add_expense"]),
             "can_reconcile": bool(row["can_reconcile"]),
+            "can_receive_push": bool(row["can_receive_push"]) if "can_receive_push" in row.keys() else False,
             "updated_at": row["updated_at"],
         }
 

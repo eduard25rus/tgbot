@@ -5,6 +5,7 @@ import os
 import csv
 import hashlib
 import io
+import json
 import secrets
 import re
 import sqlite3
@@ -802,6 +803,70 @@ def resolve_cash_receipt_file(storage: Storage, entry) -> tuple[Path, str, str]:
     return absolute_path, safe_filename, content_type
 
 
+def send_cash_push(storage: Storage, owner_chat_id: int, payload: dict) -> tuple[int, int]:
+    public_key = cash_push_public_key()
+    private_key = cash_push_private_key()
+    if not public_key or not private_key:
+        return 0, 0
+    try:
+        from pywebpush import WebPushException
+        from pywebpush import webpush
+    except Exception:
+        return 0, 0
+
+    subscriptions = storage.list_cash_push_subscriptions_for_recipients(owner_chat_id)
+    sent_count = 0
+    failed_count = 0
+    vapid_claims = {
+        "sub": os.getenv("CASH_PUSH_VAPID_SUBJECT", os.getenv("VAPID_SUBJECT", "mailto:admin@felisgroup.ru")).strip(),
+    }
+    data = json.dumps(payload, ensure_ascii=False)
+    for subscription in subscriptions:
+        webpush_subscription = {
+            "endpoint": subscription["endpoint"],
+            "keys": {
+                "p256dh": subscription["p256dh"],
+                "auth": subscription["auth"],
+            },
+        }
+        try:
+            webpush(
+                subscription_info=webpush_subscription,
+                data=data,
+                vapid_private_key=private_key,
+                vapid_claims=vapid_claims,
+            )
+            sent_count += 1
+        except WebPushException as exc:
+            failed_count += 1
+            response = getattr(exc, "response", None)
+            status_code = getattr(response, "status_code", None)
+            if status_code in {404, 410}:
+                storage.delete_cash_push_subscription(owner_chat_id, subscription["endpoint"])
+        except Exception:
+            failed_count += 1
+    return sent_count, failed_count
+
+
+def notify_cash_expense_created(
+    storage: Storage,
+    owner_chat_id: int,
+) -> tuple[int, int]:
+    return send_cash_push(
+        storage,
+        owner_chat_id,
+        {
+            "title": "Касса",
+            "body": "В мобильной кассе появилось обновление.",
+            "tag": "cash-expense-created",
+            "url": "/cashoperations",
+            "data": {
+                "kind": "cash_update",
+            },
+        },
+    )
+
+
 def parse_amount(raw: str) -> float:
     amount = float(raw.strip().replace(" ", "").replace(",", "."))
     if amount < 0:
@@ -1038,6 +1103,18 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
     salt, expected = stored_hash.split("$", 1)
     return hash_password(password, salt) == f"{salt}${expected}"
+
+
+def cash_push_public_key() -> str:
+    return os.getenv("CASH_PUSH_VAPID_PUBLIC_KEY", os.getenv("VAPID_PUBLIC_KEY", "")).strip()
+
+
+def cash_push_private_key() -> str:
+    return os.getenv("CASH_PUSH_VAPID_PRIVATE_KEY", os.getenv("VAPID_PRIVATE_KEY", "")).strip()
+
+
+def cash_push_enabled() -> bool:
+    return bool(cash_push_public_key() and cash_push_private_key())
 
 
 def parse_cookies(environ) -> dict[str, str]:
@@ -12096,6 +12173,8 @@ def render_cashoperations_body(
           </section>
         </section>
         """
+    push_public_key = cash_push_public_key()
+    push_allowed = bool(cash_access.get("can_receive_push") and push_public_key)
     allowed_cashboxes = cashboxes if cash_access["can_view_all_cashboxes"] else [
         item for item in cashboxes if item["code"] in set(cash_access["allowed_cashbox_codes"])
     ]
@@ -12299,6 +12378,24 @@ def render_cashoperations_body(
             f'факт {escape(format_amount(latest_reconciliation["actual_balance"]))}, '
             f'разница {escape(format_amount(latest_reconciliation["difference"]))}</div>'
         )
+
+    push_status_html = ""
+    if cash_access.get("can_receive_push"):
+        if push_public_key:
+            push_status_html = """
+            <section class="cash-mobile-panel cash-push-panel">
+              <div class="cash-mobile-section-head"><h2>Уведомления</h2></div>
+              <div class="cash-mobile-sub" data-cash-push-status>Можно включить пуши на этом телефоне.</div>
+              <button class="cash-mobile-action secondary" type="button" data-cash-push-enable>Включить уведомления</button>
+            </section>
+            """
+        else:
+            push_status_html = """
+            <section class="cash-mobile-panel cash-push-panel">
+              <div class="cash-mobile-section-head"><h2>Уведомления</h2></div>
+              <div class="cash-mobile-sub">Получение пушей разрешено, но на сервере еще не настроены VAPID-ключи.</div>
+            </section>
+            """
 
     expense_screen = '<div class="cash-mobile-empty">Нет прав на добавление расходов.</div>'
     if can_edit:
@@ -12817,6 +12914,7 @@ def render_cashoperations_body(
           <div class="cash-mobile-section-head"><h2>Последние операции</h2></div>
           {latest_rows}
         </section>
+        {push_status_html}
       </section>
       <section id="cashScreenExpense" class="cash-mobile-screen">{expense_screen}</section>
       <section id="cashScreenIncome" class="cash-mobile-screen">{income_screen}</section>
@@ -12891,12 +12989,16 @@ def render_cashoperations_body(
         const receiptViewerTitle = document.querySelector("[data-cash-receipt-viewer-title]");
         const receiptFrame = document.querySelector("[data-cash-receipt-frame]");
         const removeReceiptInput = document.querySelector("[data-cash-remove-receipt]");
+        const pushEnable = document.querySelector("[data-cash-push-enable]");
+        const pushStatus = document.querySelector("[data-cash-push-status]");
         let editBackScreen = "history";
         let formDirty = false;
         let isSubmitting = false;
         let currentExpenseHasReceipt = false;
         let selectedReceiptPreviewUrl = "";
         const loadedAt = Date.now();
+        const cashPushPublicKey = {json.dumps(push_public_key)};
+        const cashPushAllowed = {"true" if push_allowed else "false"};
         function randomKey() {{
           if (window.crypto && crypto.getRandomValues) {{
             const bytes = new Uint8Array(12);
@@ -12904,6 +13006,50 @@ def render_cashoperations_body(
             return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
           }}
           return String(Date.now()) + Math.random().toString(16).slice(2);
+        }}
+        function base64UrlToUint8Array(value) {{
+          const padding = "=".repeat((4 - value.length % 4) % 4);
+          const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+          const raw = atob(base64);
+          return Uint8Array.from([...raw].map((char) => char.charCodeAt(0)));
+        }}
+        function setPushStatus(message) {{
+          if (pushStatus) pushStatus.textContent = message;
+        }}
+        async function enableCashPush() {{
+          if (!cashPushAllowed || !cashPushPublicKey) {{
+            setPushStatus("Пуши для этого пользователя пока не включены в CRM.");
+            return;
+          }}
+          if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {{
+            setPushStatus("Этот браузер не поддерживает push-уведомления для веб-приложений.");
+            return;
+          }}
+          try {{
+            setPushStatus("Запрашиваем разрешение...");
+            const permission = await Notification.requestPermission();
+            if (permission !== "granted") {{
+              setPushStatus("Уведомления не разрешены на этом телефоне.");
+              return;
+            }}
+            const registration = await navigator.serviceWorker.register("/cash-sw.js");
+            const existing = await registration.pushManager.getSubscription();
+            if (existing) await existing.unsubscribe();
+            const subscription = await registration.pushManager.subscribe({{
+              userVisibleOnly: true,
+              applicationServerKey: base64UrlToUint8Array(cashPushPublicKey)
+            }});
+            const response = await fetch("/cashoperations/push/subscribe", {{
+              method: "POST",
+              headers: {{ "Content-Type": "application/json" }},
+              body: JSON.stringify(subscription.toJSON())
+            }});
+            if (!response.ok) throw new Error("subscribe_failed");
+            setPushStatus("Уведомления включены на этом телефоне.");
+            if (pushEnable) pushEnable.textContent = "Уведомления включены";
+          }} catch (_err) {{
+            setPushStatus("Не удалось включить уведомления. Проверьте, что касса открыта с иконки на экране Домой.");
+          }}
         }}
         function activeScreenName() {{
           const active = Object.entries(screens).find(([_key, el]) => el && el.classList.contains("active"));
@@ -13138,6 +13284,7 @@ def render_cashoperations_body(
         document.addEventListener("keydown", (event) => {{
           if (event.key === "Escape") closeReceiptViewer();
         }});
+        pushEnable && pushEnable.addEventListener("click", enableCashPush);
         expenseForm && expenseForm.addEventListener("input", () => {{
           formDirty = true;
         }});
@@ -13205,6 +13352,11 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Касса">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="/cash-manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260420b">
   <title>Касса</title>
   <style>
     :root {{
@@ -13293,6 +13445,11 @@ def render_cashoperations_login_page(error: str = "", login_hint: str = "") -> s
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Касса">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="/cash-manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260420b">
   <title>Вход в кассу</title>
   <style>
     * {{ box-sizing: border-box; }}
@@ -14346,6 +14503,7 @@ def render_access_section(
     users = storage.list_web_users(owner_chat_id)
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     mobile_cash_access = storage.list_mobile_cash_access(owner_chat_id)
+    push_server_ready = cash_push_enabled()
     base_setup_url = f"{base_url.rstrip('/')}/setup-password?token="
     stats = f"""
     <section class="stats">
@@ -14488,6 +14646,7 @@ def render_access_section(
     for user_access in mobile_cash_access:
         user = user_access["user"]
         allowed_codes = set(user_access["allowed_cashbox_codes"])
+        push_device_count = storage.count_cash_push_subscriptions_for_user(owner_chat_id, user["id"])
         cashbox_checks = "".join(
             f"""
             <label>
@@ -14509,6 +14668,7 @@ def render_access_section(
                   <div class="badge-row">
                     <span class="badge{" danger" if not user_access["enabled"] else ""}">{"Касса включена" if user_access["enabled"] else "Касса отключена"}</span>
                     <span class="badge">{escape(user_access["role"])}</span>
+                    <span class="badge{" warn" if user_access["can_receive_push"] and push_device_count == 0 else ""}">Пуш-устройств: {push_device_count}</span>
                   </div>
                 </div>
                 <label class="advance-toggle">
@@ -14545,6 +14705,7 @@ def render_access_section(
                     <label><input type="checkbox" name="can_view_all_cashboxes" value="1" {"checked" if user_access["can_view_all_cashboxes"] else ""}> Видит все кассы</label>
                     <label><input type="checkbox" name="can_add_expense" value="1" {"checked" if user_access["can_add_expense"] else ""}> Может добавлять расходы</label>
                     <label><input type="checkbox" name="can_reconcile" value="1" {"checked" if user_access["can_reconcile"] else ""}> Может сверять кассу</label>
+                    <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Получает пуши</label>
                   </div>
                 </div>
                 <button class="submit-btn" type="submit">Сохранить кассовый доступ</button>
@@ -14559,6 +14720,7 @@ def render_access_section(
         <div>
           <h2 class="panel-title">Настройка веб-приложения касс</h2>
           <div class="panel-sub">Кто входит в мобильную кассу, какую кассу видит и какие действия может выполнять.</div>
+          <div class="panel-sub">Пуш-сервер: {"настроен" if push_server_ready else "нужны VAPID-ключи в переменных окружения"}</div>
         </div>
         <a class="secondary-btn" href="/cashoperations" target="_blank" rel="noopener">Открыть кассу</a>
       </div>
@@ -15338,6 +15500,21 @@ def read_post_data(environ) -> dict[str, str]:
     return {key: values[0] for key, values in parsed.items()}
 
 
+def read_json_data(environ) -> dict:
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "0") or "0")
+    except ValueError:
+        length = 0
+    raw = environ["wsgi.input"].read(length)
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, list[UploadedFile]]]:
     try:
         length = int(environ.get("CONTENT_LENGTH", "0") or "0")
@@ -15584,6 +15761,76 @@ def app(environ, start_response):
         )
         return [logo_path.read_bytes()]
 
+    if path == "/cash-manifest.webmanifest" and method == "GET":
+        manifest = {
+            "id": "/cashoperations",
+            "name": "Касса Felis",
+            "short_name": "Касса",
+            "start_url": "/cashoperations",
+            "scope": "/",
+            "display": "standalone",
+            "background_color": "#f4f6f2",
+            "theme_color": "#186844",
+            "icons": [
+                {"src": "/apple-touch-icon.png?v=20260420b", "sizes": "180x180", "type": "image/png"},
+                {"src": "/favicon.png?v=20260420b", "sizes": "512x512", "type": "image/png"},
+            ],
+        }
+        start_response(
+            "200 OK",
+            [
+                ("Content-Type", "application/manifest+json; charset=utf-8"),
+                ("Cache-Control", "no-store, max-age=0"),
+            ],
+        )
+        return [json.dumps(manifest, ensure_ascii=False).encode("utf-8")]
+
+    if path == "/cash-sw.js" and method == "GET":
+        service_worker = """
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (_err) {
+    payload = { title: "Касса", body: event.data ? event.data.text() : "" };
+  }
+  const title = payload.title || "Касса";
+  const options = {
+    body: payload.body || "",
+    tag: payload.tag || "cash",
+    icon: "/apple-touch-icon.png?v=20260420b",
+    badge: "/favicon.png?v=20260420b",
+    data: payload.data || {},
+  };
+  options.data.url = payload.url || options.data.url || "/cashoperations";
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = new URL((event.notification.data && event.notification.data.url) || "/cashoperations", self.location.origin).href;
+  event.waitUntil((async () => {
+    const clientList = await clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of clientList) {
+      if ("focus" in client) {
+        await client.navigate(targetUrl);
+        return client.focus();
+      }
+    }
+    return clients.openWindow(targetUrl);
+  })());
+});
+"""
+        start_response(
+            "200 OK",
+            [
+                ("Content-Type", "application/javascript; charset=utf-8"),
+                ("Service-Worker-Allowed", "/"),
+                ("Cache-Control", "no-store, max-age=0"),
+            ],
+        )
+        return [service_worker.encode("utf-8")]
+
     if path == "/login" and method == "POST":
         form = read_post_data(environ)
         user = storage.get_web_user_by_login(form.get("login", ""))
@@ -15768,6 +16015,33 @@ def app(environ, start_response):
             ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
         ])
         return [html.encode("utf-8")]
+
+    if path == "/cashoperations/push/subscribe" and method == "POST":
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        if not cash_access or not cash_access["enabled"] or not cash_access.get("can_receive_push"):
+            start_response("403 Forbidden", [("Content-Type", "application/json; charset=utf-8")])
+            return [b'{"ok":false,"error":"push_disabled"}']
+        if not cash_push_public_key():
+            start_response("503 Service Unavailable", [("Content-Type", "application/json; charset=utf-8")])
+            return [b'{"ok":false,"error":"push_not_configured"}']
+        payload = read_json_data(environ)
+        endpoint = str(payload.get("endpoint", "")).strip()
+        keys = payload.get("keys") if isinstance(payload.get("keys"), dict) else {}
+        p256dh = str(keys.get("p256dh", "")).strip()
+        auth = str(keys.get("auth", "")).strip()
+        if not endpoint or not p256dh or not auth:
+            start_response("400 Bad Request", [("Content-Type", "application/json; charset=utf-8")])
+            return [b'{"ok":false,"error":"bad_subscription"}']
+        storage.upsert_cash_push_subscription(
+            current_owner,
+            int(current_user["id"]),
+            endpoint,
+            p256dh,
+            auth,
+            environ.get("HTTP_USER_AGENT", ""),
+        )
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [b'{"ok":true}']
 
     if path.startswith("/cashoperations/receipt/") and path.endswith("/file") and method == "GET":
         cashboxes = storage.list_cashbox_directory(current_owner)
@@ -18558,6 +18832,7 @@ def app(environ, start_response):
                 form.get("can_view_all_cashboxes") == "1",
                 form.get("can_add_expense") == "1",
                 form.get("can_reconcile") == "1",
+                form.get("can_receive_push") == "1",
             )
             if not updated:
                 raise ValueError("Пользователь не найден")
