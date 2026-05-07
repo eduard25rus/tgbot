@@ -7076,6 +7076,39 @@ def layout(
     .directory-edit-form .submit-btn {{
       font-weight: 500;
     }}
+    .directory-card-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+    }}
+    .directory-card-menu {{
+      display: block;
+    }}
+    .directory-card-menu summary {{
+      display: block;
+    }}
+    .directory-card {{
+      display: grid;
+      gap: 10px;
+      min-height: 158px;
+      align-content: start;
+      color: inherit;
+      text-decoration: none;
+    }}
+    .directory-card:hover {{
+      border-color: rgba(29, 92, 99, 0.34);
+      box-shadow: 0 18px 42px rgba(22, 35, 47, 0.12);
+    }}
+    .directory-card-title {{
+      font-size: 21px;
+      font-weight: 700;
+      line-height: 1.25;
+    }}
+    .directory-card-meta {{
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }}
     .auction-added-tooltip {{
       position: relative;
       cursor: default;
@@ -9232,79 +9265,85 @@ def render_directories_section(
         </section>
         """
 
-    contract_object_rows = "".join(
-        f"""
-        <tr>
-          <td>
-            <div class="timeline-title">
-              {f'''
-              <details class="status-menu directory-edit-menu">
-                <summary><span class="directory-title-link">{escape(contract.object_name.strip() or contract.title)}</span></summary>
-                <div class="status-popover" style="min-width:420px;">
-                  <form class="form-grid directory-edit-form" method="post" action="/directories/contracts/{contract.id}/update?owner={owner_chat_id}">
-                    <div class="field" style="grid-column: 1 / -1;">
-                      <label>Название объекта</label>
-                      <input type="text" name="object_name" value="{escape(contract.object_name or contract.title)}" required>
-                    </div>
-                    <div class="field" style="grid-column: 1 / -1;">
-                      <label>Адрес объекта</label>
-                      <input type="text" name="object_address" value="{escape(contract.object_address)}">
-                    </div>
-                    <div class="field" style="grid-column: 1 / -1;">
-                      <label>Заказчик</label>
-                      <input type="text" name="object_customer" value="{escape(contract.object_customer)}" placeholder="Например, МБУ ДО СШ">
-                    </div>
-                    <button class="submit-btn" type="submit">Сохранить объект</button>
-                  </form>
-                </div>
-              </details>
-              ''' if can_edit else escape(contract.object_name.strip() or contract.title)}
-            </div>
-            {f'<div class="contract-table-subtle">Заказчик: {escape(contract.object_customer)}</div>' if contract.object_customer else '<div class="contract-table-subtle">Заказчик: не указан</div>'}
-            {f'<div class="contract-table-subtle">{escape(contract.object_address)}</div>' if contract.object_address else ''}
-          </td>
-          <td><span class="chip">Контракт</span></td>
-          <td><div class="contract-table-subtle">Текущий объект контракта. Используется в переписке и карточке контракта.</div></td>
-        </tr>
+    def render_directory_card(
+        title: str,
+        badges: list[str],
+        meta_lines: list[str],
+        edit_form: str = "",
+    ) -> str:
+        badges_html = "".join(f'<span class="badge">{escape(badge)}</span>' for badge in badges)
+        meta_html = "".join(f'<div class="directory-card-meta">{escape(line)}</div>' for line in meta_lines if line)
+        card_html = f"""
+        <div class="card mini-card contract-table-link directory-card">
+          <div class="badge-row">{badges_html}</div>
+          <div class="directory-card-title">{escape(title)}</div>
+          {meta_html}
+        </div>
         """
+        if not can_edit or not edit_form:
+            return f"<article>{card_html}</article>"
+        return f"""
+        <details class="status-menu directory-card-menu">
+          <summary>{card_html}</summary>
+          <div class="status-popover" style="min-width:420px;">
+            {edit_form}
+          </div>
+        </details>
+        """
+
+    contract_object_cards = "".join(
+        render_directory_card(
+            contract.object_name.strip() or contract.title,
+            ["Контракт"],
+            [
+                f"Заказчик: {contract.object_customer}" if contract.object_customer else "Заказчик: не указан",
+                contract.object_address,
+            ],
+            f"""
+            <form class="form-grid directory-edit-form" method="post" action="/directories/contracts/{contract.id}/update?owner={owner_chat_id}">
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Название объекта</label>
+                <input type="text" name="object_name" value="{escape(contract.object_name or contract.title)}" required>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Адрес объекта</label>
+                <input type="text" name="object_address" value="{escape(contract.object_address)}">
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Заказчик</label>
+                <input type="text" name="object_customer" value="{escape(contract.object_customer)}" placeholder="Например, МБУ ДО СШ">
+              </div>
+              <button class="submit-btn" type="submit">Сохранить объект</button>
+            </form>
+            """,
+        )
         for contract in contracts
     )
-    manual_object_rows = "".join(
-        f"""
-        <tr>
-          <td>
-            <div class="timeline-title">
-              {f'''
-              <details class="status-menu directory-edit-menu">
-                <summary><span class="directory-title-link">{escape(object_item.name)}</span></summary>
-                <div class="status-popover" style="min-width:420px;">
-                  <form class="form-grid directory-edit-form" method="post" action="/directories/objects/update?owner={owner_chat_id}">
-                    <input type="hidden" name="old_name" value="{escape(object_item.name)}">
-                    <div class="field" style="grid-column: 1 / -1;">
-                      <label>Название объекта</label>
-                      <input type="text" name="new_name" value="{escape(object_item.name)}" required>
-                    </div>
-                    <div class="field" style="grid-column: 1 / -1;">
-                      <label>Заказчик</label>
-                      <input type="text" name="customer" value="{escape(object_item.customer)}" placeholder="Например, МБУ ДО СШ">
-                    </div>
-                    <button class="submit-btn" type="submit">Сохранить объект</button>
-                  </form>
-                </div>
-              </details>
-              ''' if can_edit else escape(object_item.name)}
-            </div>
-            <div class="contract-table-subtle">Заказчик: {escape(object_item.customer) if object_item.customer else 'не указан'}</div>
-          </td>
-          <td><span class="chip">Ручной объект</span></td>
-          <td><div class="contract-table-subtle">Используется в переписке, судах и будущих юридических разделах</div></td>
-        </tr>
-        """
+    manual_object_cards = "".join(
+        render_directory_card(
+            object_item.name,
+            ["Ручной объект"],
+            [f"Заказчик: {object_item.customer}" if object_item.customer else "Заказчик: не указан"],
+            f"""
+            <form class="form-grid directory-edit-form" method="post" action="/directories/objects/update?owner={owner_chat_id}">
+              <input type="hidden" name="old_name" value="{escape(object_item.name)}">
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Название объекта</label>
+                <input type="text" name="new_name" value="{escape(object_item.name)}" required>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Заказчик</label>
+                <input type="text" name="customer" value="{escape(object_item.customer)}" placeholder="Например, МБУ ДО СШ">
+              </div>
+              <button class="submit-btn" type="submit">Сохранить объект</button>
+            </form>
+            """,
+        )
         for object_item in manual_objects
     )
-    object_rows = contract_object_rows + manual_object_rows
-    if not object_rows:
-        object_rows = '<tr><td colspan="3">Объекты пока не заведены.</td></tr>'
+    object_cards = contract_object_cards + manual_object_cards
+    if not object_cards:
+        object_cards = '<div class="empty">Объекты пока не заведены.</div>'
     add_object_block = ""
     if can_edit:
         add_object_block = f"""
@@ -9327,33 +9366,23 @@ def render_directories_section(
         """
 
     default_expense_category_codes = {code for code, _label in DEFAULT_EXPENSE_CATEGORIES}
-    expense_category_rows = "".join(
-        f"""
-        <tr>
-          <td>
-            <div class="timeline-title">
-              {f'''
-              <details class="status-menu directory-edit-menu">
-                <summary><span class="directory-title-link">{escape(category.label)}</span></summary>
-                <div class="status-popover" style="min-width:420px;">
-                  <form class="form-grid directory-edit-form" method="post" action="/directories/expense-categories/{category.id}/update?owner={owner_chat_id}">
-                    <div class="field" style="grid-column: 1 / -1;">
-                      <label>Название категории</label>
-                      <input type="text" name="label" value="{escape(category.label)}" required>
-                    </div>
-                    <button class="submit-btn" type="submit">Сохранить категорию</button>
-                  </form>
-                </div>
-              </details>
-              ''' if can_edit else escape(category.label)}
-            </div>
-          </td>
-          <td><span class="chip">{'Базовая' if category.code in default_expense_category_codes else 'Своя'}</span></td>
-          <td><div class="contract-table-subtle">Используется в выборе группы расхода и фильтрах реестра расходов.</div></td>
-        </tr>
-        """
+    expense_category_cards = "".join(
+        render_directory_card(
+            category.label,
+            ["Базовая" if category.code in default_expense_category_codes else "Своя"],
+            [],
+            f"""
+            <form class="form-grid directory-edit-form" method="post" action="/directories/expense-categories/{category.id}/update?owner={owner_chat_id}">
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Название категории</label>
+                <input type="text" name="label" value="{escape(category.label)}" required>
+              </div>
+              <button class="submit-btn" type="submit">Сохранить категорию</button>
+            </form>
+            """,
+        )
         for category in expense_categories
-    ) or '<tr><td colspan="3">Категорий расходов пока нет.</td></tr>'
+    ) or '<div class="empty">Категорий расходов пока нет.</div>'
     add_expense_category_block = ""
     if can_edit:
         add_expense_category_block = f"""
@@ -9532,16 +9561,9 @@ def render_directories_section(
         <div class="action-row access-detail-actions">{back_link}{add_object_block}</div>
       </div>
       {flash_html}
-      <table class="table contract-table">
-        <thead>
-          <tr>
-            <th>Объект</th>
-            <th class="nowrap">Тип</th>
-            <th>Где редактировать</th>
-          </tr>
-        </thead>
-        <tbody>{object_rows}</tbody>
-      </table>
+      <div class="directory-card-grid">
+        {object_cards}
+      </div>
     </section>
     """
     expense_categories_section = f"""
@@ -9554,16 +9576,9 @@ def render_directories_section(
         <div class="action-row access-detail-actions">{back_link}{add_expense_category_block}</div>
       </div>
       {flash_html}
-      <table class="table contract-table">
-        <thead>
-          <tr>
-            <th>Категория</th>
-            <th class="nowrap">Тип</th>
-            <th>Где используется</th>
-          </tr>
-        </thead>
-        <tbody>{expense_category_rows}</tbody>
-      </table>
+      <div class="directory-card-grid">
+        {expense_category_cards}
+      </div>
     </section>
     """
     employees_section = f"""
