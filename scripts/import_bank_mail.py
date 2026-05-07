@@ -129,6 +129,37 @@ def iter_statement_sources(message: Message):
         yield download_statement_link(link)
 
 
+def add_mail_import_error(
+    storage: Storage,
+    owner_chat_id: int,
+    login: str,
+    folder: str,
+    uid_text: str,
+    subject: str,
+    message_from: str,
+    message: Message,
+    filename: str,
+    error: Exception,
+) -> None:
+    storage.add_bank_statement_mail_import(
+        owner_chat_id,
+        login,
+        folder,
+        uid_text,
+        subject,
+        message_from,
+        message_date(message),
+        filename,
+        "",
+        "error",
+        0,
+        0,
+        0,
+        0,
+        str(error),
+    )
+
+
 def imap_ok(response) -> bool:
     return bool(response) and response[0] == "OK"
 
@@ -175,7 +206,27 @@ def run_bank_mail_import() -> tuple[int, int, int]:
             uid_text = uid.decode("ascii", errors="ignore")
             message_had_statement = False
             message_had_errors = False
-            for filename, payload in iter_statement_sources(message):
+            statement_sources: list[tuple[str, bytes]] = list(iter_txt_attachments(message))
+            for link in iter_sber_statement_links(message):
+                message_had_statement = True
+                try:
+                    statement_sources.append(download_statement_link(link))
+                except Exception as exc:
+                    message_had_errors = True
+                    error_files += 1
+                    add_mail_import_error(
+                        storage,
+                        owner_chat_id,
+                        login,
+                        folder,
+                        uid_text,
+                        subject,
+                        message_from,
+                        message,
+                        "Ссылка на выписку Сбера",
+                        exc,
+                    )
+            for filename, payload in statement_sources:
                 message_had_statement = True
                 attachment_hash = hashlib.sha256(payload).hexdigest()
                 if storage.bank_statement_mail_attachment_exists(owner_chat_id, attachment_hash):
@@ -209,22 +260,17 @@ def run_bank_mail_import() -> tuple[int, int, int]:
                 except Exception as exc:
                     message_had_errors = True
                     error_files += 1
-                    storage.add_bank_statement_mail_import(
+                    add_mail_import_error(
+                        storage,
                         owner_chat_id,
                         login,
                         folder,
                         uid_text,
                         subject,
                         message_from,
-                        message_date(message),
+                        message,
                         filename,
-                        attachment_hash,
-                        "error",
-                        0,
-                        0,
-                        0,
-                        0,
-                        str(exc),
+                        exc,
                     )
             if mark_seen and message_had_statement and not message_had_errors:
                 imap.uid("store", uid, "+FLAGS", r"(\Seen)")
