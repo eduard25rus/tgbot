@@ -6572,6 +6572,17 @@ def layout(
       max-width: min(620px, calc(100vw - 64px));
       padding: 14px;
     }}
+    .access-cashbox-popover {{
+      min-width: min(460px, calc(100vw - 64px));
+      max-width: min(560px, calc(100vw - 64px));
+      padding: 14px;
+    }}
+    .access-cash-toggle-row {{
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }}
     .access-cash-grid {{
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6586,10 +6597,10 @@ def layout(
     .access-cash-grid .span-2 {{
       grid-column: 1 / -1;
     }}
-    .access-cash-grid.is-disabled {{
+    .access-cash-grid.is-collapsed {{
       grid-template-columns: 1fr;
     }}
-    .access-cash-grid.is-disabled .cash-setting {{
+    .access-cash-grid.is-collapsed .cash-setting {{
       display: none;
     }}
     .cash-setting[hidden] {{
@@ -7517,19 +7528,21 @@ function copyText(inputId) {{
   document.execCommand("copy");
 }}
 
-document.addEventListener("change", (event) => {{
-  const cashAccessToggle = event.target.closest(".js-cash-access-enabled");
-  if (!cashAccessToggle) {{
+document.addEventListener("click", (event) => {{
+  const settingsToggle = event.target.closest(".js-cash-settings-toggle");
+  if (!settingsToggle) {{
     return;
   }}
-  const grid = cashAccessToggle.closest(".access-cash-grid");
+  const grid = settingsToggle.closest(".access-cash-grid");
   if (!grid) {{
     return;
   }}
-  grid.classList.toggle("is-disabled", !cashAccessToggle.checked);
+  const isOpening = grid.classList.contains("is-collapsed");
+  grid.classList.toggle("is-collapsed", !isOpening);
   grid.querySelectorAll(".cash-setting").forEach((item) => {{
-    item.hidden = !cashAccessToggle.checked;
+    item.hidden = !isOpening;
   }});
+  settingsToggle.textContent = isOpening ? "Скрыть настройки" : "Показать настройки";
 }});
 
 document.addEventListener("toggle", (event) => {{
@@ -15050,7 +15063,7 @@ def render_access_section(
     for user_access in mobile_cash_access:
         user = user_access["user"]
         cash_enabled = bool(user_access["enabled"])
-        cash_settings_hidden = "" if cash_enabled else " hidden"
+        cash_settings_hidden = " hidden"
         allowed_codes = set(user_access["allowed_cashbox_codes"])
         push_device_count = storage.count_cash_push_subscriptions_for_user(owner_chat_id, user["id"])
         push_detail_mode = user_access.get("push_detail_mode") if user_access.get("push_detail_mode") in {"safe", "amount"} else "safe"
@@ -15080,10 +15093,13 @@ def render_access_section(
                     <span class="badge">Пуши: {push_mode_label}</span>
                   </div>
                 </div>
-                <div class="access-cash-grid{" is-disabled" if not cash_enabled else ""}">
-                  <label class="advance-toggle span-2">
-                    <input class="toggle-checkbox js-cash-access-enabled" type="checkbox" name="enabled" value="1" {"checked" if cash_enabled else ""}> Разрешить вход в мобильную кассу
-                  </label>
+                <div class="access-cash-grid is-collapsed">
+                  <div class="access-cash-toggle-row span-2">
+                    <label class="advance-toggle">
+                      <input class="toggle-checkbox js-cash-access-enabled" type="checkbox" name="enabled" value="1" {"checked" if cash_enabled else ""}> Разрешить вход в мобильную кассу
+                    </label>
+                    <button class="secondary-btn mini js-cash-settings-toggle" type="button">Показать настройки</button>
+                  </div>
                   <div class="field cash-setting"{cash_settings_hidden}>
                     <label>Роль в кассе</label>
                     <select name="role">
@@ -15135,6 +15151,21 @@ def render_access_section(
             """
         )
 
+    add_cashbox_block = f"""
+    <details class="status-menu settings-menu">
+      <summary><span class="secondary-btn">Добавить кассу</span></summary>
+      <div class="status-popover align-right access-cashbox-popover">
+        <form class="form-grid" method="post" action="/access/cashboxes/new?owner={owner_chat_id}&mode=cash">
+          <div class="field">
+            <label>Касса сотрудника</label>
+            <input type="text" name="label" placeholder="Например, Касса Ильи">
+          </div>
+          <button class="submit-btn" type="submit">Добавить кассу</button>
+        </form>
+      </div>
+    </details>
+    """
+
     cash_settings_html = f"""
     <section class="card panel" id="cash-app-settings">
       <div class="panel-head">
@@ -15145,18 +15176,10 @@ def render_access_section(
         </div>
         <div class="action-row access-detail-actions">
           <a class="secondary-btn" href="/access?owner={owner_chat_id}">← К выбору настроек</a>
-          <a class="secondary-btn" href="/cashoperations" target="_blank" rel="noopener">Открыть кассу</a>
+          {add_cashbox_block}
         </div>
       </div>
       <div class="access-stack">{''.join(cash_access_cards) or '<div class="contract-meta">Пользователей пока нет.</div>'}</div>
-      <div class="settings-divider"></div>
-      <form class="form-grid" method="post" action="/access/cashboxes/new?owner={owner_chat_id}&mode=cash">
-        <div class="field">
-          <label>Добавить кассу сотрудника</label>
-          <input type="text" name="label" placeholder="Например, Касса Ильи">
-        </div>
-        <button class="secondary-btn" type="submit">Добавить кассу</button>
-      </form>
     </section>
     """
 
