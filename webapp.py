@@ -16300,6 +16300,7 @@ self.addEventListener("notificationclick", (event) => {
             )
             upload = next((item for item in files.get("receipt_file", []) if item.data), None)
             save_cash_receipt_upload(storage, current_owner, saved_expense_id, upload)
+            notify_cash_expense_created(storage, current_owner)
             flash = "Расход добавлен в кассу и CRM-расходы."
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
