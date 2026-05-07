@@ -12214,6 +12214,9 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
           </label>
           <button class="submit-btn" type="submit">Сохранить изменения</button>
         </form>
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/delete?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}" onsubmit="return confirm('Удалить расход из ДДС?');" style="margin-top:12px;">
+          <button class="secondary-btn danger" type="submit">Удалить расход</button>
+        </form>
       </div>
     </details>
     """
@@ -20913,6 +20916,24 @@ self.addEventListener("notificationclick", (event) => {
         storage.update_expense_entry_status(current_owner, entry_id, status)
         target_tab = "archive" if status == "closed" else "active"
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(target_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}")
+
+    if path.startswith("/expenses/") and path.endswith("/delete") and method == "POST":
+        denied = guard("expenses", "edit")
+        if denied:
+            return denied
+        try:
+            entry_id = int(path.split("/")[2])
+        except (ValueError, IndexError):
+            entry_id = -1
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        project_filter = query.get("project", [""])[0].strip()
+        category_filter = query.get("category", [""])[0].strip()
+        adjustment_filter = query.get("adjustment", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        flash = "Расход удален." if storage.delete_expense_entry(current_owner, entry_id) else "Расход не найден."
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}&flash={quote_plus(flash)}")
 
     if path == "/payables":
         denied = guard("payables", "view")
