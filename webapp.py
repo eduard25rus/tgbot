@@ -1110,7 +1110,17 @@ def cash_push_public_key() -> str:
 
 
 def cash_push_private_key() -> str:
-    return os.getenv("CASH_PUSH_VAPID_PRIVATE_KEY", os.getenv("VAPID_PRIVATE_KEY", "")).strip()
+    raw_key = os.getenv("CASH_PUSH_VAPID_PRIVATE_KEY", os.getenv("VAPID_PRIVATE_KEY", "")).strip()
+    if raw_key.startswith("-----BEGIN") or "\\n" in raw_key:
+        pem_key = raw_key.replace("\\n", "\n")
+        key_path = Path(os.getenv("TMPDIR", "/tmp")) / "cash_vapid_private_key.pem"
+        try:
+            key_path.write_text(pem_key, encoding="utf-8")
+            key_path.chmod(0o600)
+            return str(key_path)
+        except OSError:
+            return raw_key
+    return raw_key
 
 
 def cash_push_enabled() -> bool:
