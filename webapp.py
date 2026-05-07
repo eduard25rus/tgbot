@@ -6464,6 +6464,38 @@ def layout(
       display: grid;
       gap: 18px;
     }}
+    .access-choice-grid {{
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }}
+    .access-choice-card {{
+      display: grid;
+      gap: 10px;
+      color: inherit;
+      text-decoration: none;
+      min-height: 170px;
+      align-content: start;
+    }}
+    .access-choice-card:hover {{
+      border-color: rgba(29, 92, 99, 0.34);
+      box-shadow: 0 18px 42px rgba(22, 35, 47, 0.12);
+    }}
+    .access-choice-title {{
+      font-size: 22px;
+      font-weight: 700;
+    }}
+    .access-detail-actions {{
+      justify-content: flex-end;
+    }}
+    .access-add-popover {{
+      min-width: min(760px, calc(100vw - 64px));
+      max-width: min(900px, calc(100vw - 64px));
+      padding: 14px;
+    }}
+    .access-add-popover .permissions-grid {{
+      max-height: min(460px, 55vh);
+      overflow: auto;
+      padding-right: 4px;
+    }}
     .user-card {{
       padding: 18px;
       border: 1px solid var(--line);
@@ -14609,12 +14641,14 @@ def render_access_section(
     base_url: str,
     flash_message: str = "",
     success: bool = False,
+    active_mode: str = "",
 ) -> str:
     users = storage.list_web_users(owner_chat_id)
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     mobile_cash_access = storage.list_mobile_cash_access(owner_chat_id)
     push_server_ready = cash_push_enabled(storage)
     base_setup_url = f"{base_url.rstrip('/')}/setup-password?token="
+    active_mode = active_mode if active_mode in {"cash", "general"} else ""
     stats = f"""
     <section class="stats">
       <article class="card stat-card">
@@ -14639,6 +14673,46 @@ def render_access_section(
       </article>
     </section>
     """
+    flash_html = ""
+    if flash_message:
+        flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>'
+
+    if not active_mode:
+        enabled_cash_users = sum(1 for item in mobile_cash_access if item["enabled"])
+        active_users = sum(1 for user in users if user["is_active"])
+        editors = sum(1 for user in users if any(item["can_edit"] for item in user["permissions"].values()))
+        return f"""
+        {flash_html}
+        <section class="card panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Что настраиваем</h2>
+              <div class="panel-sub">Выберите одну область, настройте ее внутри и вернитесь обратно к этому меню.</div>
+            </div>
+            <div class="chip">Владелец контура: {owner_chat_id}</div>
+          </div>
+          <div class="stats access-choice-grid">
+            <a class="card mini-card contract-table-link access-choice-card" href="/access?owner={owner_chat_id}&mode=cash">
+              <div class="stat-label">Первое</div>
+              <div class="access-choice-title">Настройка касс</div>
+              <div class="contract-table-subtle">Мобильная касса, кассы сотрудников, права на добавление расходов, сверку и push-уведомления.</div>
+              <div class="badge-row">
+                <span class="badge">Касс: {len(cashboxes)}</span>
+                <span class="badge{" warn" if enabled_cash_users == 0 else ""}">Доступ включен: {enabled_cash_users}</span>
+              </div>
+            </a>
+            <a class="card mini-card contract-table-link access-choice-card" href="/access?owner={owner_chat_id}&mode=general">
+              <div class="stat-label">Второе</div>
+              <div class="access-choice-title">Общие доступы</div>
+              <div class="contract-table-subtle">Web-пользователи, роли, вход в CRM, просмотр и редактирование по разделам.</div>
+              <div class="badge-row">
+                <span class="badge">Активных: {active_users}</span>
+                <span class="badge">Редакторов: {editors}</span>
+              </div>
+            </a>
+          </div>
+        </section>
+        """
 
     user_cards = []
     for user in users:
@@ -14674,15 +14748,15 @@ def render_access_section(
             else f"""
             <div class="action-row">
               <button class="submit-btn" type="submit">Сохранить права</button>
-              <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/toggle?owner={owner_chat_id}" formmethod="post">{"Запретить доступ" if user["is_active"] else "Вернуть доступ"}</button>
-              <button class="secondary-btn danger" type="submit" formaction="/access/users/{user["id"]}/delete?owner={owner_chat_id}" formmethod="post">Удалить пользователя</button>
+              <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/toggle?owner={owner_chat_id}&mode=general" formmethod="post">{"Запретить доступ" if user["is_active"] else "Вернуть доступ"}</button>
+              <button class="secondary-btn danger" type="submit" formaction="/access/users/{user["id"]}/delete?owner={owner_chat_id}&mode=general" formmethod="post">Удалить пользователя</button>
             </div>
             """
         )
         setup_token = storage.ensure_password_setup_token(user["id"], secrets.token_urlsafe(24))
         setup_link = f"{base_setup_url}{setup_token}"
         reset_button = f"""
-        <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/reset-password?owner={owner_chat_id}" formmethod="post">
+        <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/reset-password?owner={owner_chat_id}&mode=general" formmethod="post">
           Сбросить пароль и обновить ссылку
         </button>
         """
@@ -14716,7 +14790,7 @@ def render_access_section(
                         <input type="text" name="full_name_visible" value="{escape(user["full_name"])}" form="user-form-{user["id"]}" required>
                       </div>
                       <div class="action-row">
-                        <button class="submit-btn" type="submit" form="user-form-{user["id"]}" formaction="/access/users/{user["id"]}/update?owner={owner_chat_id}" formmethod="post">Сохранить имя</button>
+                        <button class="submit-btn" type="submit" form="user-form-{user["id"]}" formaction="/access/users/{user["id"]}/update?owner={owner_chat_id}&mode=general" formmethod="post">Сохранить имя</button>
                       </div>
                     </div>
                   </details>
@@ -14728,7 +14802,7 @@ def render_access_section(
                 </div>
                 <div class="badge-row">{''.join(status_badges)}</div>
               </div>
-              <form id="user-form-{user["id"]}" class="form-grid" method="post" action="/access/users/{user["id"]}/update?owner={owner_chat_id}">
+              <form id="user-form-{user["id"]}" class="form-grid" method="post" action="/access/users/{user["id"]}/update?owner={owner_chat_id}&mode=general">
                 <input type="hidden" name="full_name" value="{escape(user["full_name"])}">
                 <div class="field">
                   <label>Роль</label>
@@ -14740,10 +14814,6 @@ def render_access_section(
             </article>
             """
         )
-
-    flash_html = ""
-    if flash_message:
-        flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>'
 
     cash_access_cards = []
     cashbox_select_options_cache = {
@@ -14771,11 +14841,11 @@ def render_access_section(
         cash_access_cards.append(
             f"""
             <article class="user-card">
-              <form class="form-grid" method="post" action="/access/cash/users/{user["id"]}/update?owner={owner_chat_id}">
+              <form class="form-grid" method="post" action="/access/cash/users/{user["id"]}/update?owner={owner_chat_id}&mode=cash">
                 <div class="user-head">
                   <div>
                     <div class="timeline-title">{escape(user["full_name"])}</div>
-                    <div class="user-meta">Логин: {escape(user["login"])}<br>Пароль: хранится защищенно, можно сбросить в карточке пользователя выше.</div>
+                    <div class="user-meta">Логин: {escape(user["login"])}<br>Пароль: хранится защищенно, можно сбросить в общих доступах.</div>
                   </div>
                   <div class="badge-row">
                     <span class="badge{" danger" if not user_access["enabled"] else ""}">{"Касса включена" if user_access["enabled"] else "Касса отключена"}</span>
@@ -14843,11 +14913,14 @@ def render_access_section(
           <div class="panel-sub">Кто входит в мобильную кассу, какую кассу видит и какие действия может выполнять.</div>
           <div class="panel-sub">Пуш-сервер: {"настроен" if push_server_ready else "нужны VAPID-ключи в переменных окружения"}</div>
         </div>
-        <a class="secondary-btn" href="/cashoperations" target="_blank" rel="noopener">Открыть кассу</a>
+        <div class="action-row access-detail-actions">
+          <a class="secondary-btn" href="/access?owner={owner_chat_id}">← К выбору настроек</a>
+          <a class="secondary-btn" href="/cashoperations" target="_blank" rel="noopener">Открыть кассу</a>
+        </div>
       </div>
       <div class="access-stack">{''.join(cash_access_cards) or '<div class="contract-meta">Пользователей пока нет.</div>'}</div>
       <div class="settings-divider"></div>
-      <form class="form-grid" method="post" action="/access/cashboxes/new?owner={owner_chat_id}">
+      <form class="form-grid" method="post" action="/access/cashboxes/new?owner={owner_chat_id}&mode=cash">
         <div class="field">
           <label>Добавить кассу сотрудника</label>
           <input type="text" name="label" placeholder="Например, Касса Ильи">
@@ -14857,76 +14930,64 @@ def render_access_section(
     </section>
     """
 
+    if active_mode == "cash":
+        return f"""
+        {flash_html}
+        {cash_settings_html}
+        """
+
+    add_role_block = f"""
+    <details class="status-menu">
+      <summary><span class="secondary-btn">Добавить роль</span></summary>
+      <div class="status-popover align-right access-add-popover">
+        <form class="form-grid" method="post" action="/access/users/new?owner={owner_chat_id}&mode=general">
+          <div class="field">
+            <label>Имя пользователя</label>
+            <input type="text" name="full_name" placeholder="Например, Илья Петров" required>
+          </div>
+          <div class="field">
+            <label>Логин</label>
+            <input type="text" name="login" placeholder="ivan.petrov" required>
+          </div>
+          <div class="field">
+            <label>Роль</label>
+            <input type="text" name="role_name" value="Менеджер проектов">
+          </div>
+          <div class="permissions-grid">
+            {''.join(
+                f'''
+                <div class="permission-box">
+                  <strong>{escape(label)}</strong>
+                  <div class="check-row">
+                    <label><input type="checkbox" name="view_{section_id}"> Просмотр</label>
+                    <label><input type="checkbox" name="edit_{section_id}"> Редактирование</label>
+                  </div>
+                </div>
+                '''
+                for section_id, label in permission_sections()
+            )}
+          </div>
+          <button class="submit-btn" type="submit">Добавить роль</button>
+        </form>
+      </div>
+    </details>
+    """
+
     return f"""
     {stats}
     {flash_html}
-    {cash_settings_html}
-    <section class="grid">
-      <section class="card panel">
-        <div class="panel-head">
-          <div>
-            <h2 class="panel-title">Пользователи и права</h2>
-            <div class="panel-sub">Дальше этот раздел станет центром ролей, приглашений и управления доступом к модулям CRM.</div>
-          </div>
-          <div class="chip">Владелец контура: {owner_chat_id}</div>
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Общие доступы</h2>
+          <div class="panel-sub">Web-пользователи, роли, вход в CRM и права по разделам.</div>
         </div>
-        <div class="access-stack">{''.join(user_cards)}</div>
-      </section>
-      <aside class="section-stack">
-        <section class="card panel">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Добавить пользователя</h2>
-              <div class="panel-sub">Администратор создает пользователя по логину, а затем передает ему отдельную ссылку на установку пароля.</div>
-            </div>
-          </div>
-          <form class="form-grid" method="post" action="/access/users/new?owner={owner_chat_id}">
-            <div class="field">
-              <label>Имя пользователя</label>
-              <input type="text" name="full_name" placeholder="Например, Илья Петров" required>
-            </div>
-            <div class="field">
-              <label>Логин</label>
-              <input type="text" name="login" placeholder="ivan.petrov" required>
-            </div>
-            <div class="field">
-              <label>Роль</label>
-              <input type="text" name="role_name" value="Менеджер проектов">
-            </div>
-            <div class="permissions-grid">
-              {''.join(
-                  f'''
-                  <div class="permission-box">
-                    <strong>{escape(label)}</strong>
-                    <div class="check-row">
-                      <label><input type="checkbox" name="view_{section_id}"> Просмотр</label>
-                      <label><input type="checkbox" name="edit_{section_id}"> Редактирование</label>
-                    </div>
-                  </div>
-                  '''
-                  for section_id, label in permission_sections()
-              )}
-            </div>
-            <button class="submit-btn" type="submit">Добавить пользователя</button>
-          </form>
-        </section>
-        <section class="card panel">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Как это будет работать дальше</h2>
-              <div class="panel-sub">Логика уже закладывается правильно</div>
-            </div>
-          </div>
-        <div class="contract-meta">
-          • Вы остаетесь главным администратором системы<br>
-          • Пользователю задаем отдельный логин для входа<br>
-          • По каждому разделу отдельно отмечаем просмотр и редактирование<br>
-          • После создания система дает ссылку на установку пароля<br>
-          • Администратор может в любой момент перевыпустить ссылку на пароль<br>
-          • Доступ можно отключить, вернуть или полностью удалить
+        <div class="action-row access-detail-actions">
+          <a class="secondary-btn" href="/access?owner={owner_chat_id}">← К выбору настроек</a>
+          {add_role_block}
         </div>
-      </section>
-      </aside>
+      </div>
+      <div class="access-stack">{''.join(user_cards)}</div>
     </section>
     """
 
@@ -18831,9 +18892,9 @@ self.addEventListener("notificationclick", (event) => {
             if not any(item["can_view"] for item in permissions.values()):
                 raise ValueError("Нужно открыть хотя бы один раздел для просмотра")
             storage.create_web_user(current_owner, login, full_name, role_name, permissions)
-            return redirect(start_response, f"/access?owner={current_owner}")
+            return redirect(start_response, f"/access?owner={current_owner}&mode=general")
         except Exception as exc:
-            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось добавить пользователя: {exc}")
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось добавить пользователя: {exc}", active_mode="general")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -18848,9 +18909,9 @@ self.addEventListener("notificationclick", (event) => {
             if user is None or user["owner_chat_id"] != current_owner:
                 raise ValueError("Пользователь не найден")
             storage.regenerate_password_setup_token(user_id, secrets.token_urlsafe(24))
-            return redirect(start_response, f"/access?owner={current_owner}")
+            return redirect(start_response, f"/access?owner={current_owner}&mode=general")
         except Exception as exc:
-            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось сбросить пароль: {exc}")
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось сбросить пароль: {exc}", active_mode="general")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -18871,9 +18932,9 @@ self.addEventListener("notificationclick", (event) => {
             )
             if not updated:
                 raise ValueError("Пользователь не найден")
-            return redirect(start_response, f"/access?owner={current_owner}")
+            return redirect(start_response, f"/access?owner={current_owner}&mode=general")
         except Exception as exc:
-            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось обновить пользователя: {exc}")
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось обновить пользователя: {exc}", active_mode="general")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -18891,9 +18952,9 @@ self.addEventListener("notificationclick", (event) => {
             updated = storage.set_web_user_active(current_owner, user_id, not target["is_active"])
             if not updated:
                 raise ValueError("Нельзя отключить главного администратора")
-            return redirect(start_response, f"/access?owner={current_owner}")
+            return redirect(start_response, f"/access?owner={current_owner}&mode=general")
         except Exception as exc:
-            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось изменить статус доступа: {exc}")
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось изменить статус доступа: {exc}", active_mode="general")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -18907,9 +18968,9 @@ self.addEventListener("notificationclick", (event) => {
             deleted = storage.delete_web_user(current_owner, user_id)
             if not deleted:
                 raise ValueError("Нельзя удалить главного администратора или пользователь не найден")
-            return redirect(start_response, f"/access?owner={current_owner}")
+            return redirect(start_response, f"/access?owner={current_owner}&mode=general")
         except Exception as exc:
-            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось удалить пользователя: {exc}")
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось удалить пользователя: {exc}", active_mode="general")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -18923,9 +18984,9 @@ self.addEventListener("notificationclick", (event) => {
             created_code = storage.add_cashbox_directory_item(current_owner, form.get("label", ""))
             if not created_code:
                 raise ValueError("Укажите название кассы")
-            return redirect(start_response, f"/access?owner={current_owner}#cash-app-settings")
+            return redirect(start_response, f"/access?owner={current_owner}&mode=cash")
         except Exception as exc:
-            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось добавить кассу: {exc}")
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось добавить кассу: {exc}", active_mode="cash")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -18960,9 +19021,9 @@ self.addEventListener("notificationclick", (event) => {
             )
             if not updated:
                 raise ValueError("Пользователь не найден")
-            return redirect(start_response, f"/access?owner={current_owner}#cash-app-settings")
+            return redirect(start_response, f"/access?owner={current_owner}&mode=cash")
         except Exception as exc:
-            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось обновить кассовый доступ: {exc}")
+            body = render_access_section(storage, current_owner, request_base_url(environ), f"Не удалось обновить кассовый доступ: {exc}", active_mode="cash")
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -18971,7 +19032,8 @@ self.addEventListener("notificationclick", (event) => {
         denied = guard("access", "view")
         if denied:
             return denied
-        body = render_access_section(storage, current_owner, request_base_url(environ))
+        access_mode = query.get("mode", [""])[0].strip()
+        body = render_access_section(storage, current_owner, request_base_url(environ), active_mode=access_mode)
         html = layout("Доступы", body, owners, current_owner, "access", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
