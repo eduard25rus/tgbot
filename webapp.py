@@ -23,6 +23,7 @@ from http.cookies import SimpleCookie
 from html import escape
 from typing import Iterable
 from urllib.parse import parse_qs
+from urllib.parse import quote
 from urllib.parse import quote_plus
 from wsgiref.simple_server import make_server
 
@@ -670,28 +671,97 @@ def render_legal_file_preview_page(file_url: str, download_url: str, safe_filena
         right: 18px;
         bottom: 18px;
         z-index: 10;
+        display: flex;
+        gap: 8px;
       }}
-      .download-btn {{
+      .download-btn,
+      .close-btn {{
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        min-height: 44px;
         padding: 12px 18px;
         border-radius: 999px;
         background: #285f64;
         color: #fff;
         text-decoration: none;
+        border: 0;
+        font: inherit;
         font-weight: 700;
         box-shadow: 0 12px 28px rgba(21, 44, 52, 0.18);
+      }}
+      .close-top {{
+        position: fixed;
+        top: calc(12px + env(safe-area-inset-top));
+        right: 12px;
+        z-index: 11;
+        width: 44px;
+        height: 44px;
+        border-radius: 999px;
+        padding: 0;
+        background: rgba(255, 255, 255, .94);
+        color: #1d2a3a;
+        border: 1px solid rgba(29, 42, 58, .14);
+        font-size: 28px;
+        line-height: 1;
+        box-shadow: 0 10px 24px rgba(21, 44, 52, 0.18);
+      }}
+      @media (max-width: 520px) {{
+        .download-bar {{
+          left: 12px;
+          right: 12px;
+          bottom: calc(12px + env(safe-area-inset-bottom));
+        }}
+        .download-btn {{
+          flex: 1;
+        }}
       }}
     </style>
   </head>
   <body>
+    <button class="close-btn close-top" type="button" data-close-preview aria-label="Закрыть">×</button>
     {preview_html}
     <div class="download-bar">
-      <a class="download-btn" href="{download_url}">Скачать файл</a>
+      <a class="download-btn" href="{download_url}" download="{escape(safe_filename)}" data-download-file>Скачать файл</a>
     </div>
+    <script>
+      (() => {{
+        const close = () => {{
+          if (window.history.length > 1) {{
+            window.history.back();
+            return;
+          }}
+          window.location.href = "/cashoperations?screen=letters";
+        }};
+        document.querySelector("[data-close-preview]")?.addEventListener("click", close);
+        const download = document.querySelector("[data-download-file]");
+        download?.addEventListener("click", async (event) => {{
+          const isImage = {json.dumps(content_type.startswith("image/"))};
+          if (!isImage || !navigator.share || !navigator.canShare) return;
+          try {{
+            event.preventDefault();
+            const response = await fetch(download.href, {{ credentials: "same-origin" }});
+            if (!response.ok) throw new Error("download_failed");
+            const blob = await response.blob();
+            const file = new File([blob], {json.dumps(safe_filename)}, {{ type: blob.type || {json.dumps(content_type)} }});
+            if (navigator.canShare({{ files: [file] }})) {{
+              await navigator.share({{ files: [file], title: {json.dumps(safe_filename)} }});
+              return;
+            }}
+            window.location.href = download.href;
+          }} catch (_err) {{
+            window.location.href = download.href;
+          }}
+        }});
+      }})();
+    </script>
   </body>
 </html>"""
+
+
+def attachment_content_disposition(filename: str) -> str:
+    ascii_fallback = secure_upload_name(filename or "file")
+    return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quote(filename or ascii_fallback, safe="")}'
 
 
 def save_legal_letter_uploads(storage: Storage, owner_chat_id: int, contract_id: int | None, letter_id: int, uploads: list[UploadedFile]) -> None:
@@ -13320,13 +13390,11 @@ def render_cashoperations_body(
             if attachments:
                 first_attachment = attachments[0]
                 file_link = (
-                    f'<a class="cash-mobile-letter-file" href="/contracts/letter-files/{first_attachment.id}/preview?owner={owner_chat_id}" '
-                    f'target="_blank" rel="noopener">Файлы: {file_count}</a>'
+                    f'<a class="cash-mobile-letter-file" href="/contracts/letter-files/{first_attachment.id}/preview?owner={owner_chat_id}">Файлы: {file_count}</a>'
                 )
             elif letter.file_path:
                 file_link = (
-                    f'<a class="cash-mobile-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}" '
-                    f'target="_blank" rel="noopener">Файл</a>'
+                    f'<a class="cash-mobile-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}">Файл</a>'
                 )
             comment_html = f'<span class="cash-mobile-op-comment">{escape(letter.comment)}</span>' if letter.comment else ""
             author_html = (
@@ -13342,7 +13410,7 @@ def render_cashoperations_body(
                   <span class="cash-mobile-letter-badge {direction_class}">{escape(direction_label)}</span>
                   <span>{escape(channel_label)}</span>
                 </span>
-                <span class="cash-mobile-op-meta">{escape(letter.object_label or "Без объекта")}</span>
+                <span class="cash-mobile-op-meta cash-mobile-letter-object">{escape(letter.object_label or "Без объекта")}</span>
                 <span class="cash-mobile-op-comment">{escape(letter.subject or "Без темы")}</span>
                 {comment_html}
                 {author_html}
@@ -13746,6 +13814,10 @@ def render_cashoperations_body(
       .cash-mobile-op-meta {{
         margin-top: 4px;
       }}
+      .cash-mobile-letter-object {{
+        color: var(--ink);
+        font-weight: 800;
+      }}
       .cash-mobile-op-side {{
         flex: 0 0 auto;
         text-align: right;
@@ -13840,8 +13912,8 @@ def render_cashoperations_body(
         padding: 6px 9px;
         border: 1px solid var(--line);
         border-radius: 8px;
-        color: #186844;
-        background: #e3f2e9;
+        color: var(--muted);
+        background: #fff;
         text-decoration: none;
         font-size: 12px;
         font-weight: 800;
@@ -19622,7 +19694,7 @@ self.addEventListener("notificationclick", (event) => {
             if attachment is None:
                 raise ValueError("Вложение не найдено")
             absolute_path, safe_filename, content_type = resolve_task_attachment_file(storage, attachment)
-            start_response("200 OK", [("Content-Type", content_type), ("Content-Disposition", f'attachment; filename="{safe_filename}"')])
+            start_response("200 OK", [("Content-Type", content_type), ("Content-Disposition", attachment_content_disposition(safe_filename))])
             return [absolute_path.read_bytes()]
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
@@ -21869,7 +21941,7 @@ self.addEventListener("notificationclick", (event) => {
                 "200 OK",
                 [
                     ("Content-Type", content_type),
-                    ("Content-Disposition", f'attachment; filename="{safe_filename}"'),
+                    ("Content-Disposition", attachment_content_disposition(safe_filename)),
                 ],
             )
             return [absolute_path.read_bytes()]
@@ -22021,7 +22093,7 @@ self.addEventListener("notificationclick", (event) => {
                 return [b"File not found"]
             headers = [
                 ("Content-Type", content_type),
-                ("Content-Disposition", f'attachment; filename="{safe_filename}"'),
+                ("Content-Disposition", attachment_content_disposition(safe_filename)),
             ]
             start_response("200 OK", headers)
             return [absolute_path.read_bytes()]
@@ -22072,7 +22144,7 @@ self.addEventListener("notificationclick", (event) => {
                 return [b"File not found"]
             headers = [
                 ("Content-Type", content_type),
-                ("Content-Disposition", f'attachment; filename="{safe_filename}"'),
+                ("Content-Disposition", attachment_content_disposition(safe_filename)),
             ]
             start_response("200 OK", headers)
             return [absolute_path.read_bytes()]
