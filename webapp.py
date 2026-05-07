@@ -7131,9 +7131,10 @@ def layout(
     }}
     .directory-conflict-actions {{
       display: grid;
-      grid-template-columns: minmax(240px, 1fr) auto auto;
+      grid-template-columns: minmax(240px, 1fr) auto;
       gap: 10px;
       align-items: end;
+      margin-top: 14px;
     }}
     .directory-conflict-row-category {{
       min-width: 260px;
@@ -7142,6 +7143,15 @@ def layout(
       width: 100%;
       border-color: rgba(224, 159, 30, 0.45);
       background: #fff8df;
+    }}
+    .directory-conflict-row-category select:valid {{
+      border-color: var(--line);
+      background: #fff;
+    }}
+    .directory-conflict-save {{
+      margin-top: 14px;
+      display: flex;
+      justify-content: flex-end;
     }}
     @media (max-width: 760px) {{
       .directory-category-actions,
@@ -7627,6 +7637,34 @@ document.addEventListener("click", (event) => {{
     item.hidden = !isOpening;
   }});
   settingsToggle.textContent = isOpening ? "Скрыть настройки" : "Показать настройки";
+}});
+
+document.addEventListener("click", (event) => {{
+  const bulkButton = event.target.closest(".js-directory-bulk-category-apply");
+  if (!bulkButton) {{
+    return;
+  }}
+  const form = bulkButton.closest("form");
+  const bulkSelect = form ? form.querySelector('select[name="bulk_category_code"]') : null;
+  const targetValue = bulkSelect ? bulkSelect.value : "";
+  if (!targetValue) {{
+    if (bulkSelect) {{
+      bulkSelect.focus();
+    }}
+    return;
+  }}
+  const selectedChecks = form ? form.querySelectorAll('input[name^="entry_selected_"]:checked') : [];
+  if (!selectedChecks.length) {{
+    return;
+  }}
+  selectedChecks.forEach((checkbox) => {{
+    const entryId = checkbox.name.replace("entry_selected_", "");
+    const rowSelect = form.querySelector(`select[name="entry_category_${{entryId}}"]`);
+    if (rowSelect) {{
+      rowSelect.value = targetValue;
+      rowSelect.dispatchEvent(new Event("change", {{ bubbles: true }}));
+    }}
+  }});
 }});
 
 const floatingPopoverSelector = ".status-popover, .settings-popover, .name-popover";
@@ -9551,7 +9589,7 @@ def render_directories_section(
                   </td>
                   <td class="nowrap">{escape(format_amount(entry.amount))}</td>
                   <td class="directory-conflict-row-category">
-                    <select name="entry_category_{entry.id}" aria-label="Новая категория для платежа {entry.id}">
+                    <select class="js-directory-category-select" name="entry_category_{entry.id}" aria-label="Новая категория для платежа {entry.id}" required>
                       {replacement_options}
                     </select>
                   </td>
@@ -9564,11 +9602,10 @@ def render_directories_section(
                 f"""
                 <div class="directory-conflict-actions">
                   <div class="field">
-                    <label>Массово перенести все платежи на</label>
+                    <label>Заполнить выбранные платежи категорией</label>
                     <select name="bulk_category_code" form="expense-category-conflict-form-{conflict_category.id}">{replacement_options}</select>
                   </div>
-                  <button class="secondary-btn" type="submit" name="action" value="selected" form="expense-category-conflict-form-{conflict_category.id}">Перенести выбранные</button>
-                  <button class="secondary-btn danger" type="submit" name="action" value="all" form="expense-category-conflict-form-{conflict_category.id}" onclick="return confirm('Перенести все платежи из этой категории в выбранную категорию?');">Перенести все платежи</button>
+                  <button class="secondary-btn js-directory-bulk-category-apply" type="button">Заполнить выбранные</button>
                 </div>
                 """
                 if len(expense_categories) > 1 else '<div class="contract-table-subtle">Нет другой категории для переноса. Сначала добавьте новую категорию.</div>'
@@ -9581,7 +9618,6 @@ def render_directories_section(
                 <div class="contract-table-subtle">Найдено платежей: {len(conflict_entries)}. Сумма: {escape(format_amount(conflict_total))}. Перед удалением перенесите эти платежи на другую категорию.</div>
               </div>
               <form id="expense-category-conflict-form-{conflict_category.id}" method="post" action="/directories/expense-categories/{conflict_category.id}/reassign?owner={owner_chat_id}">
-                {replacement_form}
                 <table class="table contract-table">
                   <thead>
                     <tr>
@@ -9595,6 +9631,10 @@ def render_directories_section(
                   </thead>
                   <tbody>{conflict_rows}</tbody>
                 </table>
+                {replacement_form}
+                <div class="directory-conflict-save">
+                  <button class="submit-btn" type="submit">Сохранить категории</button>
+                </div>
               </form>
             </section>
             """
@@ -17935,25 +17975,16 @@ self.addEventListener("notificationclick", (event) => {
         try:
             if category is None:
                 raise ValueError("Категория не найдена")
-            action = form.get("action", "selected").strip()
-            if action == "all":
-                target_category_code = form.get("bulk_category_code", "").strip()
+            linked_entries = storage.list_expense_entries_by_category(current_owner, category.code)
+            replacements = {}
+            for entry in linked_entries:
+                target_category_code = form.get(f"entry_category_{entry.id}", "").strip()
                 if not target_category_code:
-                    raise ValueError("Выберите категорию для массового переноса")
-                changed_count = storage.reassign_expense_category(current_owner, category.code, target_category_code)
-            else:
-                linked_entries = storage.list_expense_entries_by_category(current_owner, category.code)
-                replacements = {}
-                for entry in linked_entries:
-                    if form.get(f"entry_selected_{entry.id}") != "1":
-                        continue
-                    target_category_code = form.get(f"entry_category_{entry.id}", "").strip()
-                    if not target_category_code:
-                        raise ValueError("Для каждого выбранного платежа укажите новую категорию")
-                    replacements[entry.id] = target_category_code
-                if not replacements:
-                    raise ValueError("Выберите платежи для переноса")
-                changed_count = storage.reassign_expense_entries(current_owner, category.code, replacements)
+                    raise ValueError("Для каждого платежа укажите новую категорию")
+                replacements[entry.id] = target_category_code
+            if not replacements:
+                raise ValueError("Нет платежей для переноса")
+            changed_count = storage.reassign_expense_entries(current_owner, category.code, replacements)
             if changed_count <= 0:
                 raise ValueError("Не удалось перенести платежи")
             remaining_entries = storage.list_expense_entries_by_category(current_owner, category.code)
