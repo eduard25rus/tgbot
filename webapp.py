@@ -13198,6 +13198,8 @@ def render_cashoperations_body(
             if kind != "income" and getattr(entry, "receipt_file_path", "")
             else ""
         )
+        receipt_name = (getattr(entry, "receipt_file_name", "") or getattr(entry, "receipt_file_path", "") or "").lower()
+        receipt_kind = "pdf" if receipt_name.endswith(".pdf") else "image"
         if kind == "income" and can_edit:
             return f"""
             <button class="cash-mobile-op editable" type="button"
@@ -13229,7 +13231,8 @@ def render_cashoperations_body(
               data-expense-title="{escape(entry.title)}"
               data-expense-date="{entry.expense_date.isoformat()}"
               data-expense-comment="{escape(editable_comment(entry))}"
-              data-expense-receipt="{"1" if getattr(entry, "receipt_file_path", "") else ""}">
+              data-expense-receipt="{"1" if getattr(entry, "receipt_file_path", "") else ""}"
+              data-expense-receipt-kind="{receipt_kind}">
               <span class="cash-mobile-op-main">
                 <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
                 <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
@@ -13850,6 +13853,23 @@ def render_cashoperations_body(
         text-overflow: ellipsis;
         white-space: nowrap;
       }}
+      .cash-receipt-viewer-tools {{
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex: 0 0 auto;
+      }}
+      .cash-receipt-zoom {{
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--ink);
+        min-width: 38px;
+        min-height: 40px;
+        padding: 8px 10px;
+        font: inherit;
+        font-weight: 800;
+      }}
       .cash-receipt-viewer-close {{
         border: 1px solid var(--line);
         border-radius: 8px;
@@ -13860,11 +13880,39 @@ def render_cashoperations_body(
         font: inherit;
         font-weight: 800;
       }}
+      .cash-receipt-stage {{
+        min-width: 0;
+        min-height: 0;
+        height: 100%;
+        overflow: auto;
+        display: grid;
+        place-items: center;
+        padding: 12px;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-x pan-y pinch-zoom;
+      }}
       .cash-receipt-frame {{
         width: 100%;
         height: 100%;
         border: 0;
         background: #f7faf6;
+        display: none;
+      }}
+      .cash-receipt-image {{
+        display: none;
+        max-width: 100%;
+        max-height: 100%;
+        width: auto;
+        height: auto;
+        object-fit: contain;
+        transform-origin: center center;
+        transition: transform .12s ease;
+        user-select: none;
+        -webkit-user-select: none;
+      }}
+      .cash-receipt-frame.active,
+      .cash-receipt-image.active {{
+        display: block;
       }}
     </style>
     <section class="cash-mobile">
@@ -13914,9 +13962,17 @@ def render_cashoperations_body(
     <section class="cash-receipt-viewer" data-cash-receipt-viewer aria-hidden="true">
       <div class="cash-receipt-viewer-head">
         <strong data-cash-receipt-viewer-title>Чек</strong>
-        <button class="cash-receipt-viewer-close" type="button" data-cash-receipt-viewer-close>Закрыть</button>
+        <div class="cash-receipt-viewer-tools">
+          <button class="cash-receipt-zoom" type="button" data-cash-receipt-zoom-out aria-label="Уменьшить">−</button>
+          <button class="cash-receipt-zoom" type="button" data-cash-receipt-zoom-fit aria-label="Вписать в экран">1:1</button>
+          <button class="cash-receipt-zoom" type="button" data-cash-receipt-zoom-in aria-label="Увеличить">+</button>
+          <button class="cash-receipt-viewer-close" type="button" data-cash-receipt-viewer-close>Закрыть</button>
+        </div>
       </div>
-      <iframe class="cash-receipt-frame" title="Просмотр чека" data-cash-receipt-frame></iframe>
+      <div class="cash-receipt-stage" data-cash-receipt-stage>
+        <img class="cash-receipt-image" alt="Чек" data-cash-receipt-image>
+        <iframe class="cash-receipt-frame" title="Просмотр чека" data-cash-receipt-frame></iframe>
+      </div>
     </section>
     <script>
       (() => {{
@@ -13968,6 +14024,11 @@ def render_cashoperations_body(
         const receiptViewerClose = document.querySelector("[data-cash-receipt-viewer-close]");
         const receiptViewerTitle = document.querySelector("[data-cash-receipt-viewer-title]");
         const receiptFrame = document.querySelector("[data-cash-receipt-frame]");
+        const receiptImage = document.querySelector("[data-cash-receipt-image]");
+        const receiptStage = document.querySelector("[data-cash-receipt-stage]");
+        const receiptZoomOut = document.querySelector("[data-cash-receipt-zoom-out]");
+        const receiptZoomFit = document.querySelector("[data-cash-receipt-zoom-fit]");
+        const receiptZoomIn = document.querySelector("[data-cash-receipt-zoom-in]");
         const removeReceiptInput = document.querySelector("[data-cash-remove-receipt]");
         const pushEnable = document.querySelector("[data-cash-push-enable]");
         const pushStatus = document.querySelector("[data-cash-push-status]");
@@ -13975,6 +14036,8 @@ def render_cashoperations_body(
         let formDirty = false;
         let isSubmitting = false;
         let currentExpenseHasReceipt = false;
+        let currentReceiptKind = "image";
+        let receiptZoom = 1;
         let selectedReceiptPreviewUrl = "";
         const loadedAt = Date.now();
         const cashPushPublicKey = {json.dumps(push_public_key)};
@@ -14047,19 +14110,43 @@ def render_cashoperations_body(
             selectedReceiptPreviewUrl = "";
           }}
         }}
-        function openReceiptViewer(src, title) {{
-          if (!receiptViewer || !receiptFrame) return;
-          receiptFrame.src = src;
+        function setReceiptZoom(value) {{
+          receiptZoom = Math.min(3, Math.max(0.5, value));
+          if (receiptImage) receiptImage.style.transform = "scale(" + receiptZoom + ")";
+          if (receiptStage) receiptStage.scrollTo({{ top: 0, left: 0 }});
+        }}
+        function receiptKindFromName(name, fallback) {{
+          const normalized = (name || "").toLowerCase();
+          if (normalized.endsWith(".pdf") || normalized.includes("application/pdf")) return "pdf";
+          return fallback || "image";
+        }}
+        function openReceiptViewer(src, title, kind) {{
+          if (!receiptViewer || !receiptFrame || !receiptImage) return;
+          const viewerKind = kind === "pdf" ? "pdf" : "image";
+          receiptFrame.classList.toggle("active", viewerKind === "pdf");
+          receiptImage.classList.toggle("active", viewerKind !== "pdf");
+          receiptFrame.src = viewerKind === "pdf" ? src : "about:blank";
+          if (viewerKind === "pdf") {{
+            receiptImage.removeAttribute("src");
+          }} else {{
+            receiptImage.src = src;
+          }}
+          setReceiptZoom(1);
+          [receiptZoomOut, receiptZoomFit, receiptZoomIn].forEach((button) => {{
+            if (button) button.hidden = viewerKind === "pdf";
+          }});
           if (receiptViewerTitle) receiptViewerTitle.textContent = title || "Чек";
           receiptViewer.classList.add("active");
           receiptViewer.setAttribute("aria-hidden", "false");
           document.documentElement.style.overflow = "hidden";
         }}
         function closeReceiptViewer() {{
-          if (!receiptViewer || !receiptFrame) return;
+          if (!receiptViewer || !receiptFrame || !receiptImage) return;
           receiptViewer.classList.remove("active");
           receiptViewer.setAttribute("aria-hidden", "true");
           receiptFrame.src = "about:blank";
+          receiptImage.removeAttribute("src");
+          setReceiptZoom(1);
           document.documentElement.style.overflow = "";
         }}
         function canRefresh() {{
@@ -14124,6 +14211,7 @@ def render_cashoperations_body(
           }}
           if (removeReceiptInput) removeReceiptInput.value = "";
           currentExpenseHasReceipt = false;
+          currentReceiptKind = "image";
           clearSelectedReceiptPreview();
           showEditbar(false);
           formDirty = false;
@@ -14158,6 +14246,7 @@ def render_cashoperations_body(
           if (expenseDelete) expenseDelete.hidden = false;
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
           currentExpenseHasReceipt = Boolean(button.dataset.expenseReceipt);
+          currentReceiptKind = button.dataset.expenseReceiptKind || "image";
           if (receiptClear) receiptClear.hidden = !currentExpenseHasReceipt;
           if (receiptView) receiptView.hidden = !currentExpenseHasReceipt;
           if (receiptStatus) {{
@@ -14219,7 +14308,10 @@ def render_cashoperations_body(
           if (receiptLabel) receiptLabel.textContent = file ? file.name : "Добавить чек";
           if (receiptClear) receiptClear.hidden = !(file || currentExpenseHasReceipt);
           clearSelectedReceiptPreview();
-          if (file) selectedReceiptPreviewUrl = URL.createObjectURL(file);
+          if (file) {{
+            selectedReceiptPreviewUrl = URL.createObjectURL(file);
+            currentReceiptKind = receiptKindFromName(file.name || file.type, "image");
+          }}
           if (receiptView) receiptView.hidden = !(file || currentExpenseHasReceipt);
           if (receiptStatus) {{
             if (file) {{
@@ -14237,6 +14329,7 @@ def render_cashoperations_body(
           if (removeReceiptInput) removeReceiptInput.value = "1";
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
           currentExpenseHasReceipt = false;
+          currentReceiptKind = "image";
           clearSelectedReceiptPreview();
           if (receiptView) receiptView.hidden = true;
           if (receiptStatus) {{
@@ -14249,14 +14342,17 @@ def render_cashoperations_body(
         receiptView && receiptView.addEventListener("click", () => {{
           if (selectedReceiptPreviewUrl) {{
             const file = receiptInput && receiptInput.files && receiptInput.files[0];
-            openReceiptViewer(selectedReceiptPreviewUrl, file ? file.name : "Новый чек");
+            openReceiptViewer(selectedReceiptPreviewUrl, file ? file.name : "Новый чек", receiptKindFromName(file ? file.name : "", currentReceiptKind));
             return;
           }}
           const expenseId = expenseIdInput ? expenseIdInput.value : "";
           if (expenseId && currentExpenseHasReceipt) {{
-            openReceiptViewer("/cashoperations/receipt/" + encodeURIComponent(expenseId) + "/file", "Чек");
+            openReceiptViewer("/cashoperations/receipt/" + encodeURIComponent(expenseId) + "/file", "Чек", currentReceiptKind);
           }}
         }});
+        receiptZoomOut && receiptZoomOut.addEventListener("click", () => setReceiptZoom(receiptZoom - 0.25));
+        receiptZoomFit && receiptZoomFit.addEventListener("click", () => setReceiptZoom(1));
+        receiptZoomIn && receiptZoomIn.addEventListener("click", () => setReceiptZoom(receiptZoom + 0.25));
         receiptViewerClose && receiptViewerClose.addEventListener("click", closeReceiptViewer);
         receiptViewer && receiptViewer.addEventListener("click", (event) => {{
           if (event.target === receiptViewer) closeReceiptViewer();
