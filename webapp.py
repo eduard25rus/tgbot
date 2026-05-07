@@ -4776,19 +4776,19 @@ def layout(
       color: rgba(255,255,255,0.72);
       font-size: 14px;
       font-weight: 600;
-      background: rgba(255,255,255,0.05);
-      border: 1px solid transparent;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.08);
       transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
     }}
     .nav-sublink:hover {{
-      background: rgba(255,255,255,0.11);
-      border-color: rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.18);
+      border-color: rgba(255,255,255,0.16);
       color: rgba(255,255,255,0.9);
     }}
     .nav-sublink.active {{
       color: rgba(255,255,255,0.96);
-      background: rgba(255,255,255,0.16);
-      border-color: rgba(255,255,255,0.20);
+      background: rgba(255,255,255,0.22);
+      border-color: rgba(255,255,255,0.22);
     }}
     .sidebar-note {{
       padding: 16px;
