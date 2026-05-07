@@ -4762,10 +4762,7 @@ def layout(
       display: grid;
       gap: 6px;
       margin-top: 8px;
-      padding: 10px;
-      border-radius: 16px;
-      background: rgba(255,255,255,0.10);
-      border: 1px solid rgba(255,255,255,0.10);
+      padding-left: 12px;
     }}
     .nav-sublink {{
       display: block;
