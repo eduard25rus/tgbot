@@ -919,11 +919,12 @@ def notify_cash_income_created(storage: Storage, owner_chat_id: int, amount: flo
     )
 
 
-def notify_legal_letter_created(storage: Storage, owner_chat_id: int, direction: str, actor_name: str) -> tuple[int, int]:
-    direction_label = "входящее письмо" if direction == "incoming" else "исходящее письмо"
+def notify_legal_letter_created(storage: Storage, owner_chat_id: int, direction: str, subject: str) -> tuple[int, int]:
+    direction_label = "Входящее письмо" if direction == "incoming" else "Исходящее письмо"
+    body = subject.strip() or "Без темы"
     safe_payload = {
-        "title": f"Новое {direction_label}",
-        "body": "Откройте приложение для просмотра",
+        "title": direction_label,
+        "body": body,
         "tag": "legal-letter-created",
         "url": "/cashoperations?screen=letters",
         "data": {
@@ -931,8 +932,8 @@ def notify_legal_letter_created(storage: Storage, owner_chat_id: int, direction:
         },
     }
     detailed_payload = {
-        "title": f"Новое {direction_label}",
-        "body": f"{actor_name.strip() or 'Пользователь'} добавил {direction_label}",
+        "title": direction_label,
+        "body": body,
         "tag": "legal-letter-created",
         "url": "/cashoperations?screen=letters",
         "data": {
@@ -12975,6 +12976,22 @@ def cashbox_balance_for_code(entries, cashboxes: list[dict], cashbox_code: str) 
     return round(sum(entry.amount for entry in cash_income_entries) - sum(entry.amount for entry in cash_expense_entries), 2)
 
 
+def mobile_cash_can_modify_cashbox(cash_access: dict | None, cashbox_code: str) -> bool:
+    if not cash_access or not cash_access.get("enabled") or not cash_access.get("can_add_expense"):
+        return False
+    if cash_access.get("role") == "owner":
+        return True
+    return cashbox_code == cash_access.get("default_cashbox_code")
+
+
+def mobile_cash_can_reconcile_cashbox(cash_access: dict | None, cashbox_code: str) -> bool:
+    if not cash_access or not cash_access.get("enabled") or not cash_access.get("can_reconcile"):
+        return False
+    if cash_access.get("role") == "owner":
+        return True
+    return cashbox_code == cash_access.get("default_cashbox_code")
+
+
 def expense_status_control(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses") -> str:
     label, css = EXPENSE_STATUS_META.get(entry.status, EXPENSE_STATUS_META["active"])
     if not has_permission(current_user, "expenses", "edit"):
@@ -13068,6 +13085,8 @@ def render_cashoperations_body(
     selected_cashbox: str = "denis",
     flash_message: str = "",
     success: bool = False,
+    selected_letter_object_filter: str = "",
+    initial_screen: str = "home",
 ) -> str:
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     cashbox_labels = {item["code"]: item["label"] for item in cashboxes}
@@ -13151,7 +13170,8 @@ def render_cashoperations_body(
     ]
     operations.sort(key=lambda item: (item[1].expense_date, item[1].created_at, item[1].id), reverse=True)
     latest_operations = operations[:14]
-    can_edit = bool(cash_access["can_add_expense"])
+    can_edit = mobile_cash_can_modify_cashbox(cash_access, selected_cashbox)
+    can_reconcile_selected = mobile_cash_can_reconcile_cashbox(cash_access, selected_cashbox)
 
     def editable_comment(entry) -> str:
         comment = entry.comment or ""
@@ -13272,14 +13292,25 @@ def render_cashoperations_body(
     letters_screen_html = ""
     letters_nav_html = ""
     if can_view_letters:
-        legal_letters = storage.list_legal_letters(owner_chat_id)[:50]
+        letter_object_filter = selected_letter_object_filter.strip()
+        legal_letters = storage.list_legal_letters(owner_chat_id, object_filter=letter_object_filter)[:50]
         legal_attachments = storage.list_legal_letter_attachments(owner_chat_id)
         legal_attachment_map: dict[int, list] = {}
         for attachment in legal_attachments:
             legal_attachment_map.setdefault(attachment.letter_id, []).append(attachment)
+        letter_object_options = "".join(
+            f'<option value="{escape(value)}"{" selected" if value == letter_object_filter else ""}>{escape(label)}</option>'
+            for value, label in jurisprudence_object_filter_options(storage, owner_chat_id)
+        )
+        letter_filter_reset = (
+            f'<a class="cash-mobile-filter-reset" href="/cashoperations?screen=letters&cashbox={quote_plus(selected_cashbox)}">Все</a>'
+            if letter_object_filter
+            else ""
+        )
 
         def letter_card(letter) -> str:
             direction_label = LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0]
+            direction_class = "outgoing" if letter.direction == "outgoing" else "incoming"
             channel_label = LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта")
             attachments = legal_attachment_map.get(letter.id, [])
             file_count = len(attachments) or (1 if letter.file_path else 0)
@@ -13304,9 +13335,13 @@ def render_cashoperations_body(
             return f"""
             <article class="cash-mobile-op cash-mobile-letter">
               <div class="cash-mobile-op-main">
-                <span class="cash-mobile-op-date">{escape(format_date(letter.letter_date))}</span>
-                <span class="cash-mobile-op-title"><strong>{escape(letter.subject or "Без темы")}</strong><span> · {escape(direction_label)} · {escape(channel_label)}</span></span>
+                <span class="cash-mobile-letter-head">
+                  <strong>{escape(format_date(letter.letter_date))}</strong>
+                  <span class="cash-mobile-letter-badge {direction_class}">{escape(direction_label)}</span>
+                  <span>{escape(channel_label)}</span>
+                </span>
                 <span class="cash-mobile-op-meta">{escape(letter.object_label or "Без объекта")}</span>
+                <span class="cash-mobile-op-comment">{escape(letter.subject or "Без темы")}</span>
                 {comment_html}
                 {author_html}
               </div>
@@ -13319,6 +13354,18 @@ def render_cashoperations_body(
         <section id="cashScreenLetters" class="cash-mobile-screen">
           <section class="cash-mobile-panel">
             <div class="cash-mobile-section-head"><h2>Письма</h2></div>
+            <form class="cash-mobile-letter-filter" method="get" action="/cashoperations">
+              <input type="hidden" name="screen" value="letters">
+              <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+              <label>Объект
+                <select name="letter_object">
+                  <option value="">Все объекты</option>
+                  {letter_object_options}
+                </select>
+              </label>
+              <button type="submit">Показать</button>
+              {letter_filter_reset}
+            </form>
             {letters_rows}
           </section>
         </section>
@@ -13329,6 +13376,7 @@ def render_cashoperations_body(
         f'<a class="cash-mobile-tab{" active" if item["code"] == selected_cashbox else ""}" href="/cashoperations?cashbox={item["code"]}">{escape(item["label"])}</a>'
         for item in allowed_cashboxes
     )
+    cashbox_tabs_extra_class = " is-hidden" if initial_screen == "letters" else ""
     flash_html = f'<div class="cash-mobile-flash{" ok" if success else ""}" data-cash-flash>{escape(flash_message)}</div>' if flash_message else ""
     edit_back_html = '<div class="cash-mobile-editbar is-hidden" data-cash-editbar><button type="button" data-cash-edit-back>Назад</button></div>'
     warnings = []
@@ -13442,6 +13490,15 @@ def render_cashoperations_body(
         </section>
         """
 
+    cash_action_buttons = f"""
+          <button class="cash-mobile-action expense" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
+          <button class="cash-mobile-action income" type="button" data-cash-screen="income" data-cash-new-income="1">Добавить поступление</button>
+    """ if can_edit else ""
+    cash_action_buttons += """
+          <button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>
+          <button class="cash-mobile-action" type="button" data-cash-screen="reconcile">Сверить кассу</button>
+    """
+
     reconcile_screen = (
     f"""
     <section class="cash-mobile-panel">
@@ -13462,8 +13519,8 @@ def render_cashoperations_body(
       {latest_reconciliation_html}
     </section>
     """
-    if cash_access["can_reconcile"]
-    else '<section class="cash-mobile-panel"><h2>Сверка недоступна</h2><div class="cash-mobile-sub">Администратор не включил право сверки этой кассы.</div></section>'
+    if can_reconcile_selected
+    else '<section class="cash-mobile-panel"><h2>Сверка недоступна</h2><div class="cash-mobile-sub">Для этой кассы доступен только просмотр.</div></section>'
     )
 
     return f"""
@@ -13495,6 +13552,9 @@ def render_cashoperations_body(
         color: #186844;
         background: #e3f2e9;
         border-color: rgba(24, 104, 68, .18);
+      }}
+      .cash-mobile-tabs.is-hidden {{
+        display: none;
       }}
       .cash-mobile-screen {{ display: none; }}
       .cash-mobile-screen.active {{ display: block; }}
@@ -13697,6 +13757,80 @@ def render_cashoperations_body(
       }}
       .cash-mobile-op b.income {{ color: #186844; }}
       .cash-mobile-op b.expense {{ color: #9b2f2f; }}
+      .cash-mobile-letter-filter {{
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 8px;
+        align-items: end;
+        margin: 8px 0 10px;
+      }}
+      .cash-mobile-letter-filter label {{
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }}
+      .cash-mobile-letter-filter select {{
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px 10px;
+        background: #fff;
+        color: var(--ink);
+        font: inherit;
+        font-size: 16px;
+      }}
+      .cash-mobile-letter-filter button,
+      .cash-mobile-filter-reset {{
+        min-height: 42px;
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #186844;
+        color: #fff;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 800;
+        text-decoration: none;
+        display: inline-grid;
+        place-items: center;
+      }}
+      .cash-mobile-filter-reset {{
+        background: #fff;
+        color: var(--muted);
+        border: 1px solid var(--line);
+      }}
+      .cash-mobile-letter-head {{
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        flex-wrap: wrap;
+        font-size: 12px;
+        line-height: 1.25;
+      }}
+      .cash-mobile-letter-head strong {{
+        font-weight: 800;
+      }}
+      .cash-mobile-letter-head > span:not(.cash-mobile-letter-badge) {{
+        color: var(--muted);
+      }}
+      .cash-mobile-letter-badge {{
+        display: inline-grid;
+        place-items: center;
+        min-height: 24px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 800;
+      }}
+      .cash-mobile-letter-badge.outgoing {{
+        background: #e3f2e9;
+        color: #186844;
+      }}
+      .cash-mobile-letter-badge.incoming {{
+        background: #f4e5e5;
+        color: #9b2f2f;
+      }}
       .cash-mobile-letter-file {{
         display: inline-grid;
         place-items: center;
@@ -13826,6 +13960,7 @@ def render_cashoperations_body(
       @media (max-width: 420px) {{
         .cash-mobile-metrics {{ grid-template-columns: 1fr; }}
         .cash-mobile-actions {{ grid-template-columns: 1fr; }}
+        .cash-mobile-letter-filter {{ grid-template-columns: 1fr; }}
       }}
       .cash-receipt-viewer {{
         position: fixed;
@@ -13916,7 +14051,7 @@ def render_cashoperations_body(
       }}
     </style>
     <section class="cash-mobile">
-      <div class="cash-mobile-tabs">{cashbox_tabs}</div>
+      <div class="cash-mobile-tabs{cashbox_tabs_extra_class}" data-cashbox-tabs>{cashbox_tabs}</div>
       {flash_html}
       {edit_back_html}
       <section id="cashScreenHome" class="cash-mobile-screen active">
@@ -13931,10 +14066,7 @@ def render_cashoperations_body(
           {warning_html}
         </section>
         <div class="cash-mobile-actions">
-          <button class="cash-mobile-action expense" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
-          <button class="cash-mobile-action income" type="button" data-cash-screen="income" data-cash-new-income="1">Добавить поступление</button>
-          <button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>
-          <button class="cash-mobile-action" type="button" data-cash-screen="reconcile">Сверить кассу</button>
+          {cash_action_buttons}
         </div>
         <section class="cash-mobile-panel">
           <div class="cash-mobile-section-head"><h2>Последние операции</h2></div>
@@ -13984,11 +14116,13 @@ def render_cashoperations_body(
           history: document.querySelector("#cashScreenHistory"),
           reconcile: document.querySelector("#cashScreenReconcile")
         }};
+        const cashboxTabs = document.querySelector("[data-cashbox-tabs]");
         function show(name) {{
           Object.entries(screens).forEach(([key, el]) => el && el.classList.toggle("active", key === name));
           document.querySelectorAll("[data-cash-screen]").forEach((button) => {{
             button.classList.toggle("active", button.dataset.cashScreen === name);
           }});
+          if (cashboxTabs) cashboxTabs.classList.toggle("is-hidden", name === "letters");
           window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
         const expenseForm = document.querySelector(".cash-mobile-form[action='/cashoperations/expense']");
@@ -17279,9 +17413,11 @@ self.addEventListener("notificationclick", (event) => {
 
     if path == "/cashoperations" and method == "GET":
         selected_cashbox = query.get("cashbox", [""])[0].strip()
+        selected_letter_object_filter = query.get("letter_object", [""])[0].strip()
+        initial_screen = query.get("screen", ["home"])[0].strip()
         flash_message = query.get("flash", [""])[0].strip()
         success = query.get("ok", ["0"])[0] == "1"
-        body = render_cashoperations_body(storage, current_owner, current_user, selected_cashbox, flash_message, success)
+        body = render_cashoperations_body(storage, current_owner, current_user, selected_cashbox, flash_message, success, selected_letter_object_filter, initial_screen)
         html = render_cashoperations_standalone_page(body, current_user)
         start_response("200 OK", [
             ("Content-Type", "text/html; charset=utf-8"),
@@ -17364,6 +17500,8 @@ self.addEventListener("notificationclick", (event) => {
         allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
         if selected_cashbox not in allowed_codes:
             selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (next(iter(allowed_codes), ""))
+        if not mobile_cash_can_modify_cashbox(cash_access, selected_cashbox):
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash=Для этой кассы доступен только просмотр")
         source_labels = {
             "bank": "Расчетный счет",
             "owner": "Эдуард / владелец",
@@ -17398,6 +17536,8 @@ self.addEventListener("notificationclick", (event) => {
                 existing_cashbox = cashbox_code_from_entry(existing_entry, cashboxes)
                 if existing_cashbox not in allowed_codes:
                     raise ValueError("Нет прав на редактирование этой кассы")
+                if not mobile_cash_can_modify_cashbox(cash_access, existing_cashbox):
+                    raise ValueError("Для этой кассы доступен только просмотр")
                 selected_cashbox = existing_cashbox or selected_cashbox
                 cashbox_marker = f"[{cashbox_labels.get(selected_cashbox, 'Касса')}]"
                 normalized_comment = " ".join(part for part in (cashbox_marker, source_marker, comment) if part)
@@ -17452,6 +17592,8 @@ self.addEventListener("notificationclick", (event) => {
             existing_cashbox = cashbox_code_from_entry(existing_entry, cashboxes)
             if existing_cashbox not in allowed_codes:
                 raise ValueError("Нет прав на удаление этой кассы")
+            if not mobile_cash_can_modify_cashbox(cash_access, existing_cashbox):
+                raise ValueError("Для этой кассы доступен только просмотр")
             selected_cashbox = existing_cashbox
             if not storage.delete_expense_entry(current_owner, income_id):
                 raise ValueError("Поступление не найдено")
@@ -17474,6 +17616,8 @@ self.addEventListener("notificationclick", (event) => {
         allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
         if selected_cashbox not in allowed_codes:
             selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (next(iter(allowed_codes), ""))
+        if not mobile_cash_can_modify_cashbox(cash_access, selected_cashbox):
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash=Для этой кассы доступен только просмотр")
         try:
             expense_date_raw = form.get("expense_date", "").strip()
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
@@ -17501,6 +17645,8 @@ self.addEventListener("notificationclick", (event) => {
                 existing_cashbox = cashbox_code_from_entry(existing_entry, cashboxes)
                 if existing_cashbox not in allowed_codes:
                     raise ValueError("Нет прав на редактирование этой кассы")
+                if not mobile_cash_can_modify_cashbox(cash_access, existing_cashbox):
+                    raise ValueError("Для этой кассы доступен только просмотр")
                 selected_cashbox = existing_cashbox or selected_cashbox
             payroll_employee_lookup = {
                 employee.id: employee
@@ -17600,6 +17746,8 @@ self.addEventListener("notificationclick", (event) => {
             existing_cashbox = cashbox_code_from_entry(existing_entry, cashboxes)
             if existing_cashbox not in allowed_codes:
                 raise ValueError("Нет прав на удаление этой кассы")
+            if not mobile_cash_can_modify_cashbox(cash_access, existing_cashbox):
+                raise ValueError("Для этой кассы доступен только просмотр")
             selected_cashbox = existing_cashbox
             if not storage.delete_expense_entry(current_owner, expense_id):
                 raise ValueError("Расход не найден")
@@ -17618,6 +17766,8 @@ self.addEventListener("notificationclick", (event) => {
         allowed_codes = {item["code"] for item in cashboxes} if cash_access["can_view_all_cashboxes"] else set(cash_access["allowed_cashbox_codes"])
         if selected_cashbox not in allowed_codes:
             selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (next(iter(allowed_codes), ""))
+        if not mobile_cash_can_reconcile_cashbox(cash_access, selected_cashbox):
+            return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash=Для этой кассы доступен только просмотр")
         try:
             actual_balance = parse_amount(form.get("actual_balance", "").strip())
             entries = storage.list_expense_entries(current_owner)
@@ -21178,7 +21328,7 @@ self.addEventListener("notificationclick", (event) => {
                 source_kind="legal_letter_create",
                 source_ref=str(created),
             )
-            notify_legal_letter_created(storage, current_owner, direction, actor_name)
+            notify_legal_letter_created(storage, current_owner, direction, subject)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить письмо: {exc}")
@@ -21312,7 +21462,7 @@ self.addEventListener("notificationclick", (event) => {
                     source_kind="legal_letter_create",
                     source_ref=str(created),
                 )
-            notify_legal_letter_created(storage, current_owner, direction, actor_name)
+            notify_legal_letter_created(storage, current_owner, direction, subject)
             return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
         except Exception as exc:
             body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось добавить письмо: {exc}")
