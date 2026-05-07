@@ -4674,6 +4674,15 @@ def layout(
       position: relative;
       padding-right: 38px;
     }}
+    .nav-group[open] > .nav-group-link {{
+      color: #fff6ee;
+      background: rgba(119, 72, 46, 0.46);
+      border-color: rgba(178, 105, 58, 0.70);
+    }}
+    .nav-group[open] > .nav-group-link:hover {{
+      background: rgba(132, 80, 50, 0.54);
+      border-color: rgba(194, 117, 65, 0.78);
+    }}
     .nav-group-title {{
       color: inherit;
       text-decoration: none;
@@ -4716,9 +4725,9 @@ def layout(
       color: rgba(255,255,255,0.9);
     }}
     .nav-sublink.active {{
-      color: white;
-      background: rgba(255,255,255,0.11);
-      border-color: rgba(255,255,255,0.14);
+      color: rgba(255,255,255,0.96);
+      background: rgba(255,255,255,0.13);
+      border-color: rgba(255,255,255,0.18);
     }}
     .sidebar-note {{
       padding: 16px;
