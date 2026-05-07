@@ -5865,6 +5865,46 @@ class Storage:
             )
             return cursor.rowcount
 
+    def reassign_expense_entries(self, owner_chat_id: int, old_category_code: str, replacements: dict[int, str]) -> int:
+        old_code = old_category_code.strip()
+        cleaned_replacements = {
+            int(entry_id): category_code.strip()
+            for entry_id, category_code in replacements.items()
+            if int(entry_id) > 0 and category_code.strip()
+        }
+        if not old_code or not cleaned_replacements:
+            return 0
+        target_codes = set(cleaned_replacements.values())
+        with self.connection() as conn:
+            available_codes = {
+                row["code"]
+                for row in conn.execute(
+                    """
+                    SELECT code
+                    FROM expense_categories
+                    WHERE owner_chat_id = ? AND deleted_at IS NULL
+                    """,
+                    (owner_chat_id,),
+                ).fetchall()
+            }
+            if not target_codes.issubset(available_codes):
+                return 0
+            changed_count = 0
+            now = datetime.utcnow().isoformat()
+            for entry_id, category_code in cleaned_replacements.items():
+                if category_code == old_code:
+                    continue
+                cursor = conn.execute(
+                    """
+                    UPDATE expense_entries
+                    SET category_code = ?, updated_at = ?
+                    WHERE id = ? AND owner_chat_id = ? AND category_code = ? AND deleted_at IS NULL
+                    """,
+                    (category_code, now, entry_id, owner_chat_id, old_code),
+                )
+                changed_count += cursor.rowcount
+            return changed_count
+
     def delete_expense_category(self, owner_chat_id: int, category_id: int) -> bool:
         category = self.get_expense_category(owner_chat_id, category_id)
         if category is None:

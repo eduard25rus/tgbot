@@ -7135,6 +7135,14 @@ def layout(
       gap: 10px;
       align-items: end;
     }}
+    .directory-conflict-row-category {{
+      min-width: 260px;
+    }}
+    .directory-conflict-row-category select {{
+      width: 100%;
+      border-color: rgba(224, 159, 30, 0.45);
+      background: #fff8df;
+    }}
     @media (max-width: 760px) {{
       .directory-category-actions,
       .directory-conflict-actions {{
@@ -7207,6 +7215,17 @@ def layout(
     .status-popover.align-right {{
       left: auto;
       right: 0;
+    }}
+    .status-popover.is-viewport-fitted,
+    .settings-popover.is-viewport-fitted,
+    .name-popover.is-viewport-fitted {{
+      position: fixed;
+      right: auto;
+      bottom: auto;
+      margin-top: 0;
+      max-width: calc(100vw - 24px);
+      overflow: auto;
+      z-index: 1000;
     }}
     .expense-editor-popover {{
       left: 0;
@@ -7610,19 +7629,106 @@ document.addEventListener("click", (event) => {{
   settingsToggle.textContent = isOpening ? "Скрыть настройки" : "Показать настройки";
 }});
 
-document.addEventListener("toggle", (event) => {{
-  const menu = event.target.closest(".settings-menu");
+const floatingPopoverSelector = ".status-popover, .settings-popover, .name-popover";
+const floatingPopoverStyleProps = ["top", "left", "right", "bottom", "maxHeight", "maxWidth", "minWidth", "visibility"];
+
+function rememberFloatingPopoverStyles(popover) {{
+  if (popover.dataset.floatingOriginalStyles) {{
+    return;
+  }}
+  const originalStyles = {{}};
+  floatingPopoverStyleProps.forEach((prop) => {{
+    originalStyles[prop] = popover.style[prop] || "";
+  }});
+  popover.dataset.floatingOriginalStyles = JSON.stringify(originalStyles);
+}}
+
+function resetFloatingPopover(popover) {{
+  if (!popover) {{
+    return;
+  }}
+  const originalStyles = popover.dataset.floatingOriginalStyles ? JSON.parse(popover.dataset.floatingOriginalStyles) : null;
+  popover.classList.remove("is-viewport-fitted");
+  floatingPopoverStyleProps.forEach((prop) => {{
+    popover.style[prop] = originalStyles ? originalStyles[prop] || "" : "";
+  }});
+  delete popover.dataset.floatingOriginalStyles;
+}}
+
+function statusMenuPopover(menu) {{
+  return menu ? menu.querySelector(floatingPopoverSelector) : null;
+}}
+
+function fitStatusMenuPopover(menu) {{
   if (!menu || !menu.open) {{
     return;
   }}
-  const permissionsPanel = menu.querySelector(".access-permissions-popover");
-  if (!permissionsPanel) {{
+  const summary = menu.querySelector("summary");
+  const popover = statusMenuPopover(menu);
+  if (!summary || !popover) {{
     return;
   }}
-  window.requestAnimationFrame(() => {{
-    permissionsPanel.scrollIntoView({{ behavior: "smooth", block: "end", inline: "nearest" }});
-  }});
+  resetFloatingPopover(popover);
+  rememberFloatingPopoverStyles(popover);
+
+  const viewportPad = 12;
+  const gap = 8;
+  const summaryRect = summary.getBoundingClientRect();
+  const availableWidth = Math.max(260, window.innerWidth - viewportPad * 2);
+
+  popover.classList.add("is-viewport-fitted");
+  popover.style.visibility = "hidden";
+  popover.style.top = "0px";
+  popover.style.left = "0px";
+  popover.style.right = "auto";
+  popover.style.bottom = "auto";
+  popover.style.maxWidth = `${{availableWidth}}px`;
+  popover.style.minWidth = `${{Math.min(popover.getBoundingClientRect().width, availableWidth)}}px`;
+  popover.style.maxHeight = `${{Math.max(180, window.innerHeight - viewportPad * 2)}}px`;
+
+  const popoverRect = popover.getBoundingClientRect();
+  const popoverWidth = Math.min(popoverRect.width, availableWidth);
+  const popoverHeight = Math.min(popoverRect.height, window.innerHeight - viewportPad * 2);
+  const preferRight = popover.classList.contains("align-right");
+  let left = preferRight ? summaryRect.right - popoverWidth : summaryRect.left;
+  left = Math.min(Math.max(viewportPad, left), Math.max(viewportPad, window.innerWidth - viewportPad - popoverWidth));
+
+  const belowTop = summaryRect.bottom + gap;
+  const aboveTop = summaryRect.top - popoverHeight - gap;
+  const spaceBelow = window.innerHeight - belowTop - viewportPad;
+  const spaceAbove = summaryRect.top - gap - viewportPad;
+  const openAbove = spaceBelow < popoverHeight && spaceAbove > spaceBelow;
+  let top = openAbove ? aboveTop : belowTop;
+  top = Math.min(Math.max(viewportPad, top), Math.max(viewportPad, window.innerHeight - viewportPad - popoverHeight));
+  const maxHeight = openAbove
+    ? Math.max(160, summaryRect.top - viewportPad - gap)
+    : Math.max(160, window.innerHeight - top - viewportPad);
+
+  popover.style.left = `${{left}}px`;
+  popover.style.top = `${{top}}px`;
+  popover.style.maxHeight = `${{maxHeight}}px`;
+  popover.style.visibility = "";
+}}
+
+function fitOpenStatusPopovers() {{
+  document.querySelectorAll(".status-menu[open]").forEach((menu) => fitStatusMenuPopover(menu));
+}}
+
+document.addEventListener("toggle", (event) => {{
+  const menu = event.target.matches && event.target.matches(".status-menu") ? event.target : null;
+  if (!menu) {{
+    return;
+  }}
+  const popover = statusMenuPopover(menu);
+  if (!menu.open) {{
+    resetFloatingPopover(popover);
+    return;
+  }}
+  window.requestAnimationFrame(() => fitStatusMenuPopover(menu));
 }}, true);
+
+window.addEventListener("resize", () => window.requestAnimationFrame(fitOpenStatusPopovers), {{ passive: true }});
+document.addEventListener("scroll", () => window.requestAnimationFrame(fitOpenStatusPopovers), true);
 
 function buildContractStageFields(form, count) {{
   const container = form ? form.querySelector('[data-stage-container]') : null;
@@ -9429,7 +9535,7 @@ def render_directories_section(
         if conflict_category is not None:
             conflict_entries = storage.list_expense_entries_by_category(owner_chat_id, conflict_category.code)
             conflict_total = sum(entry.amount for entry in conflict_entries)
-            replacement_options = "".join(
+            replacement_options = '<option value="">Выберите категорию</option>' + "".join(
                 f'<option value="{escape(category.code)}">{escape(category.label)}</option>'
                 for category in expense_categories
                 if category.code != conflict_category.code
@@ -9437,29 +9543,35 @@ def render_directories_section(
             conflict_rows = "".join(
                 f"""
                 <tr>
+                  <td class="nowrap"><label class="advance-toggle"><input type="checkbox" name="entry_selected_{entry.id}" value="1"> Выбрать</label></td>
                   <td>{format_date(entry.expense_date)}</td>
                   <td>
                     <div class="timeline-title">{escape(entry.title or "Без названия")}</div>
                     <div class="contract-table-subtle">{escape(expense_payment_source_label(entry.payment_source))} · {escape(money_operation_type_label(entry.operation_type))}</div>
                   </td>
                   <td class="nowrap">{escape(format_amount(entry.amount))}</td>
+                  <td class="directory-conflict-row-category">
+                    <select name="entry_category_{entry.id}" aria-label="Новая категория для платежа {entry.id}">
+                      {replacement_options}
+                    </select>
+                  </td>
                   <td><span class="chip{" ok" if entry.status == "closed" else ""}">{"Закрыт" if entry.status == "closed" else "В работе"}</span></td>
                 </tr>
                 """
                 for entry in conflict_entries
-            ) or '<tr><td colspan="4">Связанных платежей нет.</td></tr>'
+            ) or '<tr><td colspan="6">Связанных платежей нет.</td></tr>'
             replacement_form = (
                 f"""
-                <form class="directory-conflict-actions" method="post" action="/directories/expense-categories/{conflict_category.id}/reassign?owner={owner_chat_id}">
+                <div class="directory-conflict-actions">
                   <div class="field">
-                    <label>Заменить категорию в этих платежах на</label>
-                    <select name="target_category_code" required>{replacement_options}</select>
+                    <label>Массово перенести все платежи на</label>
+                    <select name="bulk_category_code" form="expense-category-conflict-form-{conflict_category.id}">{replacement_options}</select>
                   </div>
-                  <button class="secondary-btn" type="submit">Перенести платежи</button>
-                  <button class="secondary-btn danger" type="submit" name="delete_after" value="1" onclick="return confirm('Перенести платежи и удалить эту категорию?');">Перенести и удалить</button>
-                </form>
+                  <button class="secondary-btn" type="submit" name="action" value="selected" form="expense-category-conflict-form-{conflict_category.id}">Перенести выбранные</button>
+                  <button class="secondary-btn danger" type="submit" name="action" value="all" form="expense-category-conflict-form-{conflict_category.id}" onclick="return confirm('Перенести все платежи из этой категории в выбранную категорию?');">Перенести все платежи</button>
+                </div>
                 """
-                if replacement_options else '<div class="contract-table-subtle">Нет другой категории для переноса. Сначала добавьте новую категорию.</div>'
+                if len(expense_categories) > 1 else '<div class="contract-table-subtle">Нет другой категории для переноса. Сначала добавьте новую категорию.</div>'
             )
             expense_category_conflict_html = f"""
             <section class="card mini-card directory-conflict-panel">
@@ -9468,18 +9580,22 @@ def render_directories_section(
                 <div class="directory-card-title">Категория «{escape(conflict_category.label)}» используется в ДДС</div>
                 <div class="contract-table-subtle">Найдено платежей: {len(conflict_entries)}. Сумма: {escape(format_amount(conflict_total))}. Перед удалением перенесите эти платежи на другую категорию.</div>
               </div>
-              {replacement_form}
-              <table class="table contract-table">
-                <thead>
-                  <tr>
-                    <th>Дата</th>
-                    <th>Платеж</th>
-                    <th class="nowrap">Сумма</th>
-                    <th class="nowrap">Статус</th>
-                  </tr>
-                </thead>
-                <tbody>{conflict_rows}</tbody>
-              </table>
+              <form id="expense-category-conflict-form-{conflict_category.id}" method="post" action="/directories/expense-categories/{conflict_category.id}/reassign?owner={owner_chat_id}">
+                {replacement_form}
+                <table class="table contract-table">
+                  <thead>
+                    <tr>
+                      <th class="nowrap">Выбор</th>
+                      <th>Дата</th>
+                      <th>Платеж</th>
+                      <th class="nowrap">Сумма</th>
+                      <th>Новая категория</th>
+                      <th class="nowrap">Статус</th>
+                    </tr>
+                  </thead>
+                  <tbody>{conflict_rows}</tbody>
+                </table>
+              </form>
             </section>
             """
     add_expense_category_block = ""
@@ -17819,19 +17935,39 @@ self.addEventListener("notificationclick", (event) => {
         try:
             if category is None:
                 raise ValueError("Категория не найдена")
-            target_category_code = form.get("target_category_code", "").strip()
-            if not target_category_code:
-                raise ValueError("Выберите категорию для переноса")
-            changed_count = storage.reassign_expense_category(current_owner, category.code, target_category_code)
+            action = form.get("action", "selected").strip()
+            if action == "all":
+                target_category_code = form.get("bulk_category_code", "").strip()
+                if not target_category_code:
+                    raise ValueError("Выберите категорию для массового переноса")
+                changed_count = storage.reassign_expense_category(current_owner, category.code, target_category_code)
+            else:
+                linked_entries = storage.list_expense_entries_by_category(current_owner, category.code)
+                replacements = {}
+                for entry in linked_entries:
+                    if form.get(f"entry_selected_{entry.id}") != "1":
+                        continue
+                    target_category_code = form.get(f"entry_category_{entry.id}", "").strip()
+                    if not target_category_code:
+                        raise ValueError("Для каждого выбранного платежа укажите новую категорию")
+                    replacements[entry.id] = target_category_code
+                if not replacements:
+                    raise ValueError("Выберите платежи для переноса")
+                changed_count = storage.reassign_expense_entries(current_owner, category.code, replacements)
             if changed_count <= 0:
                 raise ValueError("Не удалось перенести платежи")
-            if form.get("delete_after") == "1":
-                if not storage.delete_expense_category(current_owner, category_id):
-                    raise ValueError("Платежи перенесены, но категорию не удалось удалить")
-                flash = f"Платежи перенесены: {changed_count}. Категория удалена."
-            else:
-                flash = f"Платежи перенесены: {changed_count}. Теперь категорию можно удалить."
-            body = render_directories_section(storage, current_owner, current_user, "expense-categories", "admin", flash, True)
+            remaining_entries = storage.list_expense_entries_by_category(current_owner, category.code)
+            flash = f"Платежи перенесены: {changed_count}."
+            body = render_directories_section(
+                storage,
+                current_owner,
+                current_user,
+                "expense-categories",
+                "admin",
+                flash,
+                True,
+                expense_category_conflict_id=category_id if remaining_entries else None,
+            )
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
