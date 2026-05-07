@@ -6586,6 +6586,12 @@ def layout(
     .access-cash-grid .span-2 {{
       grid-column: 1 / -1;
     }}
+    .access-cash-grid.is-disabled {{
+      grid-template-columns: 1fr;
+    }}
+    .access-cash-grid.is-disabled .cash-setting {{
+      display: none;
+    }}
     .access-cash-actions {{
       justify-content: flex-end;
     }}
@@ -7507,6 +7513,18 @@ function copyText(inputId) {{
   input.select();
   document.execCommand("copy");
 }}
+
+document.addEventListener("change", (event) => {{
+  const cashAccessToggle = event.target.closest(".js-cash-access-enabled");
+  if (!cashAccessToggle) {{
+    return;
+  }}
+  const grid = cashAccessToggle.closest(".access-cash-grid");
+  if (!grid) {{
+    return;
+  }}
+  grid.classList.toggle("is-disabled", !cashAccessToggle.checked);
+}});
 
 function buildContractStageFields(form, count) {{
   const container = form ? form.querySelector('[data-stage-container]') : null;
@@ -14982,11 +15000,11 @@ def render_access_section(
                     <span class="badge">Пуши: {push_mode_label}</span>
                   </div>
                 </div>
-                <div class="access-cash-grid">
+                <div class="access-cash-grid{" is-disabled" if not user_access["enabled"] else ""}">
                   <label class="advance-toggle span-2">
-                    <input class="toggle-checkbox" type="checkbox" name="enabled" value="1" {"checked" if user_access["enabled"] else ""}> Разрешить вход в мобильную кассу
+                    <input class="toggle-checkbox js-cash-access-enabled" type="checkbox" name="enabled" value="1" {"checked" if user_access["enabled"] else ""}> Разрешить вход в мобильную кассу
                   </label>
-                  <div class="field">
+                  <div class="field cash-setting">
                     <label>Роль в кассе</label>
                     <select name="role">
                       <option value="owner"{" selected" if user_access["role"] == "owner" else ""}>owner / admin</option>
@@ -14994,24 +15012,24 @@ def render_access_section(
                       <option value="limited"{" selected" if user_access["role"] == "limited" else ""}>limited</option>
                     </select>
                   </div>
-                  <div class="field">
+                  <div class="field cash-setting">
                     <label>Касса по умолчанию</label>
                     <select name="default_cashbox_code">{cashbox_select_options_cache[user_access["user_id"]]}</select>
                   </div>
-                  <div class="field">
+                  <div class="field cash-setting">
                     <label>Резервный логин для входа в кассу</label>
                     <input type="text" name="preview_login" value="{escape(user_access["preview_login"])}" placeholder="{escape(user["login"])}">
                   </div>
-                  <div class="field">
+                  <div class="field cash-setting">
                     <label>Новый резервный пароль</label>
                     <input type="text" name="preview_password" placeholder="Оставьте пустым, если менять не нужно">
                     <div class="field-hint">Сейчас: {"задан" if user_access["preview_password_hash"] else "не задан"}. Работает только для мобильной кассы.</div>
                   </div>
-                  <div class="permission-box">
+                  <div class="permission-box cash-setting">
                     <strong>Доступные кассы</strong>
                     <div class="check-row">{cashbox_checks}</div>
                   </div>
-                  <div class="permission-box">
+                  <div class="permission-box cash-setting">
                     <strong>Права в приложении</strong>
                     <div class="check-row">
                       <label><input type="checkbox" name="can_view_all_cashboxes" value="1" {"checked" if user_access["can_view_all_cashboxes"] else ""}> Видит все кассы</label>
@@ -15020,7 +15038,7 @@ def render_access_section(
                       <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Получает пуши</label>
                     </div>
                   </div>
-                  <div class="field span-2">
+                  <div class="field span-2 cash-setting">
                     <label>Режим push-уведомлений</label>
                     <select name="push_detail_mode">
                       <option value="safe"{" selected" if push_detail_mode == "safe" else ""}>Без деталей</option>
