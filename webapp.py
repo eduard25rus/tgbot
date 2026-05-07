@@ -3,12 +3,14 @@ from __future__ import annotations
 import calendar
 import os
 import csv
+import base64
 import hashlib
 import io
 import json
 import secrets
 import re
 import sqlite3
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
@@ -804,8 +806,8 @@ def resolve_cash_receipt_file(storage: Storage, entry) -> tuple[Path, str, str]:
 
 
 def send_cash_push(storage: Storage, owner_chat_id: int, payload: dict) -> tuple[int, int]:
-    public_key = cash_push_public_key()
-    private_key = cash_push_private_key()
+    public_key = cash_push_public_key(storage)
+    private_key = cash_push_private_key(storage)
     if not public_key or not private_key:
         return 0, 0
     try:
@@ -1105,11 +1107,56 @@ def verify_password(password: str, stored_hash: str) -> bool:
     return hash_password(password, salt) == f"{salt}${expected}"
 
 
-def cash_push_public_key() -> str:
-    return os.getenv("CASH_PUSH_VAPID_PUBLIC_KEY", os.getenv("VAPID_PUBLIC_KEY", "")).strip()
+def generated_cash_vapid_key_paths(storage: Storage) -> tuple[Path, Path]:
+    key_dir = storage.db_path.parent / "cash_push_keys"
+    return key_dir / "private_key.pem", key_dir / "public_key.txt"
 
 
-def cash_push_private_key() -> str:
+def ensure_generated_cash_vapid_keys(storage: Storage) -> tuple[str, str]:
+    private_path, public_path = generated_cash_vapid_key_paths(storage)
+    if private_path.exists() and public_path.exists():
+        public_key = public_path.read_text(encoding="utf-8").strip()
+        if public_key:
+            return public_key, str(private_path)
+    private_path.parent.mkdir(parents=True, exist_ok=True)
+    public_der_path = private_path.with_name("public_key.der")
+    subprocess.run(
+        ["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(private_path)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    private_path.chmod(0o600)
+    subprocess.run(
+        ["openssl", "ec", "-in", str(private_path), "-pubout", "-outform", "DER", "-out", str(public_der_path)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    public_der = public_der_path.read_bytes()
+    public_point = public_der[-65:]
+    if len(public_point) != 65 or public_point[0] != 0x04:
+        raise ValueError("Не удалось создать VAPID public key")
+    public_key = base64.urlsafe_b64encode(public_point).decode("ascii").rstrip("=")
+    public_path.write_text(public_key, encoding="utf-8")
+    public_der_path.unlink(missing_ok=True)
+    return public_key, str(private_path)
+
+
+def cash_push_public_key(storage: Storage | None = None) -> str:
+    configured = os.getenv("CASH_PUSH_VAPID_PUBLIC_KEY", os.getenv("VAPID_PUBLIC_KEY", "")).strip()
+    if configured:
+        return configured
+    if storage is None:
+        return ""
+    try:
+        public_key, _private_key = ensure_generated_cash_vapid_keys(storage)
+    except Exception:
+        return ""
+    return public_key
+
+
+def cash_push_private_key(storage: Storage | None = None) -> str:
     raw_key = os.getenv("CASH_PUSH_VAPID_PRIVATE_KEY", os.getenv("VAPID_PRIVATE_KEY", "")).strip()
     if raw_key.startswith("-----BEGIN") or "\\n" in raw_key:
         pem_key = raw_key.replace("\\n", "\n")
@@ -1120,11 +1167,19 @@ def cash_push_private_key() -> str:
             return str(key_path)
         except OSError:
             return raw_key
-    return raw_key
+    if raw_key:
+        return raw_key
+    if storage is None:
+        return ""
+    try:
+        _public_key, private_key = ensure_generated_cash_vapid_keys(storage)
+    except Exception:
+        return ""
+    return private_key
 
 
-def cash_push_enabled() -> bool:
-    return bool(cash_push_public_key() and cash_push_private_key())
+def cash_push_enabled(storage: Storage | None = None) -> bool:
+    return bool(cash_push_public_key(storage) and cash_push_private_key(storage))
 
 
 def parse_cookies(environ) -> dict[str, str]:
@@ -12186,7 +12241,7 @@ def render_cashoperations_body(
           </section>
         </section>
         """
-    push_public_key = cash_push_public_key()
+    push_public_key = cash_push_public_key(storage)
     push_allowed = bool(cash_access.get("can_receive_push") and push_public_key)
     allowed_cashboxes = cashboxes if cash_access["can_view_all_cashboxes"] else [
         item for item in cashboxes if item["code"] in set(cash_access["allowed_cashbox_codes"])
@@ -14516,7 +14571,7 @@ def render_access_section(
     users = storage.list_web_users(owner_chat_id)
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     mobile_cash_access = storage.list_mobile_cash_access(owner_chat_id)
-    push_server_ready = cash_push_enabled()
+    push_server_ready = cash_push_enabled(storage)
     base_setup_url = f"{base_url.rstrip('/')}/setup-password?token="
     stats = f"""
     <section class="stats">
@@ -16034,7 +16089,7 @@ self.addEventListener("notificationclick", (event) => {
         if not cash_access or not cash_access["enabled"] or not cash_access.get("can_receive_push"):
             start_response("403 Forbidden", [("Content-Type", "application/json; charset=utf-8")])
             return [b'{"ok":false,"error":"push_disabled"}']
-        if not cash_push_public_key():
+        if not cash_push_public_key(storage):
             start_response("503 Service Unavailable", [("Content-Type", "application/json; charset=utf-8")])
             return [b'{"ok":false,"error":"push_not_configured"}']
         payload = read_json_data(environ)
