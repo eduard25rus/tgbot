@@ -4684,15 +4684,6 @@ def layout(
       position: relative;
       padding-right: 38px;
     }}
-    .nav-group[open] > .nav-group-link {{
-      color: #fff6ee;
-      background: rgba(119, 72, 46, 0.46);
-      border-color: rgba(178, 105, 58, 0.70);
-    }}
-    .nav-group[open] > .nav-group-link:hover {{
-      background: rgba(132, 80, 50, 0.54);
-      border-color: rgba(194, 117, 65, 0.78);
-    }}
     .nav-group-title {{
       color: inherit;
       text-decoration: none;
@@ -4716,7 +4707,10 @@ def layout(
       display: grid;
       gap: 6px;
       margin-top: 8px;
-      padding-left: 12px;
+      padding: 10px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.10);
     }}
     .nav-sublink {{
       display: block;
@@ -4725,19 +4719,19 @@ def layout(
       color: rgba(255,255,255,0.72);
       font-size: 14px;
       font-weight: 600;
-      background: rgba(255,255,255,0.03);
+      background: rgba(255,255,255,0.05);
       border: 1px solid transparent;
       transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
     }}
     .nav-sublink:hover {{
-      background: rgba(255,255,255,0.07);
+      background: rgba(255,255,255,0.11);
       border-color: rgba(255,255,255,0.10);
       color: rgba(255,255,255,0.9);
     }}
     .nav-sublink.active {{
       color: rgba(255,255,255,0.96);
-      background: rgba(255,255,255,0.13);
-      border-color: rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.16);
+      border-color: rgba(255,255,255,0.20);
     }}
     .sidebar-note {{
       padding: 16px;
