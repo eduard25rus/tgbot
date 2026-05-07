@@ -5803,6 +5803,85 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def get_expense_category(self, owner_chat_id: int, category_id: int) -> ExpenseCategory | None:
+        self.ensure_default_expense_categories(owner_chat_id)
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, owner_chat_id, code, label, sort_order, deleted_at, created_at, updated_at
+                FROM expense_categories
+                WHERE owner_chat_id = ? AND id = ? AND deleted_at IS NULL
+                """,
+                (owner_chat_id, category_id),
+            ).fetchone()
+        return self._expense_category_from_row(row) if row is not None else None
+
+    def list_expense_entries_by_category(self, owner_chat_id: int, category_code: str) -> list[ExpenseEntry]:
+        cleaned_code = category_code.strip()
+        if not cleaned_code:
+            return []
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
+                    payroll_employee_id, payroll_employee_name, receipt_file_name, receipt_file_path,
+                    payment_source, operation_type, needs_adjustment,
+                    status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
+                    import_source, import_hash, import_doc_number, import_counterparty_inn,
+                    import_counterparty_account, raw_import_text
+                FROM expense_entries
+                WHERE owner_chat_id = ? AND category_code = ? AND deleted_at IS NULL
+                ORDER BY expense_date DESC, created_at DESC, id DESC
+                """,
+                (owner_chat_id, cleaned_code),
+            ).fetchall()
+        return [self._expense_entry_from_row(row) for row in rows]
+
+    def reassign_expense_category(self, owner_chat_id: int, old_category_code: str, new_category_code: str) -> int:
+        old_code = old_category_code.strip()
+        new_code = new_category_code.strip()
+        if not old_code or not new_code or old_code == new_code:
+            return 0
+        with self.connection() as conn:
+            target = conn.execute(
+                """
+                SELECT 1
+                FROM expense_categories
+                WHERE owner_chat_id = ? AND code = ? AND deleted_at IS NULL
+                LIMIT 1
+                """,
+                (owner_chat_id, new_code),
+            ).fetchone()
+            if target is None:
+                return 0
+            cursor = conn.execute(
+                """
+                UPDATE expense_entries
+                SET category_code = ?, updated_at = ?
+                WHERE owner_chat_id = ? AND category_code = ? AND deleted_at IS NULL
+                """,
+                (new_code, datetime.utcnow().isoformat(), owner_chat_id, old_code),
+            )
+            return cursor.rowcount
+
+    def delete_expense_category(self, owner_chat_id: int, category_id: int) -> bool:
+        category = self.get_expense_category(owner_chat_id, category_id)
+        if category is None:
+            return False
+        if self.list_expense_entries_by_category(owner_chat_id, category.code):
+            return False
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE expense_categories
+                SET deleted_at = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (datetime.utcnow().isoformat(), datetime.utcnow().isoformat(), category_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
     def list_expense_entries(self, owner_chat_id: int, include_deleted: bool = False) -> list[ExpenseEntry]:
         with self.connection() as conn:
             rows = conn.execute(

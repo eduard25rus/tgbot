@@ -7109,6 +7109,38 @@ def layout(
       font-size: 14px;
       line-height: 1.45;
     }}
+    .directory-category-actions {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 2px;
+    }}
+    .directory-category-actions form {{
+      margin: 0;
+    }}
+    .directory-category-actions button {{
+      width: 100%;
+      justify-content: center;
+    }}
+    .directory-conflict-panel {{
+      margin-top: 18px;
+      display: grid;
+      gap: 14px;
+      border-color: rgba(179, 60, 60, 0.22);
+      background: #fffafa;
+    }}
+    .directory-conflict-actions {{
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) auto auto;
+      gap: 10px;
+      align-items: end;
+    }}
+    @media (max-width: 760px) {{
+      .directory-category-actions,
+      .directory-conflict-actions {{
+        grid-template-columns: 1fr;
+      }}
+    }}
     .auction-added-tooltip {{
       position: relative;
       cursor: default;
@@ -9206,6 +9238,7 @@ def render_directories_section(
     active_employee_group: str = "admin",
     flash_message: str = "",
     success: bool = False,
+    expense_category_conflict_id: int | None = None,
 ) -> str:
     active_directory_mode = active_directory_mode if active_directory_mode in {"objects", "expense-categories", "employees"} else ""
     employee_groups = {
@@ -9272,10 +9305,11 @@ def render_directories_section(
         edit_form: str = "",
     ) -> str:
         badges_html = "".join(f'<span class="badge">{escape(badge)}</span>' for badge in badges)
+        badge_row_html = f'<div class="badge-row">{badges_html}</div>' if badges_html else ""
         meta_html = "".join(f'<div class="directory-card-meta">{escape(line)}</div>' for line in meta_lines if line)
         card_html = f"""
         <div class="card mini-card contract-table-link directory-card">
-          <div class="badge-row">{badges_html}</div>
+          {badge_row_html}
           <div class="directory-card-title">{escape(title)}</div>
           {meta_html}
         </div>
@@ -9365,24 +9399,89 @@ def render_directories_section(
         </details>
         """
 
-    default_expense_category_codes = {code for code, _label in DEFAULT_EXPENSE_CATEGORIES}
     expense_category_cards = "".join(
         render_directory_card(
             category.label,
-            ["Базовая" if category.code in default_expense_category_codes else "Своя"],
+            [],
             [],
             f"""
-            <form class="form-grid directory-edit-form" method="post" action="/directories/expense-categories/{category.id}/update?owner={owner_chat_id}">
+            <div class="directory-edit-form">
+            <form id="expense-category-update-{category.id}" class="form-grid" method="post" action="/directories/expense-categories/{category.id}/update?owner={owner_chat_id}">
               <div class="field" style="grid-column: 1 / -1;">
                 <label>Название категории</label>
                 <input type="text" name="label" value="{escape(category.label)}" required>
               </div>
-              <button class="submit-btn" type="submit">Сохранить категорию</button>
             </form>
+            <div class="directory-category-actions">
+              <button class="submit-btn" type="submit" form="expense-category-update-{category.id}">Сохранить</button>
+              <form method="post" action="/directories/expense-categories/{category.id}/delete?owner={owner_chat_id}" onsubmit="return confirm('Удалить категорию расходов? Если она используется в ДДС, CRM остановит удаление и покажет связанные платежи.');">
+                <button class="secondary-btn danger" type="submit">Удалить категорию</button>
+              </form>
+            </div>
+            </div>
             """,
         )
         for category in expense_categories
     ) or '<div class="empty">Категорий расходов пока нет.</div>'
+    expense_category_conflict_html = ""
+    if expense_category_conflict_id is not None:
+        conflict_category = next((category for category in expense_categories if category.id == expense_category_conflict_id), None)
+        if conflict_category is not None:
+            conflict_entries = storage.list_expense_entries_by_category(owner_chat_id, conflict_category.code)
+            conflict_total = sum(entry.amount for entry in conflict_entries)
+            replacement_options = "".join(
+                f'<option value="{escape(category.code)}">{escape(category.label)}</option>'
+                for category in expense_categories
+                if category.code != conflict_category.code
+            )
+            conflict_rows = "".join(
+                f"""
+                <tr>
+                  <td>{format_date(entry.expense_date)}</td>
+                  <td>
+                    <div class="timeline-title">{escape(entry.title or "Без названия")}</div>
+                    <div class="contract-table-subtle">{escape(expense_payment_source_label(entry.payment_source))} · {escape(money_operation_type_label(entry.operation_type))}</div>
+                  </td>
+                  <td class="nowrap">{escape(format_amount(entry.amount))}</td>
+                  <td><span class="chip{" ok" if entry.status == "closed" else ""}">{"Закрыт" if entry.status == "closed" else "В работе"}</span></td>
+                </tr>
+                """
+                for entry in conflict_entries
+            ) or '<tr><td colspan="4">Связанных платежей нет.</td></tr>'
+            replacement_form = (
+                f"""
+                <form class="directory-conflict-actions" method="post" action="/directories/expense-categories/{conflict_category.id}/reassign?owner={owner_chat_id}">
+                  <div class="field">
+                    <label>Заменить категорию в этих платежах на</label>
+                    <select name="target_category_code" required>{replacement_options}</select>
+                  </div>
+                  <button class="secondary-btn" type="submit">Перенести платежи</button>
+                  <button class="secondary-btn danger" type="submit" name="delete_after" value="1" onclick="return confirm('Перенести платежи и удалить эту категорию?');">Перенести и удалить</button>
+                </form>
+                """
+                if replacement_options else '<div class="contract-table-subtle">Нет другой категории для переноса. Сначала добавьте новую категорию.</div>'
+            )
+            expense_category_conflict_html = f"""
+            <section class="card mini-card directory-conflict-panel">
+              <div>
+                <div class="stat-label">Удаление остановлено</div>
+                <div class="directory-card-title">Категория «{escape(conflict_category.label)}» используется в ДДС</div>
+                <div class="contract-table-subtle">Найдено платежей: {len(conflict_entries)}. Сумма: {escape(format_amount(conflict_total))}. Перед удалением перенесите эти платежи на другую категорию.</div>
+              </div>
+              {replacement_form}
+              <table class="table contract-table">
+                <thead>
+                  <tr>
+                    <th>Дата</th>
+                    <th>Платеж</th>
+                    <th class="nowrap">Сумма</th>
+                    <th class="nowrap">Статус</th>
+                  </tr>
+                </thead>
+                <tbody>{conflict_rows}</tbody>
+              </table>
+            </section>
+            """
     add_expense_category_block = ""
     if can_edit:
         add_expense_category_block = f"""
@@ -9579,6 +9678,7 @@ def render_directories_section(
       <div class="directory-card-grid">
         {expense_category_cards}
       </div>
+      {expense_category_conflict_html}
     </section>
     """
     employees_section = f"""
@@ -17664,6 +17764,88 @@ self.addEventListener("notificationclick", (event) => {
             return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, "expense-categories", "admin", f"Не удалось обновить категорию расходов: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/directories/expense-categories/") and path.endswith("/delete") and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        try:
+            category_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            category_id = -1
+        category = storage.get_expense_category(current_owner, category_id)
+        try:
+            if category is None:
+                raise ValueError("Категория не найдена")
+            linked_entries = storage.list_expense_entries_by_category(current_owner, category.code)
+            if linked_entries:
+                total = sum(entry.amount for entry in linked_entries)
+                message = f"Категория используется в ДДС: {len(linked_entries)} платежей на сумму {format_amount(total)}. Сначала перенесите платежи на другую категорию."
+                body = render_directories_section(
+                    storage,
+                    current_owner,
+                    current_user,
+                    "expense-categories",
+                    "admin",
+                    message,
+                    False,
+                    expense_category_conflict_id=category_id,
+                )
+                html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+                start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+                return [html.encode("utf-8")]
+            if not storage.delete_expense_category(current_owner, category_id):
+                raise ValueError("Категория не найдена или уже используется")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
+        except Exception as exc:
+            body = render_directories_section(storage, current_owner, current_user, "expense-categories", "admin", f"Не удалось удалить категорию расходов: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/directories/expense-categories/") and path.endswith("/reassign") and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        try:
+            category_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            category_id = -1
+        form = read_post_data(environ)
+        category = storage.get_expense_category(current_owner, category_id)
+        try:
+            if category is None:
+                raise ValueError("Категория не найдена")
+            target_category_code = form.get("target_category_code", "").strip()
+            if not target_category_code:
+                raise ValueError("Выберите категорию для переноса")
+            changed_count = storage.reassign_expense_category(current_owner, category.code, target_category_code)
+            if changed_count <= 0:
+                raise ValueError("Не удалось перенести платежи")
+            if form.get("delete_after") == "1":
+                if not storage.delete_expense_category(current_owner, category_id):
+                    raise ValueError("Платежи перенесены, но категорию не удалось удалить")
+                flash = f"Платежи перенесены: {changed_count}. Категория удалена."
+            else:
+                flash = f"Платежи перенесены: {changed_count}. Теперь категорию можно удалить."
+            body = render_directories_section(storage, current_owner, current_user, "expense-categories", "admin", flash, True)
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        except Exception as exc:
+            body = render_directories_section(
+                storage,
+                current_owner,
+                current_user,
+                "expense-categories",
+                "admin",
+                f"Не удалось перенести платежи: {exc}",
+                False,
+                expense_category_conflict_id=category_id,
+            )
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
