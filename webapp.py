@@ -9156,10 +9156,12 @@ def render_directories_section(
     storage: Storage,
     owner_chat_id: int,
     current_user: dict | None,
+    active_directory_mode: str = "",
     active_employee_group: str = "admin",
     flash_message: str = "",
     success: bool = False,
 ) -> str:
+    active_directory_mode = active_directory_mode if active_directory_mode in {"objects", "expense-categories", "employees"} else ""
     employee_groups = {
         "admin": "Административные",
         "builders": "Строители",
@@ -9170,6 +9172,53 @@ def render_directories_section(
     can_edit = has_permission(current_user, "directories", "edit")
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     contracts = storage.list_contracts(owner_chat_id)
+    manual_objects = storage.list_jurisprudence_object_records(owner_chat_id)
+    expense_categories = storage.list_expense_categories(owner_chat_id)
+    employees = storage.list_payroll_employees(owner_chat_id)
+    if not active_directory_mode:
+        active_employees_count = sum(1 for employee in employees if employee.is_active)
+        terminated_employees_count = sum(1 for employee in employees if not employee.is_active)
+        return f"""
+        {flash_html}
+        <section class="card panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Что редактируем</h2>
+              <div class="panel-sub">Выберите нужный справочник, настройте его внутри и вернитесь обратно к этому меню.</div>
+            </div>
+            <div class="chip">Владелец контура: {owner_chat_id}</div>
+          </div>
+          <div class="stats access-choice-grid">
+            <a class="card mini-card contract-table-link access-choice-card" href="/directories?owner={owner_chat_id}&mode=objects">
+              <div class="stat-label">Справочник</div>
+              <div class="access-choice-title">Объекты</div>
+              <div class="contract-table-subtle">Объекты контрактов и ручные объекты для переписки, судов и будущих связей по CRM.</div>
+              <div class="badge-row">
+                <span class="badge">Контрактов: {len(contracts)}</span>
+                <span class="badge">Ручных: {len(manual_objects)}</span>
+              </div>
+            </a>
+            <a class="card mini-card contract-table-link access-choice-card" href="/directories?owner={owner_chat_id}&mode=expense-categories">
+              <div class="stat-label">Справочник</div>
+              <div class="access-choice-title">Категории расходов</div>
+              <div class="contract-table-subtle">Группы для ручного занесения и уточнения импортированных банковских расходов.</div>
+              <div class="badge-row">
+                <span class="badge">Категорий: {len(expense_categories)}</span>
+              </div>
+            </a>
+            <a class="card mini-card contract-table-link access-choice-card" href="/directories?owner={owner_chat_id}&mode=employees">
+              <div class="stat-label">Справочник</div>
+              <div class="access-choice-title">Сотрудники</div>
+              <div class="contract-table-subtle">Люди для зарплаты, ответственных и рабочих выборов внутри CRM.</div>
+              <div class="badge-row">
+                <span class="badge">Активных: {active_employees_count}</span>
+                <span class="badge{" warn" if terminated_employees_count else ""}">Уволенных: {terminated_employees_count}</span>
+              </div>
+            </a>
+          </div>
+        </section>
+        """
+
     contract_object_rows = "".join(
         f"""
         <tr>
@@ -9207,7 +9256,6 @@ def render_directories_section(
         """
         for contract in contracts
     )
-    manual_objects = storage.list_jurisprudence_object_records(owner_chat_id)
     manual_object_rows = "".join(
         f"""
         <tr>
@@ -9265,7 +9313,6 @@ def render_directories_section(
         </details>
         """
 
-    expense_categories = storage.list_expense_categories(owner_chat_id)
     default_expense_category_codes = {code for code, _label in DEFAULT_EXPENSE_CATEGORIES}
     expense_category_rows = "".join(
         f"""
@@ -9311,7 +9358,6 @@ def render_directories_section(
         </details>
         """
 
-    employees = storage.list_payroll_employees(owner_chat_id)
     employee_group_counts = {
         group_code: (
             sum(1 for employee in employees if not employee.is_active)
@@ -9322,7 +9368,7 @@ def render_directories_section(
     }
     employee_group_tabs = "".join(
         f"""
-        <a class="tab-btn{" active" if active_employee_group == group_code else ""}" href="/directories?owner={owner_chat_id}&employee_group={group_code}#directory-employees">
+        <a class="tab-btn{" active" if active_employee_group == group_code else ""}" href="/directories?owner={owner_chat_id}&mode=employees&employee_group={group_code}#directory-employees">
           {escape(label)}
           <span class="tab-count">{employee_group_counts.get(group_code, 0)}</span>
         </a>
@@ -9462,14 +9508,15 @@ def render_directories_section(
           </div>
         </details>
         """
-    return f"""
+    back_link = f'<a class="secondary-btn" href="/directories?owner={owner_chat_id}">← К выбору справочника</a>'
+    objects_section = f"""
     <section class="card panel">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Справочник объектов</h2>
           <div class="panel-sub">Единое место, где заводим объекты для переписки, судов и будущих связей по CRM.</div>
         </div>
-        {add_object_block}
+        <div class="action-row access-detail-actions">{back_link}{add_object_block}</div>
       </div>
       {flash_html}
       <table class="table contract-table">
@@ -9483,14 +9530,17 @@ def render_directories_section(
         <tbody>{object_rows}</tbody>
       </table>
     </section>
-    <section class="card panel" style="margin-top:22px;">
+    """
+    expense_categories_section = f"""
+    <section class="card panel">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Категории расходов</h2>
           <div class="panel-sub">Справочник групп для ручного занесения и уточнения импортированных банковских расходов.</div>
         </div>
-        {add_expense_category_block}
+        <div class="action-row access-detail-actions">{back_link}{add_expense_category_block}</div>
       </div>
+      {flash_html}
       <table class="table contract-table">
         <thead>
           <tr>
@@ -9502,14 +9552,17 @@ def render_directories_section(
         <tbody>{expense_category_rows}</tbody>
       </table>
     </section>
+    """
+    employees_section = f"""
     <section class="card panel" id="directory-employees">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Справочник сотрудников</h2>
           <div class="panel-sub">База людей для зарплаты и будущих выборов ответственных. Пока используем тот же список, что и в модуле зарплаты.</div>
         </div>
-        {add_employee_block}
+        <div class="action-row access-detail-actions">{back_link}{add_employee_block}</div>
       </div>
+      {flash_html}
       <div class="tab-row" style="justify-content:flex-start; margin: 6px 0 18px;">
         {employee_group_tabs}
       </div>
@@ -9527,6 +9580,11 @@ def render_directories_section(
       </table>
     </section>
     """
+    return {
+        "objects": objects_section,
+        "expense-categories": expense_categories_section,
+        "employees": employees_section,
+    }.get(active_directory_mode, objects_section)
 
 
 def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: int, current_user: dict | None = None, flash_message: str = "") -> str:
@@ -17478,8 +17536,9 @@ self.addEventListener("notificationclick", (event) => {
         denied = guard("directories", "view")
         if denied:
             return denied
+        active_directory_mode = query.get("mode", [""])[0].strip()
         active_employee_group = query.get("employee_group", ["admin"])[0]
-        body = render_directories_section(storage, current_owner, current_user, active_employee_group)
+        body = render_directories_section(storage, current_owner, current_user, active_directory_mode, active_employee_group)
         html = layout("Справочники", body, owners, current_owner, "directories", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
@@ -17503,9 +17562,9 @@ self.addEventListener("notificationclick", (event) => {
             )
             if created is None:
                 raise ValueError("Не удалось сохранить объект")
-            return redirect(start_response, f"/directories?owner={current_owner}")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=objects")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось добавить объект: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, "objects", "admin", f"Не удалось добавить объект: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -17523,9 +17582,9 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Укажите название объекта")
             if not storage.update_jurisprudence_object(current_owner, old_name, new_name, customer):
                 raise ValueError("Объект не найден или уже существует")
-            return redirect(start_response, f"/directories?owner={current_owner}")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=objects")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось обновить объект: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, "objects", "admin", f"Не удалось обновить объект: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -17542,9 +17601,9 @@ self.addEventListener("notificationclick", (event) => {
             created = storage.add_expense_category(current_owner, label)
             if created is None:
                 raise ValueError("Не удалось сохранить категорию")
-            return redirect(start_response, f"/directories?owner={current_owner}")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось добавить категорию расходов: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, "expense-categories", "admin", f"Не удалось добавить категорию расходов: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -17564,9 +17623,9 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Укажите название категории")
             if not storage.update_expense_category(current_owner, category_id, label):
                 raise ValueError("Категория не найдена или уже существует")
-            return redirect(start_response, f"/directories?owner={current_owner}")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось обновить категорию расходов: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, "expense-categories", "admin", f"Не удалось обновить категорию расходов: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -17588,9 +17647,9 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Укажите название объекта")
             if not storage.update_contract_directory_object(current_owner, contract_id, object_name, object_address, object_customer):
                 raise ValueError("Контракт не найден")
-            return redirect(start_response, f"/directories?owner={current_owner}")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=objects")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, "admin", f"Не удалось обновить объект контракта: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, "objects", "admin", f"Не удалось обновить объект контракта: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -17610,9 +17669,9 @@ self.addEventListener("notificationclick", (event) => {
             if not role_title:
                 raise ValueError("Укажите должность")
             storage.add_payroll_employee(current_owner, full_name, role_title, employee_group)
-            return redirect(start_response, f"/directories?owner={current_owner}&employee_group={employee_group}#directory-employees")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={employee_group}#directory-employees")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, active_employee_group, f"Не удалось добавить сотрудника: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, "employees", active_employee_group, f"Не удалось добавить сотрудника: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
@@ -17645,9 +17704,9 @@ self.addEventListener("notificationclick", (event) => {
             if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, employee_group, is_active, terminated_date):
                 raise ValueError("Сотрудник не найден")
             target_employee_group = employee_group if is_active else "terminated"
-            return redirect(start_response, f"/directories?owner={current_owner}&employee_group={target_employee_group}#directory-employees")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={target_employee_group}#directory-employees")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, active_employee_group, f"Не удалось обновить сотрудника: {exc}")
+            body = render_directories_section(storage, current_owner, current_user, "employees", active_employee_group, f"Не удалось обновить сотрудника: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
