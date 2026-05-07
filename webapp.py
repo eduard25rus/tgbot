@@ -4583,7 +4583,7 @@ def layout(
     }}
     .nav-group {{
       display: grid;
-      gap: 8px;
+      gap: 0;
     }}
     .nav-group > summary {{
       list-style: none;
@@ -4619,6 +4619,7 @@ def layout(
     .nav-subnav {{
       display: grid;
       gap: 6px;
+      margin-top: 8px;
       padding-left: 12px;
     }}
     .nav-sublink {{
@@ -7960,6 +7961,26 @@ function restoreSidebarScroll() {{
   }});
 }}
 
+function initSidebarNavGroups() {{
+  const sidebar = document.getElementById("app-sidebar");
+  if (!sidebar) {{
+    return;
+  }}
+  const groups = Array.from(sidebar.querySelectorAll(".nav-group"));
+  groups.forEach((group) => {{
+    group.addEventListener("toggle", () => {{
+      if (!group.open) {{
+        return;
+      }}
+      groups.forEach((other) => {{
+        if (other !== group) {{
+          other.open = false;
+        }}
+      }});
+    }});
+  }});
+}}
+
 function initExpensesDayCarousel() {{
   document.querySelectorAll('[data-expenses-day-carousel="1"]').forEach((carousel) => {{
     const strip = carousel.querySelector('[data-expenses-day-strip="1"]');
@@ -8042,6 +8063,7 @@ document.addEventListener("change", (event) => {{
 
 window.addEventListener("load", () => {{
   restoreSidebarScroll();
+  initSidebarNavGroups();
   initExpensesDayCarousel();
   document.querySelectorAll('.contract-create-form').forEach((form) => {{
     const stageCountInput = form.querySelector('[data-stage-count-input]');
