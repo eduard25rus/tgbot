@@ -1783,6 +1783,52 @@ def preview_role_options(storage: Storage, owner_chat_id: int | None, current_us
     return options
 
 
+def access_role_options(storage: Storage, owner_chat_id: int, current_role: str = "") -> list[str]:
+    base_roles = [
+        "Руководство компании",
+        "Отдел госзакупок",
+        "Отдел снабжения",
+        "Менеджер проектов",
+    ]
+    roles: list[str] = []
+    seen: set[str] = set()
+    existing_roles = [
+        (user.get("role_name") or "").strip()
+        for user in storage.list_web_users(owner_chat_id)
+        if not user.get("is_super_admin")
+    ]
+    for label in base_roles + existing_roles + [current_role.strip()]:
+        normalized = canonical_role_label(label)
+        key = normalized.casefold()
+        if not normalized or key in seen:
+            continue
+        roles.append(normalized)
+        seen.add(key)
+    return roles
+
+
+def render_access_role_select(
+    storage: Storage,
+    owner_chat_id: int,
+    selected_role: str = "",
+    disabled: bool = False,
+) -> str:
+    selected_role = canonical_role_label(selected_role)
+    options = "".join(
+        f'<option value="{escape(role)}"{" selected" if role == selected_role else ""}>{escape(role)}</option>'
+        for role in access_role_options(storage, owner_chat_id, selected_role)
+    )
+    return f'<select name="role_name"{" disabled" if disabled else ""}>{options}</select>'
+
+
+def normalize_access_role_value(storage: Storage, owner_chat_id: int, role_name: str) -> str:
+    normalized = canonical_role_label(role_name)
+    available = {role.casefold(): role for role in access_role_options(storage, owner_chat_id)}
+    if not normalized or normalized.casefold() not in available:
+        raise ValueError("Выберите роль из списка")
+    return available[normalized.casefold()]
+
+
 def compute_role_notifications(storage: Storage, owner_chat_id: int | None, current_user: dict | None) -> dict[str, str | int | bool]:
     base = {
         "active": False,
@@ -6359,7 +6405,7 @@ def layout(
       letter-spacing: 0.1em;
       color: var(--muted);
     }}
-    .field input, .field textarea {{
+    .field input, .field textarea, .field select {{
       width: 100%;
       border-radius: 14px;
       border: 1px solid var(--line);
@@ -6367,6 +6413,14 @@ def layout(
       padding: 12px 14px;
       font: inherit;
       color: var(--ink);
+    }}
+    .field select {{
+      appearance: none;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 18px) 52%, calc(100% - 13px) 52%;
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+      padding-right: 34px;
     }}
     .field textarea {{
       min-height: 92px;
@@ -6495,6 +6549,23 @@ def layout(
       max-height: min(460px, 55vh);
       overflow: auto;
       padding-right: 4px;
+    }}
+    .access-user-actions {{
+      flex-wrap: nowrap;
+      align-items: flex-start;
+    }}
+    .access-user-actions .settings-menu {{
+      flex: 0 0 auto;
+    }}
+    .access-user-actions .secondary-btn,
+    .access-user-actions .submit-btn,
+    .access-user-actions .settings-trigger {{
+      white-space: nowrap;
+    }}
+    @media (max-width: 720px) {{
+      .access-user-actions {{
+        flex-wrap: wrap;
+      }}
     }}
     .user-card {{
       padding: 18px;
@@ -14742,17 +14813,6 @@ def render_access_section(
             f'<span class="badge{" warn" if user["password_state"] == "pending_setup" else ""}">{escape(password_state_label(user["password_state"]))}</span>',
             f'<span class="badge{" danger" if not user["is_active"] else ""}">{"Активен" if user["is_active"] else "Отключен"}</span>',
         ]
-        action_buttons = (
-            '<div class="action-row"><span class="chip">Этот пользователь закреплен как главный администратор</span></div>'
-            if user["is_super_admin"]
-            else f"""
-            <div class="action-row">
-              <button class="submit-btn" type="submit">Сохранить права</button>
-              <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/toggle?owner={owner_chat_id}&mode=general" formmethod="post">{"Запретить доступ" if user["is_active"] else "Вернуть доступ"}</button>
-              <button class="secondary-btn danger" type="submit" formaction="/access/users/{user["id"]}/delete?owner={owner_chat_id}&mode=general" formmethod="post">Удалить пользователя</button>
-            </div>
-            """
-        )
         setup_token = storage.ensure_password_setup_token(user["id"], secrets.token_urlsafe(24))
         setup_link = f"{base_setup_url}{setup_token}"
         reset_button = f"""
@@ -14777,6 +14837,18 @@ def render_access_section(
           </div>
         </details>
         """
+        action_buttons = (
+            '<div class="action-row"><span class="chip">Этот пользователь закреплен как главный администратор</span></div>'
+            if user["is_super_admin"]
+            else f"""
+            <div class="action-row access-user-actions">
+              {settings_block}
+              <button class="submit-btn" type="submit">Сохранить права</button>
+              <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/toggle?owner={owner_chat_id}&mode=general" formmethod="post">{"Запретить доступ" if user["is_active"] else "Вернуть доступ"}</button>
+              <button class="secondary-btn danger" type="submit" formaction="/access/users/{user["id"]}/delete?owner={owner_chat_id}&mode=general" formmethod="post">Удалить пользователя</button>
+            </div>
+            """
+        )
         user_cards.append(
             f"""
             <article class="user-card">
@@ -14806,9 +14878,8 @@ def render_access_section(
                 <input type="hidden" name="full_name" value="{escape(user["full_name"])}">
                 <div class="field">
                   <label>Роль</label>
-                  <input type="text" name="role_name" value="{escape(user["role_name"])}" {"readonly" if user["is_super_admin"] else ""}>
+                  {render_access_role_select(storage, owner_chat_id, user["role_name"], bool(user["is_super_admin"]))}
                 </div>
-                {settings_block}
                 {action_buttons}
               </form>
             </article>
@@ -14951,7 +15022,7 @@ def render_access_section(
           </div>
           <div class="field">
             <label>Роль</label>
-            <input type="text" name="role_name" value="Менеджер проектов">
+            {render_access_role_select(storage, owner_chat_id, "Менеджер проектов")}
           </div>
           <div class="permissions-grid">
             {''.join(
@@ -18883,7 +18954,7 @@ self.addEventListener("notificationclick", (event) => {
         try:
             full_name = form["full_name"].strip()
             login = form["login"].strip().lower()
-            role_name = form.get("role_name", "").strip() or "Viewer"
+            role_name = normalize_access_role_value(storage, current_owner, form.get("role_name", ""))
             permissions = parse_permissions(form)
             if not full_name:
                 raise ValueError("Нужно указать имя пользователя")
@@ -18923,11 +18994,15 @@ self.addEventListener("notificationclick", (event) => {
         try:
             user_id = int(path.split("/")[3])
             form = read_post_data(environ)
+            target_user = storage.get_web_user_by_id(user_id)
+            if target_user is None or target_user["owner_chat_id"] != current_owner:
+                raise ValueError("Пользователь не найден")
+            role_name = "Админ" if target_user["is_super_admin"] else normalize_access_role_value(storage, current_owner, form.get("role_name", ""))
             updated = storage.update_web_user(
                 current_owner,
                 user_id,
                 form.get("full_name_visible", form.get("full_name", "")),
-                form.get("role_name", ""),
+                role_name,
                 parse_permissions(form),
             )
             if not updated:
