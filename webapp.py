@@ -7078,8 +7078,8 @@ def layout(
     }}
     .directory-card-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
     }}
     .directory-card-menu {{
       display: block;
@@ -7089,20 +7089,26 @@ def layout(
     }}
     .directory-card {{
       display: grid;
-      gap: 10px;
-      min-height: 158px;
+      gap: 8px;
+      min-height: 108px;
       align-content: start;
       color: inherit;
       text-decoration: none;
+      padding: 16px 18px;
+      border-radius: 16px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8faf9 100%);
+      box-shadow: 0 10px 28px rgba(22, 35, 47, 0.07);
+      transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
     }}
     .directory-card:hover {{
-      border-color: rgba(29, 92, 99, 0.34);
-      box-shadow: 0 18px 42px rgba(22, 35, 47, 0.12);
+      border-color: rgba(34, 139, 84, 0.32);
+      box-shadow: 0 16px 36px rgba(22, 35, 47, 0.11);
+      transform: translateY(-1px);
     }}
     .directory-card-title {{
-      font-size: 21px;
+      font-size: 18px;
       font-weight: 700;
-      line-height: 1.25;
+      line-height: 1.2;
     }}
     .directory-card-meta {{
       color: var(--muted);
@@ -9382,7 +9388,6 @@ def render_directories_section(
     active_employee_group: str = "admin",
     flash_message: str = "",
     success: bool = False,
-    expense_category_conflict_id: int | None = None,
 ) -> str:
     active_directory_mode = active_directory_mode if active_directory_mode in {"objects", "expense-categories", "employees"} else ""
     employee_groups = {
@@ -9567,77 +9572,6 @@ def render_directories_section(
         )
         for category in expense_categories
     ) or '<div class="empty">Категорий расходов пока нет.</div>'
-    expense_category_conflict_html = ""
-    if expense_category_conflict_id is not None:
-        conflict_category = next((category for category in expense_categories if category.id == expense_category_conflict_id), None)
-        if conflict_category is not None:
-            conflict_entries = storage.list_expense_entries_by_category(owner_chat_id, conflict_category.code)
-            conflict_total = sum(entry.amount for entry in conflict_entries)
-            replacement_options = '<option value="">Выберите категорию</option>' + "".join(
-                f'<option value="{escape(category.code)}">{escape(category.label)}</option>'
-                for category in expense_categories
-                if category.code != conflict_category.code
-            )
-            conflict_rows = "".join(
-                f"""
-                <tr>
-                  <td class="nowrap"><label class="advance-toggle"><input type="checkbox" name="entry_selected_{entry.id}" value="1"> Выбрать</label></td>
-                  <td>{format_date(entry.expense_date)}</td>
-                  <td>
-                    <div class="timeline-title">{escape(entry.title or "Без названия")}</div>
-                    <div class="contract-table-subtle">{escape(expense_payment_source_label(entry.payment_source))} · {escape(money_operation_type_label(entry.operation_type))}</div>
-                  </td>
-                  <td class="nowrap">{escape(format_amount(entry.amount))}</td>
-                  <td class="directory-conflict-row-category">
-                    <select class="js-directory-category-select" name="entry_category_{entry.id}" aria-label="Новая категория для платежа {entry.id}" required>
-                      {replacement_options}
-                    </select>
-                  </td>
-                  <td><span class="chip{" ok" if entry.status == "closed" else ""}">{"Закрыт" if entry.status == "closed" else "В работе"}</span></td>
-                </tr>
-                """
-                for entry in conflict_entries
-            ) or '<tr><td colspan="6">Связанных платежей нет.</td></tr>'
-            replacement_form = (
-                f"""
-                <div class="directory-conflict-actions">
-                  <div class="field">
-                    <label>Заполнить выбранные платежи категорией</label>
-                    <select name="bulk_category_code" form="expense-category-conflict-form-{conflict_category.id}">{replacement_options}</select>
-                  </div>
-                  <button class="secondary-btn js-directory-bulk-category-apply" type="button">Заполнить выбранные</button>
-                </div>
-                """
-                if len(expense_categories) > 1 else '<div class="contract-table-subtle">Нет другой категории для переноса. Сначала добавьте новую категорию.</div>'
-            )
-            expense_category_conflict_html = f"""
-            <section class="card mini-card directory-conflict-panel">
-              <div>
-                <div class="stat-label">Удаление остановлено</div>
-                <div class="directory-card-title">Категория «{escape(conflict_category.label)}» используется в ДДС</div>
-                <div class="contract-table-subtle">Найдено платежей: {len(conflict_entries)}. Сумма: {escape(format_amount(conflict_total))}. Перед удалением перенесите эти платежи на другую категорию.</div>
-              </div>
-              <form id="expense-category-conflict-form-{conflict_category.id}" method="post" action="/directories/expense-categories/{conflict_category.id}/reassign?owner={owner_chat_id}">
-                <table class="table contract-table">
-                  <thead>
-                    <tr>
-                      <th class="nowrap">Выбор</th>
-                      <th>Дата</th>
-                      <th>Платеж</th>
-                      <th class="nowrap">Сумма</th>
-                      <th>Новая категория</th>
-                      <th class="nowrap">Статус</th>
-                    </tr>
-                  </thead>
-                  <tbody>{conflict_rows}</tbody>
-                </table>
-                {replacement_form}
-                <div class="directory-conflict-save">
-                  <button class="submit-btn" type="submit">Сохранить категории</button>
-                </div>
-              </form>
-            </section>
-            """
     add_expense_category_block = ""
     if can_edit:
         add_expense_category_block = f"""
@@ -9706,6 +9640,7 @@ def render_directories_section(
             <input type="hidden" name="full_name" value="{escape(employee.full_name)}">
             <input type="hidden" name="role_title" value="{escape(employee.role_title)}">
             <input type="hidden" name="employee_group" value="{escape(employee.employee_group)}">
+            <input type="hidden" name="birth_date" value="{employee.birth_date.isoformat() if employee.birth_date else ""}">
             <div class="field">
               <label>Статус</label>
               <select class="employee-status-select" name="is_active">
@@ -9749,6 +9684,10 @@ def render_directories_section(
                       <input type="text" name="role_title" value="{escape(employee.role_title)}" required>
                     </div>
                     <div class="field">
+                      <label>Дата рождения</label>
+                      <input type="date" name="birth_date" value="{employee.birth_date.isoformat() if employee.birth_date else ""}">
+                    </div>
+                    <div class="field">
                       <label>Группа</label>
                       <select name="employee_group">
                         {employee_group_options(employee.employee_group)}
@@ -9771,6 +9710,7 @@ def render_directories_section(
               </details>
               ''' if can_edit else escape(employee.full_name)}
             </div>
+            {f'<div class="contract-table-subtle">День рождения: {format_date(employee.birth_date)}</div>' if employee.birth_date else ''}
           </td>
           <td>{escape(employee.role_title or "Без должности")}</td>
           {employee_group_cell(employee) if show_employee_source_group else ""}
@@ -9793,6 +9733,10 @@ def render_directories_section(
               <div class="field">
                 <label>Должность / роль</label>
                 <input type="text" name="role_title" placeholder="Например, юрист / прораб / снабженец" required>
+              </div>
+              <div class="field">
+                <label>Дата рождения</label>
+                <input type="date" name="birth_date">
               </div>
               <div class="field">
                 <label>Группа</label>
@@ -9834,7 +9778,6 @@ def render_directories_section(
       <div class="directory-card-grid">
         {expense_category_cards}
       </div>
-      {expense_category_conflict_html}
     </section>
     """
     employees_section = f"""
@@ -9869,6 +9812,101 @@ def render_directories_section(
         "expense-categories": expense_categories_section,
         "employees": employees_section,
     }.get(active_directory_mode, objects_section)
+
+
+def render_expense_category_transfer_section(
+    storage: Storage,
+    owner_chat_id: int,
+    category_id: int,
+    flash_message: str = "",
+    success: bool = False,
+) -> str:
+    expense_categories = storage.list_expense_categories(owner_chat_id)
+    conflict_category = next((category for category in expense_categories if category.id == category_id), None)
+    if conflict_category is None:
+        return """
+        <section class="card panel">
+          <div class="empty">Категория не найдена.</div>
+        </section>
+        """
+    conflict_entries = storage.list_expense_entries_by_category(owner_chat_id, conflict_category.code)
+    conflict_total = sum(entry.amount for entry in conflict_entries)
+    replacement_options = '<option value="">Выберите категорию</option>' + "".join(
+        f'<option value="{escape(category.code)}">{escape(category.label)}</option>'
+        for category in expense_categories
+        if category.code != conflict_category.code
+    )
+    conflict_rows = "".join(
+        f"""
+        <tr>
+          <td class="nowrap"><label class="advance-toggle"><input type="checkbox" name="entry_selected_{entry.id}" value="1"> Выбрать</label></td>
+          <td>{format_date(entry.expense_date)}</td>
+          <td>
+            <div class="timeline-title">{escape(entry.title or "Без названия")}</div>
+            <div class="contract-table-subtle">{escape(expense_payment_source_label(entry.payment_source))} · {escape(money_operation_type_label(entry.operation_type))}</div>
+          </td>
+          <td class="nowrap">{escape(format_amount(entry.amount))}</td>
+          <td class="directory-conflict-row-category">
+            <select class="js-directory-category-select" name="entry_category_{entry.id}" aria-label="Новая категория для платежа {entry.id}" required>
+              {replacement_options}
+            </select>
+          </td>
+          <td><span class="chip{" ok" if entry.status == "closed" else ""}">{"Закрыт" if entry.status == "closed" else "В работе"}</span></td>
+        </tr>
+        """
+        for entry in conflict_entries
+    ) or '<tr><td colspan="6">Связанных платежей нет.</td></tr>'
+    replacement_form = (
+        f"""
+        <div class="directory-conflict-actions">
+          <div class="field">
+            <label>Заполнить выбранные платежи категорией</label>
+            <select name="bulk_category_code" form="expense-category-conflict-form-{conflict_category.id}">{replacement_options}</select>
+          </div>
+          <button class="secondary-btn js-directory-bulk-category-apply" type="button">Заполнить выбранные</button>
+        </div>
+        """
+        if len(expense_categories) > 1 else '<div class="contract-table-subtle">Нет другой категории для переноса. Сначала добавьте новую категорию.</div>'
+    )
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Перенос категории</h2>
+          <div class="panel-sub">Категория «{escape(conflict_category.label)}» используется в ДДС. Распределите платежи по новым категориям перед удалением.</div>
+        </div>
+        <a class="secondary-btn" href="/directories?owner={owner_chat_id}&mode=expense-categories">Отменить удаление</a>
+      </div>
+      {flash_html}
+      <section class="card mini-card directory-conflict-panel">
+        <div>
+          <div class="stat-label">Удаление остановлено</div>
+          <div class="directory-card-title">Категория «{escape(conflict_category.label)}» используется в ДДС</div>
+          <div class="contract-table-subtle">Найдено платежей: {len(conflict_entries)}. Сумма: {escape(format_amount(conflict_total))}. Перед удалением перенесите эти платежи на другую категорию.</div>
+        </div>
+        <form id="expense-category-conflict-form-{conflict_category.id}" method="post" action="/directories/expense-categories/{conflict_category.id}/reassign?owner={owner_chat_id}">
+          <table class="table contract-table">
+            <thead>
+              <tr>
+                <th class="nowrap">Выбор</th>
+                <th>Дата</th>
+                <th>Платеж</th>
+                <th class="nowrap">Сумма</th>
+                <th>Новая категория</th>
+                <th class="nowrap">Статус</th>
+              </tr>
+            </thead>
+            <tbody>{conflict_rows}</tbody>
+          </table>
+          {replacement_form}
+          <div class="directory-conflict-save">
+            <button class="submit-btn" type="submit">Сохранить категории</button>
+          </div>
+        </form>
+      </section>
+    </section>
+    """
 
 
 def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: int, current_user: dict | None = None, flash_message: str = "") -> str:
@@ -17832,8 +17870,31 @@ self.addEventListener("notificationclick", (event) => {
             return denied
         active_directory_mode = query.get("mode", [""])[0].strip()
         active_employee_group = query.get("employee_group", ["admin"])[0]
-        body = render_directories_section(storage, current_owner, current_user, active_directory_mode, active_employee_group)
-        html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+        flash_message = query.get("flash", [""])[0].strip()
+        success = query.get("ok", ["0"])[0] == "1"
+        if active_directory_mode == "expense-category-transfer":
+            denied = guard("directories", "edit")
+            if denied:
+                return denied
+            try:
+                category_id = int(query.get("category_id", ["0"])[0])
+            except (ValueError, IndexError):
+                category_id = -1
+            body = render_expense_category_transfer_section(storage, current_owner, category_id, flash_message, success)
+            html = layout(
+                "Перенос категории",
+                body,
+                owners,
+                current_owner,
+                "directories",
+                current_user,
+                hero_title_override="Перенос категории",
+                hero_copy_override="Распределите платежи по новым категориям перед удалением категории ДДС.",
+                active_subsection="directories",
+            )
+        else:
+            body = render_directories_section(storage, current_owner, current_user, active_directory_mode, active_employee_group, flash_message, success)
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
@@ -17940,19 +18001,7 @@ self.addEventListener("notificationclick", (event) => {
             if linked_entries:
                 total = sum(entry.amount for entry in linked_entries)
                 message = f"Категория используется в ДДС: {len(linked_entries)} платежей на сумму {format_amount(total)}. Сначала перенесите платежи на другую категорию."
-                body = render_directories_section(
-                    storage,
-                    current_owner,
-                    current_user,
-                    "expense-categories",
-                    "admin",
-                    message,
-                    False,
-                    expense_category_conflict_id=category_id,
-                )
-                html = layout("Справочники", body, owners, current_owner, "directories", current_user)
-                start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
-                return [html.encode("utf-8")]
+                return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-category-transfer&category_id={category_id}&flash={quote_plus(message)}")
             if not storage.delete_expense_category(current_owner, category_id):
                 raise ValueError("Категория не найдена или уже используется")
             return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
@@ -17989,31 +18038,22 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Не удалось перенести платежи")
             remaining_entries = storage.list_expense_entries_by_category(current_owner, category.code)
             flash = f"Платежи перенесены: {changed_count}."
-            body = render_directories_section(
-                storage,
-                current_owner,
-                current_user,
-                "expense-categories",
-                "admin",
-                flash,
-                True,
-                expense_category_conflict_id=category_id if remaining_entries else None,
-            )
-            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
-            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
-            return [html.encode("utf-8")]
+            if remaining_entries:
+                return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-category-transfer&category_id={category_id}&ok=1&flash={quote_plus(flash)}")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories&ok=1&flash={quote_plus(flash + ' Теперь категорию можно удалить.')}")
         except Exception as exc:
-            body = render_directories_section(
-                storage,
+            body = render_expense_category_transfer_section(storage, current_owner, category_id, f"Не удалось перенести платежи: {exc}", False)
+            html = layout(
+                "Перенос категории",
+                body,
+                owners,
                 current_owner,
+                "directories",
                 current_user,
-                "expense-categories",
-                "admin",
-                f"Не удалось перенести платежи: {exc}",
-                False,
-                expense_category_conflict_id=category_id,
+                hero_title_override="Перенос категории",
+                hero_copy_override="Распределите платежи по новым категориям перед удалением категории ДДС.",
+                active_subsection="directories",
             )
-            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
@@ -18050,12 +18090,14 @@ self.addEventListener("notificationclick", (event) => {
         try:
             full_name = form.get("full_name", "").strip()
             role_title = form.get("role_title", "").strip()
+            birth_date_raw = form.get("birth_date", "").strip()
+            birth_date = parse_date(birth_date_raw) if birth_date_raw else None
             employee_group = form.get("employee_group", active_employee_group).strip()
             if not full_name:
                 raise ValueError("Укажите ФИО сотрудника")
             if not role_title:
                 raise ValueError("Укажите должность")
-            storage.add_payroll_employee(current_owner, full_name, role_title, employee_group)
+            storage.add_payroll_employee(current_owner, full_name, role_title, employee_group, birth_date)
             return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={employee_group}#directory-employees")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, "employees", active_employee_group, f"Не удалось добавить сотрудника: {exc}")
@@ -18078,6 +18120,8 @@ self.addEventListener("notificationclick", (event) => {
             role_title = form.get("role_title", "").strip()
             employee_group = form.get("employee_group", active_employee_group).strip()
             is_active = form.get("is_active") == "1"
+            birth_date_raw = form.get("birth_date", "").strip()
+            birth_date = parse_date(birth_date_raw) if birth_date_raw else None
             terminated_date_raw = form.get("terminated_date", "").strip()
             terminated_date = None
             if not is_active:
@@ -18088,7 +18132,7 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Укажите ФИО сотрудника")
             if not role_title:
                 raise ValueError("Укажите должность")
-            if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, employee_group, is_active, terminated_date):
+            if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, employee_group, is_active, birth_date, terminated_date):
                 raise ValueError("Сотрудник не найден")
             target_employee_group = employee_group if is_active else "terminated"
             return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={target_employee_group}#directory-employees")

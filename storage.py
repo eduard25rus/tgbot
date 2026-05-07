@@ -284,6 +284,7 @@ class PayrollEmployee:
     role_title: str
     employee_group: str
     is_active: bool
+    birth_date: Optional[date]
     terminated_date: Optional[date]
     created_at: datetime
 
@@ -852,6 +853,7 @@ class Storage:
                     role_title TEXT NOT NULL DEFAULT '',
                     employee_group TEXT NOT NULL DEFAULT 'admin',
                     is_active INTEGER NOT NULL DEFAULT 1,
+                    birth_date TEXT,
                     terminated_date TEXT,
                     created_at TEXT NOT NULL,
                     UNIQUE(owner_chat_id, full_name, role_title)
@@ -1240,6 +1242,8 @@ class Storage:
                        OR full_name LIKE 'Алимов Анвар%'
                     """
                 )
+            if "birth_date" not in payroll_employee_columns:
+                conn.execute("ALTER TABLE payroll_employees ADD COLUMN birth_date TEXT")
             if "terminated_date" not in payroll_employee_columns:
                 conn.execute("ALTER TABLE payroll_employees ADD COLUMN terminated_date TEXT")
             if "deleted_at" not in payable_columns:
@@ -4923,7 +4927,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, full_name, role_title, employee_group, is_active, terminated_date, created_at
+                SELECT id, owner_chat_id, full_name, role_title, employee_group, is_active, birth_date, terminated_date, created_at
                 FROM payroll_employees
                 WHERE owner_chat_id = ?
                 ORDER BY employee_group ASC, is_active DESC, id ASC
@@ -4932,9 +4936,9 @@ class Storage:
             ).fetchall()
         return [self._payroll_employee_from_row(row) for row in rows]
 
-    def add_payroll_employee(self, owner_chat_id: int, full_name: str, role_title: str, employee_group: str = "admin") -> int:
+    def add_payroll_employee(self, owner_chat_id: int, full_name: str, role_title: str, employee_group: str = "admin", birth_date: Optional[date] = None) -> int:
         with self.connection() as conn:
-            return self._ensure_payroll_employee(conn, owner_chat_id, full_name.strip(), role_title.strip(), employee_group)
+            return self._ensure_payroll_employee(conn, owner_chat_id, full_name.strip(), role_title.strip(), employee_group, birth_date)
 
     def update_payroll_employee(
         self,
@@ -4944,21 +4948,23 @@ class Storage:
         role_title: str,
         employee_group: str,
         is_active: bool,
+        birth_date: Optional[date] = None,
         terminated_date: Optional[date] = None,
     ) -> bool:
         cleaned_name = full_name.strip()
         if not cleaned_name:
             return False
         cleaned_group = employee_group if employee_group in {"admin", "builders"} else "admin"
+        birth_value = birth_date.strftime(DATE_FMT) if birth_date is not None else None
         termination_value = None if is_active or terminated_date is None else terminated_date.strftime(DATE_FMT)
         with self.connection() as conn:
             cursor = conn.execute(
                 """
                 UPDATE payroll_employees
-                SET full_name = ?, role_title = ?, employee_group = ?, is_active = ?, terminated_date = ?
+                SET full_name = ?, role_title = ?, employee_group = ?, is_active = ?, birth_date = ?, terminated_date = ?
                 WHERE id = ? AND owner_chat_id = ?
                 """,
-                (cleaned_name, role_title.strip(), cleaned_group, 1 if is_active else 0, termination_value, employee_id, owner_chat_id),
+                (cleaned_name, role_title.strip(), cleaned_group, 1 if is_active else 0, birth_value, termination_value, employee_id, owner_chat_id),
             )
             return cursor.rowcount > 0
 
@@ -5100,7 +5106,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, full_name, role_title, employee_group, is_active, terminated_date, created_at
+                SELECT id, owner_chat_id, full_name, role_title, employee_group, is_active, birth_date, terminated_date, created_at
                 FROM payroll_employees
                 WHERE owner_chat_id = ?
                   AND is_active = 1
@@ -5253,6 +5259,7 @@ class Storage:
             role_title=row["role_title"] or "",
             employee_group=row["employee_group"] if "employee_group" in row.keys() and row["employee_group"] else "admin",
             is_active=bool(row["is_active"]),
+            birth_date=date.fromisoformat(row["birth_date"]) if "birth_date" in row.keys() and row["birth_date"] else None,
             terminated_date=date.fromisoformat(row["terminated_date"]) if "terminated_date" in row.keys() and row["terminated_date"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
         )
@@ -5282,8 +5289,9 @@ class Storage:
             note=row["note"] or "",
         )
 
-    def _ensure_payroll_employee(self, conn: sqlite3.Connection, owner_chat_id: int, full_name: str, role_title: str, employee_group: str = "admin") -> int:
+    def _ensure_payroll_employee(self, conn: sqlite3.Connection, owner_chat_id: int, full_name: str, role_title: str, employee_group: str = "admin", birth_date: Optional[date] = None) -> int:
         cleaned_group = employee_group if employee_group in {"admin", "builders"} else "admin"
+        birth_value = birth_date.strftime(DATE_FMT) if birth_date is not None else None
         existing = conn.execute(
             """
             SELECT id
@@ -5297,10 +5305,10 @@ class Storage:
             return int(existing["id"])
         cursor = conn.execute(
             """
-            INSERT INTO payroll_employees (owner_chat_id, full_name, role_title, employee_group, is_active, terminated_date, created_at)
-            VALUES (?, ?, ?, ?, 1, NULL, ?)
+            INSERT INTO payroll_employees (owner_chat_id, full_name, role_title, employee_group, is_active, birth_date, terminated_date, created_at)
+            VALUES (?, ?, ?, ?, 1, ?, NULL, ?)
             """,
-            (owner_chat_id, full_name, role_title, cleaned_group, datetime.utcnow().isoformat()),
+            (owner_chat_id, full_name, role_title, cleaned_group, birth_value, datetime.utcnow().isoformat()),
         )
         return int(cursor.lastrowid)
 
