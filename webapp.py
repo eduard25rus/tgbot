@@ -14887,6 +14887,12 @@ def render_expenses_section(
     mail_imports_html = ""
     if has_permission(current_user, "expenses", "edit"):
         mail_imports = storage.list_bank_statement_mail_imports(owner_chat_id, 5)
+        def mail_import_status_chip(item) -> str:
+            if item.status == "processed":
+                return '<span class="chip ok">Обработано</span>'
+            if item.status == "duplicate":
+                return '<span class="chip">Уже было</span>'
+            return '<span class="chip danger">Ошибка</span>'
         mail_import_rows = "".join(
             f"""
             <tr>
@@ -14895,7 +14901,7 @@ def render_expenses_section(
                 <div class="timeline-title">{escape(item.attachment_filename or item.message_subject or 'Выписка из почты')}</div>
                 <div class="contract-table-subtle" style="margin-top:4px;">{escape(item.mailbox)} · {escape(item.mailbox_folder)}</div>
               </td>
-              <td><span class="chip{' ok' if item.status == 'processed' else ' danger'}">{'Обработано' if item.status == 'processed' else 'Ошибка'}</span></td>
+              <td>{mail_import_status_chip(item)}</td>
               <td class="nowrap">{item.imported_count} / {item.duplicate_count} / {item.skipped_count}</td>
               <td>{escape(item.error_message) if item.error_message else f'Остатков обновлено: {item.balance_count}'}</td>
             </tr>

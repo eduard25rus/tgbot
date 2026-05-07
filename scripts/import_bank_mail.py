@@ -230,6 +230,23 @@ def run_bank_mail_import() -> tuple[int, int, int]:
                 message_had_statement = True
                 attachment_hash = hashlib.sha256(payload).hexdigest()
                 if storage.bank_statement_mail_attachment_exists(owner_chat_id, attachment_hash):
+                    storage.add_bank_statement_mail_import(
+                        owner_chat_id,
+                        login,
+                        folder,
+                        uid_text,
+                        subject,
+                        message_from,
+                        message_date(message),
+                        filename,
+                        "",
+                        "duplicate",
+                        0,
+                        1,
+                        0,
+                        0,
+                        "Эта выписка уже была обработана ранее.",
+                    )
                     skipped_files += 1
                     continue
                 try:
