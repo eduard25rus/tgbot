@@ -153,6 +153,10 @@ def iter_message_links(message: Message):
         raw_links: list[str] = []
         raw_links.extend(re.findall(r"""href=["']([^"']+)""", text, flags=re.IGNORECASE))
         raw_links.extend(re.findall(r"""https?://[^\s"'<>]+""", text))
+        raw_links.extend(
+            unquote(match)
+            for match in re.findall(r"""https?%3A%2F%2F[^\s"'<>]+""", text, flags=re.IGNORECASE)
+        )
         for raw_link in raw_links:
             link = unescape(raw_link).strip()
             link = link.rstrip(").,;")
@@ -198,6 +202,50 @@ def message_link_counts(message: Message) -> tuple[int, int]:
         if is_sber_statement_link(link):
             sber_links.add(link)
     return len(all_links), len(sber_links)
+
+
+def safe_link_label(link: str) -> str:
+    try:
+        parsed = urlsplit(link)
+    except ValueError:
+        return "некорректная ссылка"
+    host = parsed.netloc or "без домена"
+    path = parsed.path or "/"
+    if len(path) > 90:
+        path = path[:87].rstrip("/") + "..."
+    label = f"{host}{path}"
+    nested_labels: list[str] = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        decoded_value = unquote(unescape(value)).strip()
+        if not decoded_value.startswith(("http://", "https://")):
+            continue
+        try:
+            nested = urlsplit(decoded_value)
+        except ValueError:
+            continue
+        nested_path = nested.path or "/"
+        if len(nested_path) > 55:
+            nested_path = nested_path[:52].rstrip("/") + "..."
+        nested_labels.append(f"{key}->{nested.netloc}{nested_path}")
+        if len(nested_labels) >= 2:
+            break
+    if nested_labels:
+        label += " (" + ", ".join(nested_labels) + ")"
+    return label
+
+
+def message_link_examples(message: Message, limit: int = 4) -> str:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for link in iter_message_links(message):
+        label = safe_link_label(link)
+        if label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+        if len(labels) >= limit:
+            break
+    return "; ".join(labels)
 
 
 def filename_from_content_disposition(raw: str | None) -> str:
@@ -721,6 +769,11 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                     message,
                     (
                         f"свежее, ссылок всего {total_link_count}, кандидатов Сбера {candidate_link_count}, обработано {link_count}"
+                        + (
+                            f", примеры: {message_link_examples(message)}"
+                            if total_link_count and candidate_link_count == 0
+                            else ""
+                        )
                         if total_link_count
                         else "свежее, ссылок/вложений нет"
                     ),
