@@ -554,7 +554,20 @@ def matches_text_filter(value: str, raw_filter: str) -> bool:
     return any(needle in haystack for needle in needles)
 
 
-def run_bank_mail_import() -> tuple[int, int, int]:
+def format_scan_message_date(message: Message) -> str:
+    parsed_date = parsed_message_datetime(message)
+    if parsed_date is None:
+        return message.get("Date", "").strip() or "без даты"
+    return parsed_date.strftime("%d.%m.%Y %H:%M UTC")
+
+
+def append_scan_detail(details: list[str], uid_text: str, message: Message, status: str) -> None:
+    if len(details) >= 12:
+        return
+    details.append(f"UID {uid_text} — {format_scan_message_date(message)} — {status}")
+
+
+def run_bank_mail_import(*, return_scan_summary: bool = False):
     db_path = os.getenv("DB_PATH", "contracts.db")
     owner_chat_id = int(env_required("BANK_MAIL_OWNER_CHAT_ID"))
     login = env_required("BANK_MAIL_LOGIN")
@@ -573,6 +586,13 @@ def run_bank_mail_import() -> tuple[int, int, int]:
     imported_files = 0
     skipped_files = 0
     error_files = 0
+    total_uid_count = 0
+    fetched_count = 0
+    sender_match_count = 0
+    subject_match_count = 0
+    fresh_match_count = 0
+    stale_match_count = 0
+    scan_details: list[str] = []
 
     with imaplib.IMAP4_SSL(host, port) as imap:
         imap.login(login, password)
@@ -583,6 +603,7 @@ def run_bank_mail_import() -> tuple[int, int, int]:
         if status != "OK":
             raise RuntimeError("Не удалось найти новые письма в IMAP")
         uids = list(reversed((data[0] or b"").split()[-limit:]))
+        total_uid_count = len(uids)
         for uid in uids:
             status, fetched = imap.uid("fetch", uid, "(BODY.PEEK[])")
             if status != "OK" or not fetched:
@@ -590,15 +611,20 @@ def run_bank_mail_import() -> tuple[int, int, int]:
             raw_message = next((item[1] for item in fetched if isinstance(item, tuple) and len(item) > 1), None)
             if not raw_message:
                 continue
+            fetched_count += 1
             message = email.message_from_bytes(raw_message)
             message_from = decode_mime_header(message.get("From"))
             if sender_filter and sender_filter not in message_from.casefold():
                 continue
+            sender_match_count += 1
             subject = decode_mime_header(message.get("Subject"))
             if not matches_text_filter(subject, subject_filter):
                 continue
+            subject_match_count += 1
             uid_text = uid.decode("ascii", errors="ignore")
             if message_is_too_old(message, max_age_hours):
+                stale_match_count += 1
+                append_scan_detail(scan_details, uid_text, message, "старое, пропущено")
                 if add_mail_import_log(
                     storage,
                     owner_chat_id,
@@ -614,6 +640,7 @@ def run_bank_mail_import() -> tuple[int, int, int]:
                 ):
                     skipped_files += 1
                 continue
+            fresh_match_count += 1
             message_had_statement = False
             message_had_errors = False
             statement_sources = [
@@ -622,8 +649,11 @@ def run_bank_mail_import() -> tuple[int, int, int]:
             ]
             if statement_sources:
                 message_had_statement = True
+                append_scan_detail(scan_details, uid_text, message, f"свежее, TXT-вложений {len(statement_sources)}")
             else:
+                link_count = 0
                 for link in iter_sber_statement_links(message):
+                    link_count += 1
                     message_had_statement = True
                     link_ref = short_source_ref(link)
                     try:
@@ -646,6 +676,12 @@ def run_bank_mail_import() -> tuple[int, int, int]:
                             error_files += 1
                         else:
                             skipped_files += 1
+                append_scan_detail(
+                    scan_details,
+                    uid_text,
+                    message,
+                    f"свежее, ссылок Сбера {link_count}" if link_count else "свежее, ссылок/вложений нет",
+                )
             for statement_source in statement_sources:
                 message_had_statement = True
                 filename = import_log_filename(
@@ -740,6 +776,19 @@ def run_bank_mail_import() -> tuple[int, int, int]:
         "Bank mail import finished: "
         f"processed={imported_files}, already_processed={skipped_files}, errors={error_files}"
     )
+    if return_scan_summary:
+        summary = (
+            f"Проверено UID: {total_uid_count}; писем загружено: {fetched_count}; "
+            f"от Сбера: {sender_match_count}; с темой выписки: {subject_match_count}; "
+            f"свежих: {fresh_match_count}; старых пропущено: {stale_match_count}."
+        )
+        if scan_details:
+            summary += " Письма: " + " | ".join(scan_details)
+            if subject_match_count > len(scan_details):
+                summary += f" | еще {subject_match_count - len(scan_details)} писем не показано"
+        else:
+            summary += " Подходящих писем в просмотренном окне не найдено."
+        return imported_files, skipped_files, error_files, summary
     return imported_files, skipped_files, error_files
 
 

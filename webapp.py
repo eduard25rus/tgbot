@@ -22464,9 +22464,9 @@ self.addEventListener("notificationclick", (event) => {
         extra_query = expenses_extra_query_from_filters(extra_filters)
         try:
             from scripts.import_bank_mail import run_bank_mail_import
-            imported_files, skipped_files, error_files = run_bank_mail_import()
+            imported_files, skipped_files, error_files, scan_summary = run_bank_mail_import(return_scan_summary=True)
             success = error_files == 0
-            flash = f"Проверка почты: обработано файлов {imported_files}, уже обработано {skipped_files}, ошибок {error_files}."
+            flash = f"Проверка почты: обработано файлов {imported_files}, уже обработано {skipped_files}, ошибок {error_files}. {scan_summary}"
         except Exception as exc:
             success = False
             flash = f"Не удалось проверить почту: {exc}"
