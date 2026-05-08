@@ -11,14 +11,18 @@ import re
 import ssl
 import sys
 from html import unescape
+from http.cookiejar import CookieJar
 from email.header import decode_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import urljoin
 from urllib.parse import unquote
+from urllib.request import build_opener
+from urllib.request import HTTPCookieProcessor
+from urllib.request import HTTPSHandler
 from urllib.request import Request
-from urllib.request import urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -109,24 +113,107 @@ def filename_from_content_disposition(raw: str | None) -> str:
     return ""
 
 
-def download_statement_link(link: str) -> tuple[str, bytes]:
-    request = Request(link, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        response = urlopen(request, timeout=30)
-    except URLError as exc:
-        if not isinstance(exc.reason, ssl.SSLCertVerificationError):
-            raise
-        response = urlopen(request, timeout=30, context=ssl._create_unverified_context())
-    with response:
+def statement_request(link: str) -> Request:
+    return Request(
+        link,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "text/plain,text/html,application/octet-stream,*/*",
+        },
+    )
+
+
+def statement_opener(*, verify_ssl: bool = True):
+    handlers = [HTTPCookieProcessor(CookieJar())]
+    if not verify_ssl:
+        handlers.append(HTTPSHandler(context=ssl._create_unverified_context()))
+    return build_opener(*handlers)
+
+
+def fetch_statement_url(opener, link: str) -> tuple[str, bytes, str, str]:
+    with opener.open(statement_request(link), timeout=30) as response:
         data = response.read()
         filename = filename_from_content_disposition(response.headers.get("Content-Disposition"))
         content_type = response.headers.get("Content-Type", "")
-    if b"1CClientBankExchange" not in data[:4096]:
-        raise ValueError(
-            "Сбер вернул по ссылке не TXT 1С. "
-            f"Content-Type: {content_type or 'не указан'}, размер: {len(data)} байт."
-        )
-    return filename or "kl_to_1c.txt", data
+        final_url = response.geturl()
+    return filename, data, content_type, final_url
+
+
+def decode_download_html(data: bytes, content_type: str) -> str:
+    charset_match = re.search(r"charset=([\w.-]+)", content_type or "", flags=re.IGNORECASE)
+    encodings = [charset_match.group(1)] if charset_match else []
+    encodings.extend(["utf-8", "cp1251"])
+    for encoding in encodings:
+        try:
+            return data.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def html_download_candidates(html: str, base_url: str) -> list[str]:
+    raw_links: list[str] = []
+    raw_links.extend(re.findall(r"""href=["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_links.extend(re.findall(r"""action=["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_links.extend(re.findall(r"""url=([^"'>\s]+)""", html, flags=re.IGNORECASE))
+    raw_links.extend(re.findall(r"""location(?:\.href)?\s*=\s*["']([^"']+)""", html, flags=re.IGNORECASE))
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for raw_link in raw_links:
+        link = urljoin(base_url, unescape(raw_link).strip())
+        lowered = link.casefold()
+        if "sbi.sberbank.ru" not in lowered:
+            continue
+        if not any(marker in lowered for marker in ("statement", "statements", "download", "reports", ".txt")):
+            continue
+        if link in seen:
+            continue
+        seen.add(link)
+        candidates.append(link)
+    candidates.sort(key=lambda item: (".txt" not in item.casefold(), "download" not in item.casefold(), len(item)))
+    return candidates
+
+
+def download_statement_link(link: str) -> tuple[str, bytes]:
+    try:
+        opener = statement_opener()
+        return download_statement_link_with_opener(opener, link)
+    except URLError as exc:
+        if not isinstance(getattr(exc, "reason", None), ssl.SSLCertVerificationError):
+            raise
+        opener = statement_opener(verify_ssl=False)
+        return download_statement_link_with_opener(opener, link)
+
+
+def download_statement_link_with_opener(opener, link: str) -> tuple[str, bytes]:
+    visited: set[str] = set()
+    last_content_type = ""
+    last_size = 0
+    last_url = link
+    for _attempt in range(4):
+        if link in visited:
+            break
+        visited.add(link)
+        filename, data, content_type, final_url = fetch_statement_url(opener, link)
+        last_content_type = content_type
+        last_size = len(data)
+        last_url = final_url
+        if b"1CClientBankExchange" in data:
+            return filename or "kl_to_1c.txt", data
+        if "html" not in (content_type or "").casefold():
+            break
+        html = decode_download_html(data, content_type)
+        candidates = [candidate for candidate in html_download_candidates(html, final_url) if candidate not in visited]
+        if not candidates:
+            raise ValueError(
+                "Сбер вернул HTML-страницу вместо TXT 1С, и внутри нее не нашлась прямая ссылка на файл. "
+                f"Content-Type: {content_type or 'не указан'}, размер: {len(data)} байт."
+            )
+        link = candidates[0]
+    raise ValueError(
+        "Сбер вернул по ссылке не TXT 1С. "
+        f"Последний URL: {last_url}. Content-Type: {last_content_type or 'не указан'}, размер: {last_size} байт."
+    )
 
 
 def iter_statement_sources(message: Message):
