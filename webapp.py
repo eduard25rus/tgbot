@@ -16656,6 +16656,10 @@ def bank_mail_import_status_chip(item) -> str:
         return '<span class="chip ok">Обработано</span>'
     if item.status == "duplicate":
         return '<span class="chip">Уже было</span>'
+    if item.status == "checked":
+        return '<span class="chip">Проверено</span>'
+    if item.status == "skipped":
+        return '<span class="chip">Пропущено</span>'
     return '<span class="chip danger">Ошибка</span>'
 
 

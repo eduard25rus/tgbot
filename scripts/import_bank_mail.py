@@ -499,6 +499,49 @@ def add_mail_import_error(
     return True
 
 
+def add_mail_import_log(
+    storage: Storage,
+    owner_chat_id: int,
+    login: str,
+    folder: str,
+    uid_text: str,
+    subject: str,
+    message_from: str,
+    message: Message,
+    filename: str,
+    status: str,
+    error_message: str = "",
+) -> bool:
+    if storage.bank_statement_mail_import_log_exists(
+        owner_chat_id,
+        login,
+        folder,
+        uid_text,
+        filename,
+        status,
+        error_message,
+    ):
+        return False
+    storage.add_bank_statement_mail_import(
+        owner_chat_id,
+        login,
+        folder,
+        uid_text,
+        subject,
+        message_from,
+        message_date(message),
+        filename,
+        "",
+        status,
+        0,
+        0,
+        0,
+        0,
+        error_message,
+    )
+    return True
+
+
 def imap_ok(response) -> bool:
     return bool(response) and response[0] == "OK"
 
@@ -521,7 +564,7 @@ def run_bank_mail_import() -> tuple[int, int, int]:
     folder = os.getenv("BANK_MAIL_FOLDER", "INBOX").strip() or "INBOX"
     sender_filter = os.getenv("BANK_MAIL_SENDER", "sberbusiness@sberbank.ru").strip().casefold()
     subject_filter = os.getenv("BANK_MAIL_SUBJECT", "Выписка по сч").strip()
-    limit = int(os.getenv("BANK_MAIL_LIMIT", "20"))
+    limit = int(os.getenv("BANK_MAIL_LIMIT", "100"))
     mark_seen = os.getenv("BANK_MAIL_MARK_SEEN", "1").strip().lower() not in {"0", "false", "no"}
     search_query = os.getenv("BANK_MAIL_SEARCH", "ALL").strip() or "ALL"
     max_age_hours = bank_mail_max_age_hours()
@@ -554,9 +597,23 @@ def run_bank_mail_import() -> tuple[int, int, int]:
             subject = decode_mime_header(message.get("Subject"))
             if not matches_text_filter(subject, subject_filter):
                 continue
-            if message_is_too_old(message, max_age_hours):
-                continue
             uid_text = uid.decode("ascii", errors="ignore")
+            if message_is_too_old(message, max_age_hours):
+                if add_mail_import_log(
+                    storage,
+                    owner_chat_id,
+                    login,
+                    folder,
+                    uid_text,
+                    subject,
+                    message_from,
+                    message,
+                    "Письмо пропущено",
+                    "skipped",
+                    f"Письмо старше окна автоимпорта BANK_MAIL_MAX_AGE_HOURS={max_age_hours:g}; ссылки не проверялись.",
+                ):
+                    skipped_files += 1
+                continue
             message_had_statement = False
             message_had_errors = False
             statement_sources = [
@@ -660,6 +717,21 @@ def run_bank_mail_import() -> tuple[int, int, int]:
                         error_files += 1
                     else:
                         skipped_files += 1
+            if not message_had_statement and not statement_sources:
+                if add_mail_import_log(
+                    storage,
+                    owner_chat_id,
+                    login,
+                    folder,
+                    uid_text,
+                    subject,
+                    message_from,
+                    message,
+                    "Письмо проверено",
+                    "checked",
+                    "Подходящее письмо найдено, но TXT-вложений и ссылок на выписку внутри него не найдено.",
+                ):
+                    skipped_files += 1
             if mark_seen and message_had_statement and not message_had_errors:
                 imap.uid("store", uid, "+FLAGS", r"(\Seen)")
         imap.logout()
