@@ -180,7 +180,10 @@ def iter_message_links(message: Message):
 
 def is_sber_statement_link(link: str) -> bool:
     lowered = link.casefold()
-    return "sbi.sberbank.ru" in lowered and "/statements/download/mail/reports/" in lowered
+    return "sbi.sberbank.ru" in lowered and (
+        "/statements/download/mail/reports/" in lowered
+        or "/scheduled-statements/v1/rest/download/mail/reports/" in lowered
+    )
 
 
 def iter_sber_statement_links(message: Message):
