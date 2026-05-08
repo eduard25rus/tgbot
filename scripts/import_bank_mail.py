@@ -153,15 +153,15 @@ def decode_download_html(data: bytes, content_type: str) -> str:
 
 
 def html_download_candidates(html: str, base_url: str) -> list[str]:
-    raw_links: list[str] = []
-    raw_links.extend(re.findall(r"""href=["']([^"']+)""", html, flags=re.IGNORECASE))
-    raw_links.extend(re.findall(r"""action=["']([^"']+)""", html, flags=re.IGNORECASE))
-    raw_links.extend(re.findall(r"""url=([^"'>\s]+)""", html, flags=re.IGNORECASE))
-    raw_links.extend(re.findall(r"""location(?:\.href)?\s*=\s*["']([^"']+)""", html, flags=re.IGNORECASE))
-    preferred: list[str] = []
-    fallback: list[str] = []
+    raw_links: list[tuple[str, bool]] = []
+    raw_links.extend((match, False) for match in re.findall(r"""href=["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_links.extend((match, True) for match in re.findall(r"""action=["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_links.extend((match, False) for match in re.findall(r"""url=([^"'>\s]+)""", html, flags=re.IGNORECASE))
+    raw_links.extend((match, False) for match in re.findall(r"""location(?:\.href)?\s*=\s*["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_links.extend((match.replace(r"\/", "/"), False) for match in re.findall(r"""https?:\\?/\\?/[^"'\s<>]+""", html))
+    candidates: list[str] = []
     seen: set[str] = set()
-    for raw_link in raw_links:
+    for raw_link, allow_fallback in raw_links:
         raw_link = unescape(raw_link).strip()
         lowered_raw = raw_link.casefold()
         if not raw_link or lowered_raw.startswith(("javascript:", "mailto:", "tel:", "#")):
@@ -171,16 +171,18 @@ def html_download_candidates(html: str, base_url: str) -> list[str]:
         lowered = link.casefold()
         if parsed.netloc and "sbi.sberbank.ru" not in parsed.netloc.casefold():
             continue
-        if re.search(r"\.(css|js|png|jpe?g|gif|svg|ico|woff2?)($|[?#])", parsed.path.casefold()):
+        if re.search(r"\.(css|js|json|png|jpe?g|gif|svg|ico|woff2?)($|[?#])", parsed.path.casefold()):
+            continue
+        if "/manifest/" in parsed.path.casefold():
             continue
         if link in seen:
             continue
+        if not allow_fallback and not any(
+            marker in lowered for marker in ("statement", "statements", "download", "reports", ".txt", "onec")
+        ):
+            continue
         seen.add(link)
-        if any(marker in lowered for marker in ("statement", "statements", "download", "reports", ".txt", "onec")):
-            preferred.append(link)
-        else:
-            fallback.append(link)
-    candidates = preferred or fallback[:5]
+        candidates.append(link)
     candidates.sort(key=lambda item: (".txt" not in item.casefold(), "download" not in item.casefold(), len(item)))
     return candidates
 
@@ -281,6 +283,7 @@ def download_statement_link_with_opener(opener, link: str) -> tuple[str, bytes]:
     last_content_type = ""
     last_size = 0
     last_url = link
+    last_html_error = ""
     for _attempt in range(4):
         if link in visited:
             break
@@ -294,13 +297,17 @@ def download_statement_link_with_opener(opener, link: str) -> tuple[str, bytes]:
         if "html" not in (content_type or "").casefold():
             break
         html = decode_download_html(data, content_type)
+        last_html_error = sber_html_error_prefix(html) + html_debug_summary(html, final_url, content_type, len(data))
         candidates = [candidate for candidate in html_download_candidates(html, final_url) if candidate not in visited]
         if not candidates:
-            raise ValueError(
-                sber_html_error_prefix(html)
-                + html_debug_summary(html, final_url, content_type, len(data))
-            )
+            raise ValueError(last_html_error)
         link = candidates[0]
+    if last_html_error:
+        raise ValueError(
+            "Сбер вернул по ссылке не TXT 1С после перехода по найденной ссылке. "
+            f"Последний URL: {last_url}. Content-Type: {last_content_type or 'не указан'}, размер: {last_size} байт. "
+            f"Первая HTML-страница: {last_html_error}"
+        )
     raise ValueError(
         "Сбер вернул по ссылке не TXT 1С. "
         f"Последний URL: {last_url}. Content-Type: {last_content_type or 'не указан'}, размер: {last_size} байт."
