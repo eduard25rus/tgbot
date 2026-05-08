@@ -130,6 +130,8 @@ BANK_MAIL_LOGIN=felis.bank.statement@mail.ru
 BANK_MAIL_PASSWORD=пароль_приложения_mail_ru
 BANK_MAIL_FOLDER=INBOX
 BANK_MAIL_SEARCH=ALL
+BANK_MAIL_SENDER=sberbusiness@sberbank.ru
+BANK_MAIL_SUBJECT=Выписка по сч
 BANK_MAIL_AUTO_IMPORT_ENABLED=1
 BANK_MAIL_DAILY_TIME=08:30
 BANK_MAIL_RUN_ON_STARTUP=1
@@ -137,6 +139,8 @@ BANK_MAIL_RUN_ON_STARTUP=1
 
 При старте сервиса CRM сразу проверит почту, затем будет запускать импорт каждый день
 в `BANK_MAIL_DAILY_TIME` по часовому поясу `BOT_TIMEZONE`.
+По умолчанию импорт смотрит только письма СберБизнеса с темой выписки, чтобы не
+цеплять служебные и рекламные письма в этом же ящике.
 
 3. Если хотите красивую правильную ссылку установки пароля для сотрудников, добавьте:
 

@@ -120,6 +120,12 @@ def download_statement_link(link: str) -> tuple[str, bytes]:
     with response:
         data = response.read()
         filename = filename_from_content_disposition(response.headers.get("Content-Disposition"))
+        content_type = response.headers.get("Content-Type", "")
+    if b"1CClientBankExchange" not in data[:4096]:
+        raise ValueError(
+            "Сбер вернул по ссылке не TXT 1С. "
+            f"Content-Type: {content_type or 'не указан'}, размер: {len(data)} байт."
+        )
     return filename or "kl_to_1c.txt", data
 
 
@@ -164,6 +170,14 @@ def imap_ok(response) -> bool:
     return bool(response) and response[0] == "OK"
 
 
+def matches_text_filter(value: str, raw_filter: str) -> bool:
+    needles = [item.strip().casefold() for item in raw_filter.split(",") if item.strip()]
+    if not needles:
+        return True
+    haystack = value.casefold()
+    return any(needle in haystack for needle in needles)
+
+
 def run_bank_mail_import() -> tuple[int, int, int]:
     db_path = os.getenv("DB_PATH", "contracts.db")
     owner_chat_id = int(env_required("BANK_MAIL_OWNER_CHAT_ID"))
@@ -172,7 +186,8 @@ def run_bank_mail_import() -> tuple[int, int, int]:
     host = os.getenv("BANK_MAIL_IMAP_HOST", "imap.mail.ru").strip() or "imap.mail.ru"
     port = int(os.getenv("BANK_MAIL_IMAP_PORT", "993"))
     folder = os.getenv("BANK_MAIL_FOLDER", "INBOX").strip() or "INBOX"
-    sender_filter = os.getenv("BANK_MAIL_SENDER", "").strip().casefold()
+    sender_filter = os.getenv("BANK_MAIL_SENDER", "sberbusiness@sberbank.ru").strip().casefold()
+    subject_filter = os.getenv("BANK_MAIL_SUBJECT", "Выписка по сч").strip()
     limit = int(os.getenv("BANK_MAIL_LIMIT", "20"))
     mark_seen = os.getenv("BANK_MAIL_MARK_SEEN", "1").strip().lower() not in {"0", "false", "no"}
     search_query = os.getenv("BANK_MAIL_SEARCH", "ALL").strip() or "ALL"
@@ -203,6 +218,8 @@ def run_bank_mail_import() -> tuple[int, int, int]:
             if sender_filter and sender_filter not in message_from.casefold():
                 continue
             subject = decode_mime_header(message.get("Subject"))
+            if not matches_text_filter(subject, subject_filter):
+                continue
             uid_text = uid.decode("ascii", errors="ignore")
             message_had_statement = False
             message_had_errors = False

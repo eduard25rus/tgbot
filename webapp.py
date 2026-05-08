@@ -5157,9 +5157,30 @@ def layout(
       font-size: 13px;
       line-height: 1.35;
     }}
+    .dds-import-actions {{
+      display: grid;
+      grid-template-columns: minmax(260px, 1.2fr) minmax(260px, 1fr);
+      gap: 16px;
+      align-items: start;
+      margin-top: 18px;
+    }}
+    .dds-import-actions .mini-card {{
+      height: 100%;
+    }}
+    .dds-import-log-table td:last-child {{
+      max-width: 420px;
+      white-space: normal;
+    }}
+    .dds-import-log-message {{
+      color: var(--muted);
+      line-height: 1.35;
+    }}
     @media (max-width: 1180px) {{
       .dds-filter-panel {{
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }}
+      .dds-import-actions {{
+        grid-template-columns: 1fr;
       }}
     }}
     @media (max-width: 720px) {{
@@ -16472,79 +16493,10 @@ def render_expenses_section(
         """
     else:
         registry_tables_html = render_expenses_table(filtered_entries, "Пока нет операций ДДС в этом срезе.", False, True)
-    mail_imports_html = ""
-    if has_permission(current_user, "expenses", "edit"):
-        mail_imports = storage.list_bank_statement_mail_imports(owner_chat_id, 5)
-        def mail_import_status_chip(item) -> str:
-            if item.status == "processed":
-                return '<span class="chip ok">Обработано</span>'
-            if item.status == "duplicate":
-                return '<span class="chip">Уже было</span>'
-            return '<span class="chip danger">Ошибка</span>'
-        mail_import_rows = "".join(
-            f"""
-            <tr>
-              <td class="nowrap">{escape(format_datetime(item.processed_at.astimezone(VLADIVOSTOK_TZ)))}</td>
-              <td>
-                <div class="timeline-title">{escape(item.attachment_filename or item.message_subject or 'Выписка из почты')}</div>
-                <div class="contract-table-subtle" style="margin-top:4px;">{escape(item.mailbox)} · {escape(item.mailbox_folder)}</div>
-              </td>
-              <td>{mail_import_status_chip(item)}</td>
-              <td class="nowrap">{item.imported_count} / {item.duplicate_count} / {item.skipped_count}</td>
-              <td>{escape(item.error_message) if item.error_message else f'Остатков обновлено: {item.balance_count}'}</td>
-            </tr>
-            """
-            for item in mail_imports
-        )
-        mail_imports_html = f"""
-        <div style="margin-top:18px;">
-          <div class="panel-head" style="margin-bottom:10px;">
-            <div>
-              <h3 class="panel-title">Автоимпорт из почты</h3>
-              <div class="panel-sub">Последние TXT-выписки, которые CRM забрала из почтового ящика.</div>
-            </div>
-          <form method="post" action="/expenses/mail-import?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment=needs{extra_filter_query}" style="margin:0;">
-              <button class="secondary-btn mini" type="submit">Проверить почту сейчас</button>
-            </form>
-          </div>
-          <div class="expenses-table-wrap">
-            <table class="table contract-table">
-              <thead>
-                <tr>
-                  <th class="nowrap">Когда</th>
-                  <th>Файл</th>
-                  <th>Статус</th>
-                  <th class="nowrap">Новые / дубли / пропущено</th>
-                  <th>Итог</th>
-                </tr>
-              </thead>
-              <tbody>{mail_import_rows or '<tr><td colspan="5">Автоимпорт еще не запускался.</td></tr>'}</tbody>
-            </table>
-          </div>
-        </div>
-        """
     dds_actions_html = ""
     if has_permission(current_user, "expenses", "edit") and active_tab != "archive":
         dds_actions_html = f"""
-          <details class="dds-action-menu">
-            <summary class="secondary-btn mini">Импорт выписки</summary>
-            <div class="dds-action-popover">
-              <div class="panel-head" style="margin-bottom:14px;">
-                <div>
-                  <h3 class="panel-title">Импорт выписки 1С</h3>
-                  <div class="panel-sub">TXT выгрузка Клиент-Банк для 1С: формат 1.03, кодировка WIN. Поступления и списания попадут в неразнесенные операции ДДС.</div>
-                </div>
-              </div>
-              <form class="form-grid" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment=needs{extra_filter_query}">
-                <div class="field span-2">
-                  <label>TXT выписка</label>
-                  <input type="file" name="bank_statement" accept=".txt,text/plain" required>
-                </div>
-                <button class="submit-btn" type="submit">Загрузить выписку</button>
-              </form>
-              {mail_imports_html}
-            </div>
-          </details>
+          <a class="secondary-btn mini" href="/expenses/imports?owner={owner_chat_id}">Импорт выписки</a>
           <details class="dds-action-menu">
             <summary class="secondary-btn mini">Добавить расход</summary>
             <div class="dds-action-popover">
@@ -16695,6 +16647,111 @@ def render_expenses_section(
       {dds_filters_html}
       {flash_html}
       {registry_tables_html}
+    </section>
+    """
+
+
+def bank_mail_import_status_chip(item) -> str:
+    if item.status == "processed":
+        return '<span class="chip ok">Обработано</span>'
+    if item.status == "duplicate":
+        return '<span class="chip">Уже было</span>'
+    return '<span class="chip danger">Ошибка</span>'
+
+
+def render_expense_imports_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    flash_message: str = "",
+    success: bool = False,
+) -> str:
+    can_edit = has_permission(current_user, "expenses", "edit")
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    manual_import_card = ""
+    check_mail_card = ""
+    if can_edit:
+        manual_import_card = f"""
+        <section class="card mini-card">
+          <div>
+            <h3 class="panel-title">Загрузить вручную</h3>
+            <div class="panel-sub">TXT выгрузка Клиент-Банк для 1С: формат 1.03, кодировка WIN.</div>
+          </div>
+          <form class="form-grid" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&return=imports">
+            <div class="field span-2">
+              <label>TXT выписка</label>
+              <input type="file" name="bank_statement" accept=".txt,text/plain" required>
+            </div>
+            <button class="submit-btn" type="submit">Импортировать выписку</button>
+          </form>
+        </section>
+        """
+        check_mail_card = f"""
+        <section class="card mini-card">
+          <div>
+            <h3 class="panel-title">Почтовый автоимпорт</h3>
+            <div class="panel-sub">Проверить ящик сейчас и забрать новые письма со ссылками или TXT-вложениями.</div>
+          </div>
+          <form method="post" action="/expenses/mail-import?owner={owner_chat_id}&return=imports">
+            <button class="submit-btn" type="submit">Проверить почту сейчас</button>
+          </form>
+        </section>
+        """
+    mail_imports = storage.list_bank_statement_mail_imports(owner_chat_id, 50)
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td class="nowrap">{escape(format_datetime(item.processed_at.astimezone(VLADIVOSTOK_TZ)))}</td>
+          <td>
+            <div class="timeline-title">{escape(item.attachment_filename or item.message_subject or 'Выписка из почты')}</div>
+            <div class="contract-table-subtle" style="margin-top:4px;">{escape(item.mailbox)} · {escape(item.mailbox_folder)}</div>
+            {f'<div class="contract-table-subtle" style="margin-top:4px;">Письмо: {escape(item.message_subject)}</div>' if item.message_subject else ''}
+          </td>
+          <td>{bank_mail_import_status_chip(item)}</td>
+          <td class="nowrap">{item.imported_count} / {item.duplicate_count} / {item.skipped_count}</td>
+          <td class="nowrap">{item.balance_count}</td>
+          <td><div class="dds-import-log-message">{escape(item.error_message) if item.error_message else "Без ошибок"}</div></td>
+        </tr>
+        """
+        for item in mail_imports
+    ) or '<tr><td colspan="6">Журнал загрузок пока пуст.</td></tr>'
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Импорт выписок</h2>
+          <div class="panel-sub">Ручная загрузка 1С TXT, проверка почты и журнал всех попыток автоимпорта.</div>
+        </div>
+        <a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}">К реестру ДДС</a>
+      </div>
+      {flash_html}
+      <div class="dds-import-actions">
+        {manual_import_card}
+        {check_mail_card}
+      </div>
+      <div style="margin-top:22px;">
+        <div class="panel-head" style="margin-bottom:10px;">
+          <div>
+            <h3 class="panel-title">Журнал загрузок</h3>
+            <div class="panel-sub">Последние 50 файлов из почты: новые операции, дубли, пропущенные строки и ошибки чтения.</div>
+          </div>
+        </div>
+        <div class="expenses-table-wrap">
+          <table class="table contract-table dds-import-log-table">
+            <thead>
+              <tr>
+                <th class="nowrap">Когда</th>
+                <th>Файл / письмо</th>
+                <th>Статус</th>
+                <th class="nowrap">Новые / дубли / пропущено</th>
+                <th class="nowrap">Остатки</th>
+                <th>Итог</th>
+              </tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+        </div>
+      </div>
     </section>
     """
 
@@ -22364,11 +22421,34 @@ self.addEventListener("notificationclick", (event) => {
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
+    if path == "/expenses/imports" and method == "GET":
+        denied = guard("expenses", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        flash_message = query.get("flash", [""])[0].strip()
+        success = query.get("ok", ["0"])[0] == "1"
+        body = render_expense_imports_section(storage, current_owner, current_user, flash_message, success)
+        html = layout(
+            "Импорт выписок",
+            body,
+            owners,
+            current_owner,
+            "expenses",
+            current_user,
+            hero_title_override="Импорт выписок",
+            hero_copy_override="Ручная загрузка, почтовый автоимпорт и журнал попыток загрузки банковских выписок.",
+            active_subsection="expenses",
+        )
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
     if path == "/expenses/mail-import" and method == "POST":
         denied = guard("expenses", "edit")
         if denied:
             return denied
         query = parse_qs(environ.get("QUERY_STRING", ""))
+        return_to_imports = query.get("return", [""])[0].strip() == "imports"
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
@@ -22385,6 +22465,8 @@ self.addEventListener("notificationclick", (event) => {
         except Exception as exc:
             success = False
             flash = f"Не удалось проверить почту: {exc}"
+        if return_to_imports:
+            return redirect(start_response, f"/expenses/imports?owner={current_owner}&ok={1 if success else 0}&flash={quote_plus(flash)}")
         if not success:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, flash, False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
@@ -22397,6 +22479,7 @@ self.addEventListener("notificationclick", (event) => {
         if denied:
             return denied
         query = parse_qs(environ.get("QUERY_STRING", ""))
+        return_to_imports = query.get("return", [""])[0].strip() == "imports"
         active_tab = query.get("tab", ["active"])[0].strip() or "active"
         project_filter = query.get("project", [""])[0].strip()
         category_filter = query.get("category", [""])[0].strip()
@@ -22420,10 +22503,14 @@ self.addEventListener("notificationclick", (event) => {
             result = import_bank_1c_statement(storage, current_owner, upload.data, (current_user or {}).get("id"), actor_name)
             flash = f"Импортировано операций: {result.imported_count}. Остатков обновлено: {result.balance_count}. Дублей пропущено: {result.duplicate_count}. Не распознано как ДДС: {result.skipped_count}."
         except ValueError as exc:
+            if return_to_imports:
+                return redirect(start_response, f"/expenses/imports?owner={current_owner}&ok=0&flash={quote_plus(str(exc))}")
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
+        if return_to_imports:
+            return redirect(start_response, f"/expenses/imports?owner={current_owner}&ok=1&flash={quote_plus(flash)}")
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}&flash={quote_plus(flash)}")
 
     if path == "/expenses/new" and method == "POST":
