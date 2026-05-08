@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import unquote
 from urllib.parse import urljoin
+from urllib.parse import parse_qsl
 from urllib.parse import urlsplit
 from urllib.request import build_opener
 from urllib.request import HTTPCookieProcessor
@@ -147,8 +148,7 @@ def iter_text_parts(message: Message):
             yield payload.decode(part.get_content_charset() or "utf-8", errors="replace")
 
 
-def iter_sber_statement_links(message: Message):
-    seen: set[str] = set()
+def iter_message_links(message: Message):
     for text in iter_text_parts(message):
         raw_links: list[str] = []
         raw_links.extend(re.findall(r"""href=["']([^"']+)""", text, flags=re.IGNORECASE))
@@ -156,12 +156,48 @@ def iter_sber_statement_links(message: Message):
         for raw_link in raw_links:
             link = unescape(raw_link).strip()
             link = link.rstrip(").,;")
-            if "sbi.sberbank.ru" not in link or "/statements/download/mail/reports/" not in link:
+            if link:
+                yield link
+            decoded_link = unquote(link)
+            if decoded_link and decoded_link != link:
+                yield decoded_link
+            try:
+                parsed_link = urlsplit(link)
+            except ValueError:
                 continue
-            if link in seen:
-                continue
-            seen.add(link)
-            yield link
+            for _key, value in parse_qsl(parsed_link.query, keep_blank_values=True):
+                decoded_value = unquote(unescape(value)).strip()
+                if decoded_value.startswith(("http://", "https://")):
+                    yield decoded_value
+                    decoded_again = unquote(decoded_value)
+                    if decoded_again != decoded_value:
+                        yield decoded_again
+
+
+def is_sber_statement_link(link: str) -> bool:
+    lowered = link.casefold()
+    return "sbi.sberbank.ru" in lowered and "/statements/download/mail/reports/" in lowered
+
+
+def iter_sber_statement_links(message: Message):
+    seen: set[str] = set()
+    for link in iter_message_links(message):
+        if not is_sber_statement_link(link):
+            continue
+        if link in seen:
+            continue
+        seen.add(link)
+        yield link
+
+
+def message_link_counts(message: Message) -> tuple[int, int]:
+    all_links: set[str] = set()
+    sber_links: set[str] = set()
+    for link in iter_message_links(message):
+        all_links.add(link)
+        if is_sber_statement_link(link):
+            sber_links.add(link)
+    return len(all_links), len(sber_links)
 
 
 def filename_from_content_disposition(raw: str | None) -> str:
@@ -652,6 +688,9 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                 append_scan_detail(scan_details, uid_text, message, f"свежее, TXT-вложений {len(statement_sources)}")
             else:
                 link_count = 0
+                total_link_count = 0
+                candidate_link_count = 0
+                total_link_count, candidate_link_count = message_link_counts(message)
                 for link in iter_sber_statement_links(message):
                     link_count += 1
                     message_had_statement = True
@@ -680,7 +719,11 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                     scan_details,
                     uid_text,
                     message,
-                    f"свежее, ссылок Сбера {link_count}" if link_count else "свежее, ссылок/вложений нет",
+                    (
+                        f"свежее, ссылок всего {total_link_count}, кандидатов Сбера {candidate_link_count}, обработано {link_count}"
+                        if total_link_count
+                        else "свежее, ссылок/вложений нет"
+                    ),
                 )
             for statement_source in statement_sources:
                 message_had_statement = True
