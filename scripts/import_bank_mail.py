@@ -13,6 +13,9 @@ import sys
 import time
 from html import unescape
 from http.cookiejar import CookieJar
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from email.header import decode_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
@@ -62,6 +65,9 @@ def decode_mime_header(raw: str | None) -> str:
 
 
 def message_date(message: Message) -> str:
+    parsed_date = parsed_message_datetime(message)
+    if parsed_date is not None:
+        return parsed_date.isoformat()
     raw = message.get("Date", "")
     if not raw:
         return ""
@@ -69,6 +75,40 @@ def message_date(message: Message) -> str:
         return parsedate_to_datetime(raw).isoformat()
     except (TypeError, ValueError):
         return raw
+
+
+def parsed_message_datetime(message: Message) -> datetime | None:
+    raw = message.get("Date", "")
+    if not raw:
+        return None
+    try:
+        parsed_date = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if parsed_date.tzinfo is None:
+        parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+    return parsed_date.astimezone(timezone.utc)
+
+
+def bank_mail_max_age_hours() -> float:
+    raw = os.getenv("BANK_MAIL_MAX_AGE_HOURS", "36").strip()
+    if not raw:
+        return 0
+    try:
+        hours = float(raw)
+    except ValueError:
+        return 36
+    return max(0, hours)
+
+
+def message_is_too_old(message: Message, max_age_hours: float) -> bool:
+    if max_age_hours <= 0:
+        return False
+    parsed_date = parsed_message_datetime(message)
+    if parsed_date is None:
+        return False
+    age = datetime.now(timezone.utc) - parsed_date
+    return age > timedelta(hours=max_age_hours)
 
 
 def iter_txt_attachments(message: Message):
@@ -484,6 +524,7 @@ def run_bank_mail_import() -> tuple[int, int, int]:
     limit = int(os.getenv("BANK_MAIL_LIMIT", "20"))
     mark_seen = os.getenv("BANK_MAIL_MARK_SEEN", "1").strip().lower() not in {"0", "false", "no"}
     search_query = os.getenv("BANK_MAIL_SEARCH", "ALL").strip() or "ALL"
+    max_age_hours = bank_mail_max_age_hours()
 
     storage = Storage(db_path)
     imported_files = 0
@@ -512,6 +553,8 @@ def run_bank_mail_import() -> tuple[int, int, int]:
                 continue
             subject = decode_mime_header(message.get("Subject"))
             if not matches_text_filter(subject, subject_filter):
+                continue
+            if message_is_too_old(message, max_age_hours):
                 continue
             uid_text = uid.decode("ascii", errors="ignore")
             message_had_statement = False

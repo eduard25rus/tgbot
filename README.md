@@ -135,6 +135,7 @@ BANK_MAIL_SUBJECT=Выписка по сч
 BANK_MAIL_AUTO_IMPORT_ENABLED=1
 BANK_MAIL_DAILY_TIME=08:30
 BANK_MAIL_INTERVAL_MINUTES=30
+BANK_MAIL_MAX_AGE_HOURS=36
 BANK_MAIL_RUN_ON_STARTUP=1
 ```
 
@@ -142,7 +143,8 @@ BANK_MAIL_RUN_ON_STARTUP=1
 ее каждые 30 минут через `BANK_MAIL_INTERVAL_MINUTES`, чтобы успевать скачать
 ссылки Сбера до истечения срока. Если поставить `BANK_MAIL_INTERVAL_MINUTES=0`,
 CRM вернется к одному ежедневному запуску в `BANK_MAIL_DAILY_TIME` по часовому
-поясу `BOT_TIMEZONE`.
+поясу `BOT_TIMEZONE`. Старые письма по умолчанию не проверяются: `BANK_MAIL_MAX_AGE_HOURS=36`
+отсекает протухшие ссылки из архивных писем, а значение `0` отключает это ограничение.
 По умолчанию импорт смотрит только письма СберБизнеса с темой выписки, чтобы не
 цеплять служебные и рекламные письма в этом же ящике.
 
