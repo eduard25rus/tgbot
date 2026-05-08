@@ -17,8 +17,9 @@ from email.message import Message
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.error import URLError
-from urllib.parse import urljoin
 from urllib.parse import unquote
+from urllib.parse import urljoin
+from urllib.parse import urlsplit
 from urllib.request import build_opener
 from urllib.request import HTTPCookieProcessor
 from urllib.request import HTTPSHandler
@@ -157,21 +158,111 @@ def html_download_candidates(html: str, base_url: str) -> list[str]:
     raw_links.extend(re.findall(r"""action=["']([^"']+)""", html, flags=re.IGNORECASE))
     raw_links.extend(re.findall(r"""url=([^"'>\s]+)""", html, flags=re.IGNORECASE))
     raw_links.extend(re.findall(r"""location(?:\.href)?\s*=\s*["']([^"']+)""", html, flags=re.IGNORECASE))
-    candidates: list[str] = []
+    preferred: list[str] = []
+    fallback: list[str] = []
     seen: set[str] = set()
     for raw_link in raw_links:
-        link = urljoin(base_url, unescape(raw_link).strip())
-        lowered = link.casefold()
-        if "sbi.sberbank.ru" not in lowered:
+        raw_link = unescape(raw_link).strip()
+        lowered_raw = raw_link.casefold()
+        if not raw_link or lowered_raw.startswith(("javascript:", "mailto:", "tel:", "#")):
             continue
-        if not any(marker in lowered for marker in ("statement", "statements", "download", "reports", ".txt")):
+        link = urljoin(base_url, raw_link)
+        parsed = urlsplit(link)
+        lowered = link.casefold()
+        if parsed.netloc and "sbi.sberbank.ru" not in parsed.netloc.casefold():
+            continue
+        if re.search(r"\.(css|js|png|jpe?g|gif|svg|ico|woff2?)($|[?#])", parsed.path.casefold()):
             continue
         if link in seen:
             continue
         seen.add(link)
-        candidates.append(link)
+        if any(marker in lowered for marker in ("statement", "statements", "download", "reports", ".txt", "onec")):
+            preferred.append(link)
+        else:
+            fallback.append(link)
+    candidates = preferred or fallback[:5]
     candidates.sort(key=lambda item: (".txt" not in item.casefold(), "download" not in item.casefold(), len(item)))
     return candidates
+
+
+def html_form_summary(html: str) -> str:
+    form_matches = re.findall(r"(?is)<form\b[^>]*>(.*?)</form>", html)
+    if not form_matches:
+        return ""
+    form_bits: list[str] = []
+    for form_html in form_matches[:2]:
+        names = re.findall(r"""name=["']([^"']+)""", form_html, flags=re.IGNORECASE)
+        action_match = re.search(r"""action=["']([^"']+)""", form_html, flags=re.IGNORECASE)
+        action = unescape(action_match.group(1)).strip() if action_match else ""
+        bit = "form"
+        if action:
+            bit += f" action={action}"
+        if names:
+            bit += " fields=" + ",".join(names[:8])
+        form_bits.append(bit)
+    return " | ".join(form_bits)
+
+
+def looks_like_expired_sber_page(html: str) -> bool:
+    text = compact_html_text(html, limit=1200).casefold()
+    return any(
+        marker in text
+        for marker in (
+            "срок действия",
+            "истек",
+            "истёк",
+            "недоступ",
+            "не найд",
+            "ошибка",
+        )
+    )
+
+
+def sber_html_error_prefix(html: str) -> str:
+    if looks_like_expired_sber_page(html):
+        return "Сбер вернул HTML-страницу вместо TXT 1С. Похоже, ссылка на выписку уже истекла. "
+    return "Сбер вернул HTML-страницу вместо TXT 1С, и внутри нее не нашлась прямая ссылка на файл. "
+
+
+def compact_html_text(html: str, limit: int = 700) -> str:
+    cleaned = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", html)
+    cleaned = re.sub(r"(?s)<[^>]+>", " ", cleaned)
+    cleaned = unescape(cleaned)
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:limit]
+
+
+def html_debug_summary(html: str, base_url: str, content_type: str, size: int) -> str:
+    title_match = re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
+    title = " ".join(unescape(title_match.group(1)).split()) if title_match else ""
+    raw_links = []
+    raw_links.extend(re.findall(r"""href=["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_links.extend(re.findall(r"""action=["']([^"']+)""", html, flags=re.IGNORECASE))
+    links = []
+    seen = set()
+    for raw_link in raw_links:
+        link = urljoin(base_url, unescape(raw_link).strip())
+        if link in seen:
+            continue
+        seen.add(link)
+        links.append(link)
+        if len(links) >= 5:
+            break
+    parts = [
+        f"Content-Type: {content_type or 'не указан'}",
+        f"размер: {size} байт",
+    ]
+    if title:
+        parts.append(f"title: {title}")
+    text = compact_html_text(html)
+    if text:
+        parts.append(f"текст: {text}")
+    if links:
+        parts.append("ссылки: " + " | ".join(links))
+    forms = html_form_summary(html)
+    if forms:
+        parts.append(forms)
+    return "; ".join(parts)
 
 
 def download_statement_link(link: str) -> tuple[str, bytes]:
@@ -206,8 +297,8 @@ def download_statement_link_with_opener(opener, link: str) -> tuple[str, bytes]:
         candidates = [candidate for candidate in html_download_candidates(html, final_url) if candidate not in visited]
         if not candidates:
             raise ValueError(
-                "Сбер вернул HTML-страницу вместо TXT 1С, и внутри нее не нашлась прямая ссылка на файл. "
-                f"Content-Type: {content_type or 'не указан'}, размер: {len(data)} байт."
+                sber_html_error_prefix(html)
+                + html_debug_summary(html, final_url, content_type, len(data))
             )
         link = candidates[0]
     raise ValueError(
@@ -292,7 +383,7 @@ def run_bank_mail_import() -> tuple[int, int, int]:
         status, data = imap.uid("search", None, search_query)
         if status != "OK":
             raise RuntimeError("Не удалось найти новые письма в IMAP")
-        uids = (data[0] or b"").split()[-limit:]
+        uids = list(reversed((data[0] or b"").split()[-limit:]))
         for uid in uids:
             status, fetched = imap.uid("fetch", uid, "(BODY.PEEK[])")
             if status != "OK" or not fetched:
