@@ -89,11 +89,24 @@ def iter_html_parts(message: Message):
             yield payload.decode(part.get_content_charset() or "utf-8", errors="replace")
 
 
+def iter_text_parts(message: Message):
+    for part in message.walk():
+        if part.is_multipart() or part.get_content_type() not in {"text/html", "text/plain"}:
+            continue
+        payload = part.get_payload(decode=True)
+        if payload:
+            yield payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+
+
 def iter_sber_statement_links(message: Message):
     seen: set[str] = set()
-    for html in iter_html_parts(message):
-        for raw_link in re.findall(r"""href=["']([^"']+)""", html, flags=re.IGNORECASE):
+    for text in iter_text_parts(message):
+        raw_links: list[str] = []
+        raw_links.extend(re.findall(r"""href=["']([^"']+)""", text, flags=re.IGNORECASE))
+        raw_links.extend(re.findall(r"""https?://[^\s"'<>]+""", text))
+        for raw_link in raw_links:
             link = unescape(raw_link).strip()
+            link = link.rstrip(").,;")
             if "sbi.sberbank.ru" not in link or "/statements/download/mail/reports/" not in link:
                 continue
             if link in seen:
@@ -240,6 +253,7 @@ def html_debug_summary(html: str, base_url: str, content_type: str, size: int) -
     raw_links = []
     raw_links.extend(re.findall(r"""href=["']([^"']+)""", html, flags=re.IGNORECASE))
     raw_links.extend(re.findall(r"""action=["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_scripts = re.findall(r"""src=["']([^"']+)""", html, flags=re.IGNORECASE)
     links = []
     seen = set()
     for raw_link in raw_links:
@@ -261,6 +275,9 @@ def html_debug_summary(html: str, base_url: str, content_type: str, size: int) -
         parts.append(f"текст: {text}")
     if links:
         parts.append("ссылки: " + " | ".join(links))
+    if raw_scripts:
+        scripts = [urljoin(base_url, unescape(item).strip()) for item in raw_scripts[:5]]
+        parts.append("scripts: " + " | ".join(scripts))
     forms = html_form_summary(html)
     if forms:
         parts.append(forms)
