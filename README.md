@@ -134,11 +134,15 @@ BANK_MAIL_SENDER=sberbusiness@sberbank.ru
 BANK_MAIL_SUBJECT=Выписка по сч
 BANK_MAIL_AUTO_IMPORT_ENABLED=1
 BANK_MAIL_DAILY_TIME=08:30
+BANK_MAIL_INTERVAL_MINUTES=30
 BANK_MAIL_RUN_ON_STARTUP=1
 ```
 
-При старте сервиса CRM сразу проверит почту, затем будет запускать импорт каждый день
-в `BANK_MAIL_DAILY_TIME` по часовому поясу `BOT_TIMEZONE`.
+При старте сервиса CRM сразу проверит почту, затем по умолчанию будет проверять
+ее каждые 30 минут через `BANK_MAIL_INTERVAL_MINUTES`, чтобы успевать скачать
+ссылки Сбера до истечения срока. Если поставить `BANK_MAIL_INTERVAL_MINUTES=0`,
+CRM вернется к одному ежедневному запуску в `BANK_MAIL_DAILY_TIME` по часовому
+поясу `BOT_TIMEZONE`.
 По умолчанию импорт смотрит только письма СберБизнеса с темой выписки, чтобы не
 цеплять служебные и рекламные письма в этом же ящике.
 

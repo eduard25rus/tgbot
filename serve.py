@@ -58,6 +58,20 @@ def resolve_daily_import_time() -> tuple[int, int]:
     return hour, minute
 
 
+def resolve_import_interval_seconds() -> int:
+    raw = os.getenv("BANK_MAIL_INTERVAL_MINUTES", "30").strip()
+    if not raw:
+        return 0
+    try:
+        minutes = int(raw)
+    except ValueError:
+        LOGGER.warning("Invalid BANK_MAIL_INTERVAL_MINUTES=%r, using daily schedule", raw)
+        return 0
+    if minutes <= 0:
+        return 0
+    return max(300, minutes * 60)
+
+
 def seconds_until_next_daily_run() -> float:
     tz_name = os.getenv("BOT_TIMEZONE", "Asia/Vladivostok").strip() or "Asia/Vladivostok"
     try:
@@ -91,11 +105,15 @@ def bank_mail_import_loop() -> None:
     if env_truthy("BANK_MAIL_RUN_ON_STARTUP", True):
         time.sleep(int(os.getenv("BANK_MAIL_STARTUP_DELAY_SECONDS", "30")))
         run_bank_mail_import_once("startup")
+    interval_seconds = resolve_import_interval_seconds()
     while True:
-        delay = seconds_until_next_daily_run()
-        LOGGER.info("Next bank statement mail import in %.0f seconds", delay)
+        delay = interval_seconds or seconds_until_next_daily_run()
+        if interval_seconds:
+            LOGGER.info("Next bank statement mail import in %.0f seconds by interval", delay)
+        else:
+            LOGGER.info("Next bank statement mail import in %.0f seconds", delay)
         time.sleep(delay)
-        run_bank_mail_import_once("scheduled")
+        run_bank_mail_import_once("interval" if interval_seconds else "scheduled")
 
 
 def start_bank_mail_import_thread() -> None:
