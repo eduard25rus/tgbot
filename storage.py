@@ -6179,6 +6179,42 @@ class Storage:
             ).fetchone()
         return row is not None
 
+    def bank_statement_mail_import_log_exists(
+        self,
+        owner_chat_id: int,
+        mailbox: str,
+        mailbox_folder: str,
+        message_uid: str,
+        attachment_filename: str,
+        status: str,
+        error_message: str = "",
+    ) -> bool:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM bank_statement_mail_imports
+                WHERE owner_chat_id = ?
+                  AND mailbox = ?
+                  AND mailbox_folder = ?
+                  AND message_uid = ?
+                  AND attachment_filename = ?
+                  AND status = ?
+                  AND error_message = ?
+                LIMIT 1
+                """,
+                (
+                    owner_chat_id,
+                    mailbox.strip(),
+                    mailbox_folder.strip(),
+                    message_uid.strip(),
+                    attachment_filename.strip(),
+                    status.strip(),
+                    error_message.strip(),
+                ),
+            ).fetchone()
+        return row is not None
+
     def add_bank_statement_mail_import(
         self,
         owner_chat_id: int,

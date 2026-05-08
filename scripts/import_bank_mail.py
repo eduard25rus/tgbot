@@ -10,6 +10,7 @@ import os
 import re
 import ssl
 import sys
+import time
 from html import unescape
 from http.cookiejar import CookieJar
 from email.header import decode_header
@@ -31,6 +32,14 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from storage import Storage
 from webapp import import_bank_1c_statement
+
+
+class StatementSource:
+    def __init__(self, filename: str, payload: bytes, source_kind: str, source_ref: str = "") -> None:
+        self.filename = filename
+        self.payload = payload
+        self.source_kind = source_kind
+        self.source_ref = source_ref
 
 
 def env_required(name: str) -> str:
@@ -233,7 +242,20 @@ def looks_like_expired_sber_page(html: str) -> bool:
     )
 
 
+def looks_like_sber_browser_challenge(html: str) -> bool:
+    lowered_html = html.casefold()
+    text = compact_html_text(html, limit=1200).casefold()
+    return (
+        "сбербизнес загрузка" in text
+        or "проверяем безопасность сайта" in text
+        or "detect_browser" in lowered_html
+        or "sbbol-authentication" in lowered_html
+    )
+
+
 def sber_html_error_prefix(html: str) -> str:
+    if looks_like_sber_browser_challenge(html):
+        return "Сбер вернул страницу браузерной проверки безопасности вместо TXT 1С. "
     if looks_like_expired_sber_page(html):
         return "Сбер вернул HTML-страницу вместо TXT 1С. Похоже, ссылка на выписку уже истекла. "
     return "Сбер вернул HTML-страницу вместо TXT 1С, и внутри нее не нашлась прямая ссылка на файл. "
@@ -295,15 +317,31 @@ def download_statement_link(link: str) -> tuple[str, bytes]:
         return download_statement_link_with_opener(opener, link)
 
 
+def sber_challenge_waits() -> list[float]:
+    raw = os.getenv("BANK_MAIL_SBER_CHALLENGE_WAITS", "4,8,16").strip()
+    waits: list[float] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            wait_seconds = float(item)
+        except ValueError:
+            continue
+        if wait_seconds > 0:
+            waits.append(min(wait_seconds, 60.0))
+    return waits
+
+
 def download_statement_link_with_opener(opener, link: str) -> tuple[str, bytes]:
     visited: set[str] = set()
     last_content_type = ""
     last_size = 0
     last_url = link
     last_html_error = ""
-    for _attempt in range(4):
-        if link in visited:
-            break
+    challenge_waits = sber_challenge_waits()
+    challenge_wait_index = 0
+    for _attempt in range(4 + len(challenge_waits)):
         visited.add(link)
         filename, data, content_type, final_url = fetch_statement_url(opener, link)
         last_content_type = content_type
@@ -317,6 +355,10 @@ def download_statement_link_with_opener(opener, link: str) -> tuple[str, bytes]:
         last_html_error = sber_html_error_prefix(html) + html_debug_summary(html, final_url, content_type, len(data))
         candidates = [candidate for candidate in html_download_candidates(html, final_url) if candidate not in visited]
         if not candidates:
+            if looks_like_sber_browser_challenge(html) and challenge_wait_index < len(challenge_waits):
+                time.sleep(challenge_waits[challenge_wait_index])
+                challenge_wait_index += 1
+                continue
             raise ValueError(last_html_error)
         link = candidates[0]
     if last_html_error:
@@ -332,9 +374,46 @@ def download_statement_link_with_opener(opener, link: str) -> tuple[str, bytes]:
 
 
 def iter_statement_sources(message: Message):
-    yield from iter_txt_attachments(message)
+    for filename, payload in iter_txt_attachments(message):
+        yield StatementSource(filename, payload, "TXT-вложение")
     for link in iter_sber_statement_links(message):
-        yield download_statement_link(link)
+        filename, payload = download_statement_link(link)
+        yield StatementSource(filename, payload, "Ссылка Сбера", short_source_ref(link))
+
+
+def short_source_ref(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:10]
+
+
+def import_log_filename(filename: str, source_kind: str, source_ref: str = "") -> str:
+    if source_kind:
+        ref_suffix = f" #{source_ref}" if source_ref else ""
+        return f"{filename} · {source_kind}{ref_suffix}"
+    return filename
+
+
+def normalize_mail_import_error(error: Exception) -> str:
+    text = " ".join(str(error).split())
+    lowered = text.casefold()
+    if (
+        "страницу браузерной проверки безопасности" in lowered
+        or "sbbol-authentication" in lowered
+        or "detect_browser" in lowered
+        or "сбербизнес загрузка" in lowered
+    ):
+        return (
+            "Ссылка Сбера требует браузерной проверки безопасности. "
+            "Серверный автоимпорт не может скачать TXT напрямую по этой ссылке. "
+            "Если Сбер не пришлет TXT-вложение, нужен отдельный браузерный загрузчик."
+        )
+    if "ссылка на выписку уже истекла" in lowered:
+        return "Ссылка Сбера на выписку уже истекла. Нужна свежая ссылка или TXT-вложение из нового письма."
+    if len(text) > 1200:
+        return text[:1197].rstrip() + "..."
+    return text
 
 
 def add_mail_import_error(
@@ -348,7 +427,18 @@ def add_mail_import_error(
     message: Message,
     filename: str,
     error: Exception,
-) -> None:
+) -> bool:
+    error_message = normalize_mail_import_error(error)
+    if storage.bank_statement_mail_import_log_exists(
+        owner_chat_id,
+        login,
+        folder,
+        uid_text,
+        filename,
+        "error",
+        error_message,
+    ):
+        return False
     storage.add_bank_statement_mail_import(
         owner_chat_id,
         login,
@@ -364,8 +454,9 @@ def add_mail_import_error(
         0,
         0,
         0,
-        str(error),
+        error_message,
     )
+    return True
 
 
 def imap_ok(response) -> bool:
@@ -425,28 +516,44 @@ def run_bank_mail_import() -> tuple[int, int, int]:
             uid_text = uid.decode("ascii", errors="ignore")
             message_had_statement = False
             message_had_errors = False
-            statement_sources: list[tuple[str, bytes]] = list(iter_txt_attachments(message))
-            for link in iter_sber_statement_links(message):
+            statement_sources = [
+                StatementSource(filename, payload, "TXT-вложение")
+                for filename, payload in iter_txt_attachments(message)
+            ]
+            if statement_sources:
                 message_had_statement = True
-                try:
-                    statement_sources.append(download_statement_link(link))
-                except Exception as exc:
-                    message_had_errors = True
-                    error_files += 1
-                    add_mail_import_error(
-                        storage,
-                        owner_chat_id,
-                        login,
-                        folder,
-                        uid_text,
-                        subject,
-                        message_from,
-                        message,
-                        "Ссылка на выписку Сбера",
-                        exc,
-                    )
-            for filename, payload in statement_sources:
+            else:
+                for link in iter_sber_statement_links(message):
+                    message_had_statement = True
+                    link_ref = short_source_ref(link)
+                    try:
+                        filename, payload = download_statement_link(link)
+                        statement_sources.append(StatementSource(filename, payload, "Ссылка Сбера", link_ref))
+                    except Exception as exc:
+                        message_had_errors = True
+                        if add_mail_import_error(
+                            storage,
+                            owner_chat_id,
+                            login,
+                            folder,
+                            uid_text,
+                            subject,
+                            message_from,
+                            message,
+                            f"Ссылка на выписку Сбера #{link_ref}" if link_ref else "Ссылка на выписку Сбера",
+                            exc,
+                        ):
+                            error_files += 1
+                        else:
+                            skipped_files += 1
+            for statement_source in statement_sources:
                 message_had_statement = True
+                filename = import_log_filename(
+                    statement_source.filename,
+                    statement_source.source_kind,
+                    statement_source.source_ref,
+                )
+                payload = statement_source.payload
                 attachment_hash = hashlib.sha256(payload).hexdigest()
                 if storage.bank_statement_mail_attachment_exists(owner_chat_id, attachment_hash):
                     storage.add_bank_statement_mail_import(
@@ -495,8 +602,7 @@ def run_bank_mail_import() -> tuple[int, int, int]:
                     imported_files += 1
                 except Exception as exc:
                     message_had_errors = True
-                    error_files += 1
-                    add_mail_import_error(
+                    if add_mail_import_error(
                         storage,
                         owner_chat_id,
                         login,
@@ -507,7 +613,10 @@ def run_bank_mail_import() -> tuple[int, int, int]:
                         message,
                         filename,
                         exc,
-                    )
+                    ):
+                        error_files += 1
+                    else:
+                        skipped_files += 1
             if mark_seen and message_had_statement and not message_had_errors:
                 imap.uid("store", uid, "+FLAGS", r"(\Seen)")
         imap.logout()

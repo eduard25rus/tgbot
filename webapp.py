@@ -16704,7 +16704,8 @@ def render_expense_imports_section(
           <td class="nowrap">{escape(format_datetime(item.processed_at.astimezone(VLADIVOSTOK_TZ)))}</td>
           <td>
             <div class="timeline-title">{escape(item.attachment_filename or item.message_subject or 'Выписка из почты')}</div>
-            <div class="contract-table-subtle" style="margin-top:4px;">{escape(item.mailbox)} · {escape(item.mailbox_folder)}</div>
+            <div class="contract-table-subtle" style="margin-top:4px;">{escape(item.mailbox)} · {escape(item.mailbox_folder)} · UID {escape(item.message_uid or '—')}</div>
+            {f'<div class="contract-table-subtle" style="margin-top:4px;">Дата письма: {escape(item.message_date)}</div>' if item.message_date else ''}
             {f'<div class="contract-table-subtle" style="margin-top:4px;">Письмо: {escape(item.message_subject)}</div>' if item.message_subject else ''}
           </td>
           <td>{bank_mail_import_status_chip(item)}</td>
