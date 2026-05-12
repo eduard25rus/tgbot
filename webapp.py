@@ -13368,6 +13368,14 @@ def render_cashoperations_body(
             else:
                 target_match = re.search(r"\[Касса получателя:\s*([^\]]+)\]", entry.comment or "")
                 category = f"в {target_match.group(1).strip()}" if target_match else "расход"
+        transfer_target_code = ""
+        if is_transfer_entry and kind == "expense":
+            target_match = re.search(r"\[Касса получателя:\s*([^\]]+)\]", entry.comment or "")
+            target_label = target_match.group(1).strip() if target_match else ""
+            for cashbox in cashboxes:
+                if target_label and cashbox["label"] == target_label:
+                    transfer_target_code = cashbox["code"]
+                    break
         comment = editable_comment(entry)
         if not comment:
             comment = "Движение между кассами" if is_transfer_entry else ("Вывод денежных средств в кассу" if kind == "income" else "Без комментария")
@@ -13402,7 +13410,7 @@ def render_cashoperations_body(
               </span>
             </button>
             """
-        if kind == "expense" and can_edit and not is_transfer_entry:
+        if kind == "expense" and can_edit:
             return f"""
             <button class="cash-mobile-op editable" type="button"
               data-edit-expense="1"
@@ -13410,6 +13418,7 @@ def render_cashoperations_body(
               data-expense-amount="{escape(str(entry.amount))}"
               data-expense-category="{escape(entry.category_code)}"
               data-expense-project="{escape(entry.project_code)}"
+              data-expense-transfer-target="{escape(transfer_target_code)}"
               data-expense-employee="{escape(str(entry.payroll_employee_id or ''))}"
               data-expense-title="{escape(entry.title)}"
               data-expense-date="{entry.expense_date.isoformat()}"
@@ -14548,6 +14557,7 @@ def render_cashoperations_body(
           if (expenseForm.elements.amount) expenseForm.elements.amount.value = button.dataset.expenseAmount || "";
           if (categorySelect) categorySelect.value = button.dataset.expenseCategory || "other";
           if (projectSelect) projectSelect.value = button.dataset.expenseProject || "admin";
+          if (transferSelect) transferSelect.value = button.dataset.expenseTransferTarget || transferSelect.value;
           if (employeeSelect) employeeSelect.value = button.dataset.expenseEmployee || "";
           if (expenseForm.elements.title) expenseForm.elements.title.value = button.dataset.expenseTitle || "";
           if (expenseForm.elements.expense_date) expenseForm.elements.expense_date.value = button.dataset.expenseDate || "{today.isoformat()}";
@@ -17893,8 +17903,6 @@ self.addEventListener("notificationclick", (event) => {
             target_cashbox = form.get("target_cashbox", "").strip()
             cashbox_codes = {item["code"] for item in cashboxes}
             if is_transfer_category:
-                if expense_id:
-                    raise ValueError("Перевод между кассами нужно создать заново, редактирование пары пока закрыто")
                 if target_cashbox not in cashbox_codes:
                     raise ValueError("Выберите кассу получателя")
                 if target_cashbox == selected_cashbox:
@@ -17925,40 +17933,93 @@ self.addEventListener("notificationclick", (event) => {
                 request_key = form.get("request_key", "").strip()
                 target_marker = f"[Касса получателя: {target_label}]"
                 transfer_comment = " ".join(part for part in (cashbox_marker, target_marker, comment) if part)
-                storage.add_expense_entry(
-                    current_owner,
-                    expense_date,
-                    project_code,
-                    category_code,
-                    title,
-                    amount,
-                    transfer_comment,
-                    "cash",
-                    False,
-                    (current_user or {}).get("id"),
-                    actor_name,
-                    client_request_key=f"{request_key}:out" if request_key else "",
-                    operation_type="transfer",
+                if expense_id:
+                    source_entry_id = expense_id
+                    storage.update_expense_entry(
+                        current_owner,
+                        source_entry_id,
+                        expense_date,
+                        project_code,
+                        category_code,
+                        title,
+                        amount,
+                        transfer_comment,
+                        "cash",
+                        False,
+                        operation_type="transfer",
+                    )
+                else:
+                    source_entry_id = storage.add_expense_entry(
+                        current_owner,
+                        expense_date,
+                        project_code,
+                        category_code,
+                        title,
+                        amount,
+                        transfer_comment,
+                        "cash",
+                        False,
+                        (current_user or {}).get("id"),
+                        actor_name,
+                        client_request_key=f"{request_key}:out" if request_key else "",
+                        operation_type="transfer",
+                    )
+                pair_marker = f"[Связанный расход: {source_entry_id}]"
+                target_comment = " ".join(part for part in (f"[{target_label}]", f"[Источник: {source_label}]", pair_marker, comment) if part)
+                linked_income = next(
+                    (
+                        entry for entry in entries
+                        if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+                        and (entry.payment_source or "bank") == "bank"
+                        and pair_marker in (entry.comment or "")
+                    ),
+                    None,
                 )
-                target_comment = " ".join(part for part in (f"[{target_label}]", f"[Источник: {source_label}]", comment) if part)
-                storage.add_expense_entry(
-                    current_owner,
-                    expense_date,
-                    project_code,
-                    CASH_WITHDRAWAL_CATEGORY_CODE,
-                    title,
-                    amount,
-                    target_comment,
-                    "bank",
-                    False,
-                    (current_user or {}).get("id"),
-                    actor_name,
-                    client_request_key=f"{request_key}:in" if request_key else "",
-                    operation_type="income",
-                )
+                if linked_income:
+                    storage.update_expense_entry(
+                        current_owner,
+                        linked_income.id,
+                        expense_date,
+                        project_code,
+                        CASH_WITHDRAWAL_CATEGORY_CODE,
+                        title,
+                        amount,
+                        target_comment,
+                        "bank",
+                        False,
+                        operation_type="income",
+                    )
+                else:
+                    storage.add_expense_entry(
+                        current_owner,
+                        expense_date,
+                        project_code,
+                        CASH_WITHDRAWAL_CATEGORY_CODE,
+                        title,
+                        amount,
+                        target_comment,
+                        "bank",
+                        False,
+                        (current_user or {}).get("id"),
+                        actor_name,
+                        client_request_key=f"cash-transfer:{source_entry_id}:in",
+                        operation_type="income",
+                    )
                 flash = f"Перевод в {target_label} сохранен."
                 return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
             if expense_id:
+                pair_marker = f"[Связанный расход: {expense_id}]"
+                linked_income = next(
+                    (
+                        entry for entry in entries
+                        if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+                        and (entry.payment_source or "bank") == "bank"
+                        and pair_marker in (entry.comment or "")
+                    ),
+                    None,
+                )
+                if linked_income:
+                    storage.delete_expense_entry(current_owner, linked_income.id)
                 storage.update_expense_entry(
                     current_owner,
                     expense_id,
@@ -18027,6 +18088,18 @@ self.addEventListener("notificationclick", (event) => {
             if not mobile_cash_can_modify_cashbox(cash_access, existing_cashbox):
                 raise ValueError("Для этой кассы доступен только просмотр")
             selected_cashbox = existing_cashbox
+            pair_marker = f"[Связанный расход: {expense_id}]"
+            linked_income = next(
+                (
+                    entry for entry in entries
+                    if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+                    and (entry.payment_source or "bank") == "bank"
+                    and pair_marker in (entry.comment or "")
+                ),
+                None,
+            )
+            if linked_income:
+                storage.delete_expense_entry(current_owner, linked_income.id)
             if not storage.delete_expense_entry(current_owner, expense_id):
                 raise ValueError("Расход не найден")
             flash = "Расход удален."
