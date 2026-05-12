@@ -13639,7 +13639,9 @@ def render_cashoperations_body(
             <input type="hidden" name="screen" value="work">
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
             <label>День
-              <input type="date" name="work_date" value="{work_report_date.isoformat()}">
+              <span class="cash-date-input-wrap">
+                <input type="date" name="work_date" value="{work_report_date.isoformat()}">
+              </span>
             </label>
             <button type="submit">Показать</button>
           </form>
@@ -14152,8 +14154,9 @@ def render_cashoperations_body(
       }}
       .cash-mobile-date-filter {{
         display: grid;
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr) 104px;
         gap: 8px;
+        align-items: end;
         margin: 8px 0 10px;
       }}
       .cash-mobile-date-filter label {{
@@ -14161,11 +14164,25 @@ def render_cashoperations_body(
         gap: 6px;
         color: var(--muted);
         font-size: 12px;
+        min-width: 0;
       }}
-      .cash-mobile-date-filter input {{
+      .cash-date-input-wrap {{
+        display: block;
         width: 100%;
         max-width: 100%;
         min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }}
+      .cash-mobile-date-filter input {{
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        inline-size: 100%;
+        box-sizing: border-box;
         border: 1px solid var(--line);
         border-radius: 8px;
         padding: 11px 10px;
@@ -14174,9 +14191,14 @@ def render_cashoperations_body(
         font: inherit;
         font-size: 16px;
       }}
+      .cash-date-input-wrap input {{
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+      }}
       .cash-mobile-date-filter button {{
         width: 100%;
-        min-height: 46px;
+        min-height: 42px;
         border: 0;
         border-radius: 8px;
         padding: 10px 12px;
