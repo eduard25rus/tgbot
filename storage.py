@@ -1222,6 +1222,32 @@ class Storage:
                 )
             if "needs_adjustment" not in expense_columns:
                 conn.execute("ALTER TABLE expense_entries ADD COLUMN needs_adjustment INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                """
+                UPDATE expense_entries
+                SET project_code = (
+                    SELECT 'contract:' || c.id
+                    FROM contracts c
+                    WHERE c.chat_id = expense_entries.owner_chat_id
+                      AND (
+                        c.object_name LIKE 'Библиотека №13%'
+                        OR c.title LIKE 'Библиотека №13%'
+                      )
+                    ORDER BY c.id ASC
+                    LIMIT 1
+                )
+                WHERE project_code IN ('library', 'Библиотека')
+                  AND EXISTS (
+                    SELECT 1
+                    FROM contracts c
+                    WHERE c.chat_id = expense_entries.owner_chat_id
+                      AND (
+                        c.object_name LIKE 'Библиотека №13%'
+                        OR c.title LIKE 'Библиотека №13%'
+                      )
+                  )
+                """
+            )
             legal_letter_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(legal_letters)").fetchall()
             }

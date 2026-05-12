@@ -12964,7 +12964,7 @@ def finance_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_project_options(storage: Storage, owner_chat_id: int, entries: Iterable | None = None) -> list[tuple[str, str]]:
+def expense_project_options(storage: Storage, owner_chat_id: int, entries: Iterable | None = None, include_legacy_entries: bool = True) -> list[tuple[str, str]]:
     options: list[tuple[str, str]] = [("admin", "Админ")]
     seen = {"admin"}
     seen_labels = {"админ"}
@@ -12987,10 +12987,11 @@ def expense_project_options(storage: Storage, owner_chat_id: int, entries: Itera
             continue
         code = f"object:{object_item.id}"
         add_option(code, label)
-    for entry in entries or ():
-        code = (entry.project_code or "").strip()
-        if code:
-            add_option(code, EXPENSE_PROJECT_META.get(code, code))
+    if include_legacy_entries:
+        for entry in entries or ():
+            code = (entry.project_code or "").strip()
+            if code:
+                add_option(code, EXPENSE_PROJECT_META.get(code, code))
     return options
 
 
@@ -13258,7 +13259,7 @@ def render_cashoperations_body(
         selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (allowed_cashboxes[0]["code"] if allowed_cashboxes else "")
     entries = storage.list_expense_entries(owner_chat_id)
     today = datetime.now(VLADIVOSTOK_TZ).date()
-    project_options_list = expense_project_options(storage, owner_chat_id, entries)
+    project_options_list = expense_project_options(storage, owner_chat_id, entries, include_legacy_entries=False)
     category_options_list = [
         (code, label)
         for code, label in expense_category_options(storage, owner_chat_id, entries)
@@ -14143,6 +14144,9 @@ def render_cashoperations_body(
         font-size: 12px;
       }}
       .cash-mobile-date-filter input {{
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
         border: 1px solid var(--line);
         border-radius: 8px;
         padding: 11px 10px;
@@ -14191,6 +14195,8 @@ def render_cashoperations_body(
       .cash-mobile-form select,
       .cash-mobile-form textarea {{
         width: 100%;
+        max-width: 100%;
+        min-width: 0;
         border: 1px solid var(--line);
         border-radius: 8px;
         padding: 13px 12px;
@@ -14198,6 +14204,10 @@ def render_cashoperations_body(
         font-size: 16px;
         color: var(--ink);
         background: #fff;
+      }}
+      .cash-mobile-form input[type="date"] {{
+        -webkit-appearance: none;
+        appearance: none;
       }}
       .cash-receipt-button input {{
         display: none;
@@ -14468,8 +14478,10 @@ def render_cashoperations_body(
         const incomeIdInput = document.querySelector("[data-cash-income-id]");
         const incomeRequestKeyInput = document.querySelector("[data-cash-income-request-key]");
         const incomeSourceSelect = document.querySelector("[data-cash-income-source]");
+        const workForm = document.querySelector(".cash-mobile-form[action='/cashoperations/work-report']");
         const workWorkers = document.querySelector("[data-work-workers]");
         const workAddWorker = document.querySelector("[data-work-add-worker]");
+        const manualRefresh = document.querySelector("[data-cash-refresh]");
         const flash = document.querySelector("[data-cash-flash]");
         const editbar = document.querySelector("[data-cash-editbar]");
         const editBack = document.querySelector("[data-cash-edit-back]");
@@ -14622,11 +14634,14 @@ def render_cashoperations_body(
           if (isSubmitting) return false;
           if (expenseIdInput && expenseIdInput.value) return false;
           if (incomeIdInput && incomeIdInput.value) return false;
-          if (activeScreenName() === "income") return false;
-          return !(activeScreenName() === "expense" && formDirty);
+          if (["expense", "income", "work"].includes(activeScreenName()) && formDirty) return false;
+          return true;
         }}
-        function refreshCash(screenName) {{
-          if (!canRefresh()) return false;
+        function refreshCash(screenName, force) {{
+          if (!canRefresh()) {{
+            if (!force) return false;
+            if (!confirm("Обновить страницу? Несохраненные данные пропадут.")) return false;
+          }}
           try {{
             sessionStorage.setItem("cashNextScreen", screenName || activeScreenName());
           }} catch (_err) {{}}
@@ -14774,7 +14789,7 @@ def render_cashoperations_body(
               resetExpenseForm();
               resetIncomeForm();
             }}
-            if (!button.dataset.cashNewExpense && !button.dataset.cashNewIncome && refreshIfStale(button.dataset.cashScreen, 5000)) return;
+            if (!button.dataset.cashNewExpense && !button.dataset.cashNewIncome && refreshIfStale(button.dataset.cashScreen, 300000)) return;
             if (button.dataset.cashScreen !== "expense" && button.dataset.cashScreen !== "income") showEditbar(false);
             show(button.dataset.cashScreen);
           }});
@@ -14848,6 +14863,7 @@ def render_cashoperations_body(
           if (event.key === "Escape") closeReceiptViewer();
         }});
         pushEnable && pushEnable.addEventListener("click", enableCashPush);
+        manualRefresh && manualRefresh.addEventListener("click", () => refreshCash(activeScreenName(), true));
         expenseForm && expenseForm.addEventListener("input", () => {{
           formDirty = true;
         }});
@@ -14884,6 +14900,18 @@ def render_cashoperations_body(
           }});
           if (submitter) submitter.textContent = submitter.dataset.cashIncomeDelete ? "Удаляем..." : "Сохраняем...";
         }});
+        workForm && workForm.addEventListener("input", () => {{
+          formDirty = true;
+        }});
+        workForm && workForm.addEventListener("change", () => {{
+          formDirty = true;
+        }});
+        workForm && workForm.addEventListener("submit", () => {{
+          isSubmitting = true;
+          workForm.querySelectorAll("button").forEach((button) => {{
+            button.disabled = true;
+          }});
+        }});
         syncAdminProject();
         let usedInitialScreen = false;
         try {{
@@ -14901,12 +14929,12 @@ def render_cashoperations_body(
           }}
         }} catch (_err) {{}}
         document.addEventListener("visibilitychange", () => {{
-          if (!document.hidden) refreshIfStale(activeScreenName(), 10000);
+          if (!document.hidden) refreshIfStale(activeScreenName(), 300000);
         }});
-        window.addEventListener("focus", () => refreshIfStale(activeScreenName(), 10000));
+        window.addEventListener("focus", () => refreshIfStale(activeScreenName(), 300000));
         setInterval(() => {{
           if (!document.hidden && activeScreenName() !== "expense") refreshCash(activeScreenName());
-        }}, 30000);
+        }}, 300000);
       }})();
     </script>
     """
@@ -14917,7 +14945,7 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
     logout_html = ""
     if current_user:
         user_label = (current_user.get("full_name") or current_user.get("login") or "").strip()
-        logout_html = '<a class="cash-shell-logout" href="/cashoperations/logout">Выйти</a>'
+        logout_html = '<div class="cash-shell-actions"><button class="cash-shell-refresh" type="button" data-cash-refresh title="Обновить" aria-label="Обновить">↻</button><a class="cash-shell-logout" href="/cashoperations/logout">Выйти</a></div>'
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -14980,15 +15008,30 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
       line-height: 1.1;
       letter-spacing: 0;
     }}
+    .cash-shell-actions {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }}
+    .cash-shell-refresh,
     .cash-shell-logout {{
       border: 1px solid var(--line);
       background: var(--panel);
       color: var(--muted);
       border-radius: 8px;
+      min-height: 42px;
       padding: 9px 12px;
       text-decoration: none;
       font-size: 14px;
       white-space: nowrap;
+    }}
+    .cash-shell-refresh {{
+      width: 42px;
+      padding: 0;
+      display: inline-grid;
+      place-items: center;
+      font-size: 22px;
+      line-height: 1;
     }}
   </style>
 </head>
@@ -18067,7 +18110,7 @@ self.addEventListener("notificationclick", (event) => {
                 for employee in storage.list_payroll_employees(current_owner)
                 if employee.is_active
             }
-            project_codes = {code for code, _label in expense_project_options(storage, current_owner, entries)}
+            project_codes = {code for code, _label in expense_project_options(storage, current_owner, entries, include_legacy_entries=False)}
             category_options_list = [
                 (code, label)
                 for code, label in expense_category_options(storage, current_owner, entries)
@@ -18302,7 +18345,7 @@ self.addEventListener("notificationclick", (event) => {
             if report_date is None:
                 raise ValueError("Укажите дату отчета")
             entries = storage.list_expense_entries(current_owner)
-            project_options_list = expense_project_options(storage, current_owner, entries)
+            project_options_list = expense_project_options(storage, current_owner, entries, include_legacy_entries=False)
             project_labels = dict(project_options_list)
             project_code = form.get("project_code", "").strip()
             if project_code not in project_labels:
