@@ -13568,22 +13568,52 @@ def render_cashoperations_body(
         return "половина дня" if float(value) <= 0.5 else "полный день"
     def work_report_card(report) -> str:
         workers = report.workers
-        worker_names = ", ".join(
-            f'{worker["employee_name"]} ({work_day_part_label(float(worker["day_part"]))})'
+        worker_items_json = json.dumps(
+            [
+                {
+                    "employee_id": int(worker["employee_id"]),
+                    "day_part": "0.5" if float(worker["day_part"]) <= 0.5 else "1",
+                }
+                for worker in workers
+            ],
+            ensure_ascii=False,
+        )
+        worker_rows = "".join(
+            f"""
+            <li>
+              <span>{escape(worker["employee_name"])} <small>({escape(work_day_part_label(float(worker["day_part"])))})</small></span>
+              <form method="post" action="/cashoperations/work-report-worker/delete" onsubmit="return confirm('Удалить сотрудника из смены?');">
+                <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+                <input type="hidden" name="worker_id" value="{int(worker["id"])}">
+                <button class="cash-work-icon-delete" type="submit" aria-label="Удалить сотрудника">×</button>
+              </form>
+            </li>
+            """
             for worker in workers
-        ) or "Сотрудники не указаны"
+        ) or '<li><span>Сотрудники не указаны</span></li>'
         report_units = sum(float(worker["day_part"]) for worker in workers)
         comment_html = f'<span class="cash-mobile-op-comment">{escape(report.comment)}</span>' if report.comment else ""
         return f"""
-        <article class="cash-mobile-op cash-work-report-card">
+        <article class="cash-mobile-op cash-work-report-card editable" role="button" tabindex="0"
+          data-edit-work-report="1"
+          data-work-report-id="{report.id}"
+          data-work-report-date="{report.report_date.isoformat()}"
+          data-work-report-project="{escape(report.project_code)}"
+          data-work-report-comment="{escape(report.comment)}"
+          data-work-report-workers="{escape(worker_items_json, quote=True)}">
           <div class="cash-mobile-op-main">
             <span class="cash-mobile-op-title"><strong>{escape(report.project_label or "Без объекта")}</strong><span> · {len(workers)} чел.</span></span>
-            <span class="cash-mobile-op-comment">{escape(worker_names)}</span>
+            <ol class="cash-work-worker-list">{worker_rows}</ol>
             {comment_html}
           </div>
           <div class="cash-mobile-op-side">
             <b class="income">{escape(work_units_label(report_units))}</b>
             <span class="cash-mobile-op-receipt">смен</span>
+            <form method="post" action="/cashoperations/work-report/delete" onsubmit="return confirm('Удалить смену целиком?');">
+              <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+              <input type="hidden" name="report_id" value="{report.id}">
+              <button class="cash-work-delete-report" type="submit">Удалить</button>
+            </form>
           </div>
         </article>
         """
@@ -13599,8 +13629,9 @@ def render_cashoperations_body(
           </div>
         </section>
         <section class="cash-mobile-panel is-hidden" data-work-form-panel>
-          <div class="cash-mobile-section-head"><h2>Добавить смену</h2></div>
+          <div class="cash-mobile-section-head"><h2 data-work-form-title>Добавить смену</h2></div>
           <form class="cash-mobile-form" method="post" action="/cashoperations/work-report">
+            <input type="hidden" name="report_id" value="" data-work-report-id-input>
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
             <label>Дата
               <input type="date" name="report_date" value="{work_report_date.isoformat()}" required>
@@ -13609,7 +13640,7 @@ def render_cashoperations_body(
               <select name="project_code" required>{work_project_options}</select>
             </label>
             <div class="cash-work-workers" data-work-workers>
-              <div class="cash-work-worker-row">
+              <div class="cash-work-worker-row" data-work-worker-row>
                 <label>Сотрудник
                   <select name="employee_id" required>{builder_options}</select>
                 </label>
@@ -13619,13 +13650,15 @@ def render_cashoperations_body(
                     <option value="0.5">Половина дня</option>
                   </select>
                 </label>
+                <button class="cash-work-row-remove" type="button" data-work-remove-worker aria-label="Убрать сотрудника">×</button>
               </div>
             </div>
             <button class="secondary" type="button" data-work-add-worker{" disabled" if not builder_employees else ""}>Добавить сотрудника</button>
             <label>Комментарий
               <textarea name="comment" placeholder="Коротко, что делали на объекте"></textarea>
             </label>
-            <button type="submit"{" disabled" if not builder_employees else ""}>Сохранить отчет</button>
+            <button type="submit" data-work-submit{" disabled" if not builder_employees else ""}>Сохранить отчет</button>
+            <button class="cash-mobile-danger" type="submit" formaction="/cashoperations/work-report/delete" data-work-delete-report hidden>Удалить смену</button>
           </form>
           {'<div class="cash-mobile-sub" style="margin-top:10px;">В справочнике пока нет активных сотрудников-работяг.</div>' if not builder_employees else ''}
         </section>
@@ -14148,9 +14181,69 @@ def render_cashoperations_body(
       }}
       .cash-work-worker-row {{
         display: grid;
-        grid-template-columns: 1fr 128px;
+        grid-template-columns: 1fr 128px 38px;
         gap: 8px;
         align-items: end;
+      }}
+      .cash-work-row-remove,
+      .cash-work-icon-delete {{
+        display: inline-grid;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: #9b2f2f;
+        font: inherit;
+        font-size: 18px;
+        font-weight: 900;
+      }}
+      .cash-work-row-remove {{
+        width: 38px;
+        height: 42px;
+      }}
+      .cash-work-worker-list {{
+        margin: 6px 0 0;
+        padding-left: 0;
+        list-style: none;
+        counter-reset: work-worker;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }}
+      .cash-work-worker-list li {{
+        counter-increment: work-worker;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 6px;
+        margin-top: 4px;
+      }}
+      .cash-work-worker-list li::before {{
+        content: counter(work-worker) ".";
+        color: var(--ink);
+        font-weight: 800;
+      }}
+      .cash-work-worker-list small {{
+        color: var(--muted);
+      }}
+      .cash-work-worker-list form {{
+        flex: 0 0 auto;
+      }}
+      .cash-work-icon-delete {{
+        width: 28px;
+        height: 28px;
+        font-size: 15px;
+      }}
+      .cash-work-delete-report {{
+        margin-top: 8px;
+        border: 1px solid #edd2d2;
+        border-radius: 8px;
+        background: #fff;
+        color: #9b2f2f;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 800;
+        padding: 6px 8px;
       }}
       .cash-mobile-date-filter {{
         display: grid;
@@ -14309,6 +14402,10 @@ def render_cashoperations_body(
       }}
       .cash-mobile-form button.danger {{
         background: #9b2f2f;
+      }}
+      .cash-mobile-form button.cash-mobile-danger {{
+        background: #9b2f2f;
+        color: #fff;
       }}
       .cash-mobile-form button.secondary-danger {{
         background: #f4e5e5;
@@ -14536,6 +14633,13 @@ def render_cashoperations_body(
         const workToggleStats = document.querySelector("[data-work-toggle-stats]");
         const workFormPanel = document.querySelector("[data-work-form-panel]");
         const workStatsPanel = document.querySelector("[data-work-stats-panel]");
+        const workFormTitle = document.querySelector("[data-work-form-title]");
+        const workSubmit = document.querySelector("[data-work-submit]");
+        const workDeleteReport = document.querySelector("[data-work-delete-report]");
+        const workReportIdInput = document.querySelector("[data-work-report-id-input]");
+        const workWorkerTemplate = workWorkers && workWorkers.querySelector(".cash-work-worker-row")
+          ? workWorkers.querySelector(".cash-work-worker-row").cloneNode(true)
+          : null;
         const manualRefresh = document.querySelector("[data-cash-refresh]");
         const flash = document.querySelector("[data-cash-flash]");
         const editbar = document.querySelector("[data-cash-editbar]");
@@ -14738,20 +14842,94 @@ def render_cashoperations_body(
           transferWrap && transferWrap.classList.toggle("is-hidden", !isTransfer);
         }}
         categorySelect && categorySelect.addEventListener("change", syncAdminProject);
-        workAddWorker && workAddWorker.addEventListener("click", () => {{
-          if (!workWorkers) return;
-          const firstRow = workWorkers.querySelector(".cash-work-worker-row");
-          if (!firstRow) return;
-          const clone = firstRow.cloneNode(true);
+        function createWorkWorkerRow(employeeId, dayPart) {{
+          if (!workWorkerTemplate) return null;
+          const clone = workWorkerTemplate.cloneNode(true);
           clone.querySelectorAll("select").forEach((select) => {{
-            if (select.name === "day_part") select.value = "1";
-            else select.value = "";
+            if (select.name === "day_part") select.value = dayPart || "1";
+            else select.value = employeeId || "";
           }});
-          workWorkers.appendChild(clone);
-        }});
-        workToggleForm && workToggleForm.addEventListener("click", () => {{
+          return clone;
+        }}
+        function ensureWorkWorkerRow() {{
+          if (!workWorkers || workWorkers.querySelector(".cash-work-worker-row")) return;
+          const row = createWorkWorkerRow("", "1");
+          if (row) workWorkers.appendChild(row);
+        }}
+        function resetWorkForm() {{
+          if (!workForm) return;
+          workForm.reset();
+          if (workReportIdInput) workReportIdInput.value = "";
+          if (workForm.elements.report_date) workForm.elements.report_date.value = "{work_report_date.isoformat()}";
+          if (workWorkers) {{
+            workWorkers.innerHTML = "";
+            const row = createWorkWorkerRow("", "1");
+            if (row) workWorkers.appendChild(row);
+          }}
+          if (workFormTitle) workFormTitle.textContent = "Добавить смену";
+          if (workSubmit) workSubmit.textContent = "Сохранить отчет";
+          if (workDeleteReport) workDeleteReport.hidden = true;
+          formDirty = false;
+        }}
+        function openWorkForm() {{
           if (workFormPanel) workFormPanel.classList.remove("is-hidden");
           if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
+          if (workFormPanel) workFormPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
+        }}
+        function editWorkReport(card) {{
+          if (!workForm) return;
+          clearNotice();
+          resetWorkForm();
+          if (workReportIdInput) workReportIdInput.value = card.dataset.workReportId || "";
+          if (workForm.elements.report_date) workForm.elements.report_date.value = card.dataset.workReportDate || "{work_report_date.isoformat()}";
+          if (workForm.elements.project_code) workForm.elements.project_code.value = card.dataset.workReportProject || "";
+          if (workForm.elements.comment) workForm.elements.comment.value = card.dataset.workReportComment || "";
+          let workers = [];
+          try {{
+            workers = JSON.parse(card.dataset.workReportWorkers || "[]");
+          }} catch (_err) {{
+            workers = [];
+          }}
+          if (workWorkers && workers.length) {{
+            workWorkers.innerHTML = "";
+            workers.forEach((worker) => {{
+              const row = createWorkWorkerRow(String(worker.employee_id || ""), String(worker.day_part || "1"));
+              if (row) workWorkers.appendChild(row);
+            }});
+          }}
+          ensureWorkWorkerRow();
+          if (workFormTitle) workFormTitle.textContent = "Редактировать смену";
+          if (workSubmit) workSubmit.textContent = "Сохранить изменения";
+          if (workDeleteReport) workDeleteReport.hidden = false;
+          formDirty = false;
+          editBackScreen = "work";
+          showEditbar(true);
+          openWorkForm();
+        }}
+        workAddWorker && workAddWorker.addEventListener("click", () => {{
+          const row = createWorkWorkerRow("", "1");
+          if (row && workWorkers) workWorkers.appendChild(row);
+          formDirty = true;
+        }});
+        workWorkers && workWorkers.addEventListener("click", (event) => {{
+          const button = event.target.closest("[data-work-remove-worker]");
+          if (!button) return;
+          const rows = workWorkers.querySelectorAll(".cash-work-worker-row");
+          if (rows.length <= 1) {{
+            const row = button.closest(".cash-work-worker-row");
+            row && row.querySelectorAll("select").forEach((select) => {{
+              if (select.name === "day_part") select.value = "1";
+              else select.value = "";
+            }});
+          }} else {{
+            const row = button.closest(".cash-work-worker-row");
+            if (row) row.remove();
+          }}
+          formDirty = true;
+        }});
+        workToggleForm && workToggleForm.addEventListener("click", () => {{
+          resetWorkForm();
+          openWorkForm();
         }});
         workToggleStats && workToggleStats.addEventListener("click", () => {{
           if (workFormPanel) workFormPanel.classList.add("is-hidden");
@@ -14863,9 +15041,21 @@ def render_cashoperations_body(
         document.querySelectorAll("[data-edit-income]").forEach((button) => {{
           button.addEventListener("click", () => editIncome(button));
         }});
+        document.querySelectorAll("[data-edit-work-report]").forEach((card) => {{
+          card.addEventListener("click", (event) => {{
+            if (event.target.closest("form, button, a, input, select, textarea, label")) return;
+            editWorkReport(card);
+          }});
+          card.addEventListener("keydown", (event) => {{
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            editWorkReport(card);
+          }});
+        }});
         editBack && editBack.addEventListener("click", () => {{
           resetExpenseForm();
           resetIncomeForm();
+          resetWorkForm();
           show(editBackScreen || "history");
         }});
         receiptInput && receiptInput.addEventListener("change", () => {{
@@ -14969,11 +15159,17 @@ def render_cashoperations_body(
         workForm && workForm.addEventListener("change", () => {{
           formDirty = true;
         }});
-        workForm && workForm.addEventListener("submit", () => {{
+        workForm && workForm.addEventListener("submit", (event) => {{
+          const submitter = event.submitter;
+          if (submitter && submitter.dataset.workDeleteReport && !confirm("Удалить смену целиком?")) {{
+            event.preventDefault();
+            return;
+          }}
           isSubmitting = true;
           workForm.querySelectorAll("button").forEach((button) => {{
             button.disabled = true;
           }});
+          if (submitter) submitter.textContent = submitter.dataset.workDeleteReport ? "Удаляем..." : "Сохраняем...";
         }});
         syncAdminProject();
         let usedInitialScreen = false;
@@ -18438,22 +18634,73 @@ self.addEventListener("notificationclick", (event) => {
                 })
             if not worker_items:
                 raise ValueError("Выберите хотя бы одного работягу")
-            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
-            storage.add_mobile_work_report(
-                current_owner,
-                report_date,
-                project_code,
-                project_labels[project_code],
-                worker_items,
-                form.get("comment", "").strip(),
-                (current_user or {}).get("id"),
-                actor_name,
-            )
-            flash = "Отчет о работе сохранен."
+            raw_report_id = form.get("report_id", "").strip()
+            if raw_report_id:
+                try:
+                    report_id = int(raw_report_id)
+                except ValueError:
+                    raise ValueError("Смена не найдена")
+                if not storage.update_mobile_work_report(
+                    current_owner,
+                    report_id,
+                    report_date,
+                    project_code,
+                    project_labels[project_code],
+                    worker_items,
+                    form.get("comment", "").strip(),
+                ):
+                    raise ValueError("Смена не найдена")
+                flash = "Смена обновлена."
+            else:
+                actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+                storage.add_mobile_work_report(
+                    current_owner,
+                    report_date,
+                    project_code,
+                    project_labels[project_code],
+                    worker_items,
+                    form.get("comment", "").strip(),
+                    (current_user or {}).get("id"),
+                    actor_name,
+                )
+                flash = "Отчет о работе сохранен."
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
             work_date = form.get("report_date", "").strip()
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={quote_plus(work_date)}&flash={quote_plus(str(exc))}")
+
+    if path == "/cashoperations/work-report/delete" and method == "POST":
+        form = read_post_data(environ)
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        selected_cashbox = form.get("cashbox", "").strip()
+        try:
+            if not cash_access or not cash_access["enabled"] or not cash_access.get("can_view_work_reports"):
+                raise ValueError("Нет доступа к отчетам о работе")
+            report_id = int(form.get("report_id", "0"))
+            report_date = storage.delete_mobile_work_report(current_owner, report_id)
+            if report_date is None:
+                raise ValueError("Смена не найдена")
+            flash = "Смена удалена."
+            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
+        except ValueError as exc:
+            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
+
+    if path == "/cashoperations/work-report-worker/delete" and method == "POST":
+        form = read_post_data(environ)
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        selected_cashbox = form.get("cashbox", "").strip()
+        try:
+            if not cash_access or not cash_access["enabled"] or not cash_access.get("can_view_work_reports"):
+                raise ValueError("Нет доступа к отчетам о работе")
+            worker_id = int(form.get("worker_id", "0"))
+            result = storage.delete_mobile_work_report_worker(current_owner, worker_id)
+            if result is None:
+                raise ValueError("Сотрудник в смене не найден")
+            report_date, report_deleted = result
+            flash = "Смена удалена." if report_deleted else "Сотрудник удален из смены."
+            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
+        except ValueError as exc:
+            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
 
     if path == "/cashoperations/reconcile" and method == "POST":
         form = read_post_data(environ)

@@ -5495,6 +5495,117 @@ class Storage:
                 )
             return report_id
 
+    def update_mobile_work_report(
+        self,
+        owner_chat_id: int,
+        report_id: int,
+        report_date: date,
+        project_code: str,
+        project_label: str,
+        worker_items: list[dict],
+        comment: str,
+    ) -> bool:
+        cleaned_workers = []
+        seen: set[int] = set()
+        for item in worker_items:
+            employee_id = int(item["employee_id"])
+            if employee_id in seen:
+                continue
+            seen.add(employee_id)
+            day_part = 0.5 if float(item.get("day_part", 1)) <= 0.5 else 1.0
+            cleaned_workers.append({
+                "employee_id": employee_id,
+                "employee_name": str(item.get("employee_name", "")).strip(),
+                "day_part": day_part,
+            })
+        if not cleaned_workers:
+            raise ValueError("Добавьте хотя бы одного сотрудника")
+        with self.connection() as conn:
+            existing = conn.execute(
+                "SELECT id FROM mobile_work_reports WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL",
+                (report_id, owner_chat_id),
+            ).fetchone()
+            if existing is None:
+                return False
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                """
+                UPDATE mobile_work_reports
+                SET report_date = ?, project_code = ?, project_label = ?, comment = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (
+                    report_date.strftime(DATE_FMT),
+                    project_code.strip(),
+                    project_label.strip(),
+                    comment.strip(),
+                    now,
+                    report_id,
+                    owner_chat_id,
+                ),
+            )
+            conn.execute("DELETE FROM mobile_work_report_workers WHERE report_id = ?", (report_id,))
+            for item in cleaned_workers:
+                conn.execute(
+                    """
+                    INSERT INTO mobile_work_report_workers (
+                        report_id, employee_id, employee_name, day_part, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (report_id, item["employee_id"], item["employee_name"], item["day_part"], now),
+                )
+            return True
+
+    def delete_mobile_work_report(self, owner_chat_id: int, report_id: int) -> date | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT report_date FROM mobile_work_reports WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL",
+                (report_id, owner_chat_id),
+            ).fetchone()
+            if row is None:
+                return None
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                "UPDATE mobile_work_reports SET deleted_at = ?, updated_at = ? WHERE id = ? AND owner_chat_id = ?",
+                (now, now, report_id, owner_chat_id),
+            )
+            return date.fromisoformat(row["report_date"])
+
+    def delete_mobile_work_report_worker(self, owner_chat_id: int, worker_id: int) -> tuple[date, bool] | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT worker.report_id, report.report_date
+                FROM mobile_work_report_workers worker
+                JOIN mobile_work_reports report ON report.id = worker.report_id
+                WHERE worker.id = ? AND report.owner_chat_id = ? AND report.deleted_at IS NULL
+                """,
+                (worker_id, owner_chat_id),
+            ).fetchone()
+            if row is None:
+                return None
+            report_id = int(row["report_id"])
+            report_date = date.fromisoformat(row["report_date"])
+            conn.execute("DELETE FROM mobile_work_report_workers WHERE id = ?", (worker_id,))
+            remaining = conn.execute(
+                "SELECT COUNT(*) AS count FROM mobile_work_report_workers WHERE report_id = ?",
+                (report_id,),
+            ).fetchone()
+            report_deleted = int(remaining["count"] if remaining else 0) == 0
+            now = datetime.utcnow().isoformat()
+            if report_deleted:
+                conn.execute(
+                    "UPDATE mobile_work_reports SET deleted_at = ?, updated_at = ? WHERE id = ? AND owner_chat_id = ?",
+                    (now, now, report_id, owner_chat_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE mobile_work_reports SET updated_at = ? WHERE id = ? AND owner_chat_id = ?",
+                    (now, report_id, owner_chat_id),
+                )
+            return report_date, report_deleted
+
     def list_mobile_work_reports(self, owner_chat_id: int, report_date: date | None = None) -> list[MobileWorkReport]:
         where = "owner_chat_id = ? AND deleted_at IS NULL"
         params: list[object] = [owner_chat_id]
