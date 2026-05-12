@@ -17597,10 +17597,14 @@ def render_expenses_section(
                   </td>
                 </tr>
             """
-        return "".join(
-            (render_single_entry(entry) + (render_cash_income_row(entry) if mirror_cash_withdrawals and is_cash_income_display(entry) else ""))
-            for entry in row_entries
-        )
+        rows = []
+        for entry in row_entries:
+            mirror_cash_income = mirror_cash_withdrawals and is_cash_income_display(entry)
+            if not (mirror_cash_income and (entry.operation_type or "expense") == "income"):
+                rows.append(render_single_entry(entry))
+            if mirror_cash_income:
+                rows.append(render_cash_income_row(entry))
+        return "".join(rows)
 
     def render_expenses_table(row_entries, empty_text: str, cash_withdrawal_as_income: bool = True, mirror_cash_withdrawals: bool = False) -> str:
         rows_html = render_expense_rows(row_entries, cash_withdrawal_as_income, mirror_cash_withdrawals)
