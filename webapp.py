@@ -6281,6 +6281,90 @@ def layout(
       gap: 22px;
       margin-top: 22px;
     }}
+    .workforce-calendar-toolbar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 18px;
+    }}
+    .workforce-calendar-toolbar .field {{
+      min-width: 220px;
+      margin: 0;
+    }}
+    .workforce-calendar {{
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .workforce-calendar-weekday {{
+      padding: 0 4px 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
+    .workforce-calendar-day {{
+      min-height: 118px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--paper) 88%, white 12%);
+      color: var(--ink);
+      text-decoration: none;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+    }}
+    .workforce-calendar-day:hover {{
+      border-color: color-mix(in srgb, var(--brand) 34%, var(--line) 66%);
+      box-shadow: 0 8px 18px rgba(16, 65, 72, 0.08);
+      transform: translateY(-1px);
+    }}
+    .workforce-calendar-day.is-empty {{
+      pointer-events: none;
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+    }}
+    .workforce-calendar-day.is-selected {{
+      border-color: color-mix(in srgb, var(--brand) 66%, white 34%);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 54%, white 46%);
+    }}
+    .workforce-calendar-day.is-today .workforce-calendar-date {{
+      color: var(--brand);
+    }}
+    .workforce-calendar-date {{
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1;
+    }}
+    .workforce-calendar-metrics {{
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }}
+    .workforce-calendar-metrics .chip {{
+      min-height: 24px;
+      padding: 3px 7px;
+      font-size: 11px;
+      line-height: 1.15;
+    }}
+    .workforce-calendar-empty {{
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .workforce-calendar-projects {{
+      display: grid;
+      gap: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.25;
+    }}
     .contract-advance-stack {{
       display: grid;
       gap: 4px;
@@ -7810,6 +7894,17 @@ def layout(
       }}
       .workforce-summary-grid {{
         grid-template-columns: 1fr;
+      }}
+      .workforce-calendar {{
+        gap: 6px;
+      }}
+      .workforce-calendar-day {{
+        min-height: 92px;
+        padding: 8px;
+        border-radius: 12px;
+      }}
+      .workforce-calendar-projects {{
+        display: none;
       }}
       .contract-money {{
         text-align: left;
@@ -13035,12 +13130,15 @@ def render_workforce_section(
         if (employee.employee_group or "admin") == "builders"
     ]
     employee_lookup = {employee.id: employee for employee in payroll_employees}
-    reports = storage.list_mobile_work_reports_for_period(owner_chat_id, selected_month, next_month)
-    reports = [
-        report for report in reports
+    month_reports = storage.list_mobile_work_reports_for_period(owner_chat_id, selected_month, next_month)
+    calendar_reports = [
+        report for report in month_reports
         if (not project_filter or report.project_code == project_filter)
-        and (selected_day is None or report.report_date == selected_day)
         and (not employee_filter or any(int(worker["employee_id"]) == employee_filter for worker in report.workers))
+    ]
+    reports = [
+        report for report in calendar_reports
+        if selected_day is None or report.report_date == selected_day
     ]
     month_options = []
     for offset in range(-2, 4):
@@ -13054,7 +13152,7 @@ def render_workforce_section(
     )
     reported_employee_ids = {
         int(worker["employee_id"])
-        for report in storage.list_mobile_work_reports_for_period(owner_chat_id, selected_month, next_month)
+        for report in month_reports
         for worker in report.workers
     }
     filter_employees = sorted(
@@ -13069,6 +13167,14 @@ def render_workforce_section(
         for employee in filter_employees
     )
 
+    calendar_unique_people = {
+        int(worker["employee_id"])
+        for report in calendar_reports
+        for worker in report.workers
+    }
+    calendar_total_units = sum(float(worker["day_part"]) for report in calendar_reports for worker in report.workers)
+    calendar_active_days = {report.report_date for report in calendar_reports}
+    calendar_active_projects = {report.project_code or report.project_label for report in calendar_reports}
     unique_people = {
         int(worker["employee_id"])
         for report in reports
@@ -13099,22 +13205,22 @@ def render_workforce_section(
     <section class="stats">
       <article class="card stat-card">
         <div class="stat-label">Сотрудников</div>
-        <div class="stat-value">{len(unique_people)}</div>
-        <div class="stat-note">Работали в выбранной выборке</div>
+        <div class="stat-value">{len(calendar_unique_people)}</div>
+        <div class="stat-note">Работали {escape(format_month_in_label(selected_month))}</div>
       </article>
       <article class="card stat-card">
         <div class="stat-label">Смен</div>
-        <div class="stat-value">{escape(workforce_units_label(total_units))}</div>
+        <div class="stat-value">{escape(workforce_units_label(calendar_total_units))}</div>
         <div class="stat-note">Полные и половинные дни суммарно</div>
       </article>
       <article class="card stat-card">
         <div class="stat-label">Объектов</div>
-        <div class="stat-value">{len(active_projects)}</div>
+        <div class="stat-value">{len(calendar_active_projects)}</div>
         <div class="stat-note">Где фиксировалась работа</div>
       </article>
       <article class="card stat-card">
         <div class="stat-label">Дней</div>
-        <div class="stat-value">{len(active_days)}</div>
+        <div class="stat-value">{len(calendar_active_days)}</div>
         <div class="stat-note">Дни с занесенными сменами</div>
       </article>
     </section>
@@ -13133,6 +13239,108 @@ def render_workforce_section(
           </div>
         </details>
         """
+    detail_active = selected_day is not None or bool(project_filter) or bool(employee_filter)
+    current_employee_label = employee_lookup.get(employee_filter).full_name if employee_filter in employee_lookup else ""
+    detail_title_parts = []
+    if selected_day is not None:
+        detail_title_parts.append(format_date(selected_day))
+    if project_filter:
+        detail_title_parts.append(project_labels.get(project_filter, project_filter))
+    if employee_filter:
+        detail_title_parts.append(current_employee_label or f"Сотрудник #{employee_filter}")
+    detail_title = " · ".join(detail_title_parts) if detail_title_parts else "Реестр за месяц"
+    detail_filter_caption = "Текущий фильтр: " + detail_title if detail_active else ""
+    month_form = f"""
+    <form class="workforce-calendar-toolbar" method="get" action="/workforce">
+      <input type="hidden" name="owner" value="{owner_chat_id}">
+      <input type="hidden" name="project" value="{escape(project_filter)}">
+      <input type="hidden" name="employee" value="{employee_filter if employee_filter else ''}">
+      <div class="field">
+        <label>Месяц</label>
+        <select name="month">{''.join(month_options)}</select>
+      </div>
+      <div class="action-row" style="gap:10px; margin:0;">
+        <button class="secondary-btn mini" type="submit">Показать месяц</button>
+        {f'<a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}">Сбросить фильтр</a>' if detail_active else ''}
+      </div>
+    </form>
+    """
+    registry_filter = f"""
+    <details class="status-menu">
+      <summary><span class="secondary-btn">Показать реестр</span></summary>
+      <div class="status-popover align-right" style="min-width:min(520px, 92vw);">
+        <form class="form-grid" method="get" action="/workforce">
+          <input type="hidden" name="owner" value="{owner_chat_id}">
+          <input type="hidden" name="month" value="{selected_month.strftime('%Y-%m')}">
+          <div class="field">
+            <label>Объект</label>
+            <select name="project">
+              <option value="">Все объекты</option>
+              {project_options}
+            </select>
+          </div>
+          <div class="field">
+            <label>Сотрудник</label>
+            <select name="employee">
+              <option value="">Все сотрудники</option>
+              {employee_options}
+            </select>
+          </div>
+          <button class="submit-btn" type="submit">Показать реестр</button>
+        </form>
+      </div>
+    </details>
+    """
+    daily_stats: dict[date, dict] = {}
+    for report in calendar_reports:
+        day_bucket = daily_stats.setdefault(report.report_date, {"people": set(), "units": 0.0, "projects": {}})
+        project_label = report.project_label or project_labels.get(report.project_code, "Без объекта")
+        project_bucket = day_bucket["projects"].setdefault(project_label, {"people": set(), "units": 0.0})
+        for worker in report.workers:
+            employee_id = int(worker["employee_id"])
+            day_part = float(worker["day_part"])
+            day_bucket["people"].add(employee_id)
+            day_bucket["units"] += day_part
+            project_bucket["people"].add(employee_id)
+            project_bucket["units"] += day_part
+    weekday_headers = "".join(f'<div class="workforce-calendar-weekday">{label}</div>' for label in ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"))
+    first_weekday, days_in_month = calendar.monthrange(selected_month.year, selected_month.month)
+    calendar_cells = ['<div class="workforce-calendar-day is-empty"></div>' for _ in range(first_weekday)]
+    for day_number in range(1, days_in_month + 1):
+        day_value = date(selected_month.year, selected_month.month, day_number)
+        day_stats = daily_stats.get(day_value)
+        day_href = f"/workforce{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, day_value)}"
+        day_classes = ["workforce-calendar-day"]
+        if day_value == today:
+            day_classes.append("is-today")
+        if selected_day == day_value:
+            day_classes.append("is-selected")
+        if day_stats:
+            project_lines = "".join(
+                f'<span>{escape(project_label)} · {len(project_data["people"])} чел. · {escape(workforce_units_label(float(project_data["units"])))} см.</span>'
+                for project_label, project_data in sorted(day_stats["projects"].items())[:2]
+            )
+            more_projects = len(day_stats["projects"]) - 2
+            if more_projects > 0:
+                project_lines += f'<span>Еще объектов: {more_projects}</span>'
+            cell_body = f"""
+              <div class="workforce-calendar-metrics">
+                <span class="chip ok">{len(day_stats["people"])} чел.</span>
+                <span class="chip">{escape(workforce_units_label(float(day_stats["units"])))} смен</span>
+              </div>
+              <div class="workforce-calendar-projects">{project_lines}</div>
+            """
+        else:
+            cell_body = '<div class="workforce-calendar-empty">Нет смен</div>'
+        calendar_cells.append(
+            f"""
+            <a class="{' '.join(day_classes)}" href="{day_href}">
+              <div class="workforce-calendar-date">{day_number}</div>
+              {cell_body}
+            </a>
+            """
+        )
+    workforce_calendar_html = f'<div class="workforce-calendar">{weekday_headers}{"".join(calendar_cells)}</div>'
     report_rows = []
     for index, report in enumerate(reports, start=1):
         worker_rows = "".join(
@@ -13199,41 +13407,25 @@ def render_workforce_section(
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
-          <h2 class="panel-title">Журнал смен</h2>
-          <div class="panel-sub">ПК-реестр смен из мобильного ввода касс с фильтрами и редактированием.</div>
+          <h2 class="panel-title">Календарь смен</h2>
+          <div class="panel-sub">Краткая сводка по каждому дню месяца: люди, смены и объекты.</div>
         </div>
-        <div class="action-row" style="gap:10px;">{add_form}</div>
+        <div class="action-row" style="gap:10px;">{registry_filter}{add_form}</div>
       </div>
-      <form class="form-grid" method="get" action="/workforce" style="margin-bottom:18px;">
-        <input type="hidden" name="owner" value="{owner_chat_id}">
-        <div class="field">
-          <label>Месяц</label>
-          <select name="month">{''.join(month_options)}</select>
-        </div>
-        <div class="field">
-          <label>Объект</label>
-          <select name="project">
-            <option value="">Все объекты</option>
-            {project_options}
-          </select>
-        </div>
-        <div class="field">
-          <label>Сотрудник</label>
-          <select name="employee">
-            <option value="">Все сотрудники</option>
-            {employee_options}
-          </select>
-        </div>
-        <div class="field">
-          <label>День</label>
-          <input type="date" name="day" value="{selected_day.isoformat() if selected_day else ""}">
-        </div>
-        <div class="action-row" style="align-items:flex-end;">
-          <button class="secondary-btn mini" type="submit">Показать</button>
-          {filter_reset}
-        </div>
-      </form>
       {flash_html}
+      {f'<div class="contract-table-subtle" style="margin-bottom:12px;">{escape(detail_filter_caption)}</div>' if detail_filter_caption else ''}
+      {month_form}
+      {workforce_calendar_html}
+    </section>
+    {f'''
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">{escape(detail_title)}</h2>
+          <div class="panel-sub">Детализация смен по выбранному дню, объекту или сотруднику.</div>
+        </div>
+        <a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}">К календарю месяца</a>
+      </div>
       <table class="table contract-table workforce-table">
         <thead>
           <tr>
@@ -13249,6 +13441,7 @@ def render_workforce_section(
         <tbody>{rows_html}</tbody>
       </table>
     </section>
+    ''' if detail_active else ''}
     <div class="workforce-summary-grid">
       <section class="card panel">
         <div class="panel-head">
