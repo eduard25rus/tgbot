@@ -17564,6 +17564,24 @@ def render_expenses_section(
         """
 
     def render_expense_rows(row_entries, cash_withdrawal_as_income: bool = True, mirror_cash_withdrawals: bool = False) -> str:
+        row_entries = list(row_entries)
+        entries_by_id = {entry.id: entry for entry in row_entries}
+        linked_income_by_source_id = {}
+        for entry in row_entries:
+            linked_match = re.search(r"\[Связанный расход:\s*(\d+)\]", entry.comment or "")
+            if linked_match:
+                linked_income_by_source_id[int(linked_match.group(1))] = entry
+        def row_sort_key(entry):
+            linked_match = re.search(r"\[Связанный расход:\s*(\d+)\]", entry.comment or "")
+            linked_source_id = int(linked_match.group(1)) if linked_match else 0
+            linked_income = linked_income_by_source_id.get(entry.id)
+            linked_source = entries_by_id.get(linked_source_id) if linked_source_id else None
+            group_entries = [item for item in (entry, linked_income, linked_source) if item is not None]
+            group_date = max(item.expense_date for item in group_entries)
+            group_created = max(item.created_at for item in group_entries)
+            group_id = max(item.id for item in group_entries)
+            sequence = 0 if linked_source_id else 1 if linked_income else 2
+            return (group_date, group_created, group_id, -sequence)
         def status_editor(entry) -> str:
             status_html = f'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'
             if has_permission(current_user, "expenses", "edit"):
@@ -17598,7 +17616,7 @@ def render_expenses_section(
                 </tr>
             """
         rows = []
-        for entry in row_entries:
+        for entry in sorted(row_entries, key=row_sort_key, reverse=True):
             mirror_cash_income = mirror_cash_withdrawals and is_cash_income_display(entry)
             if not (mirror_cash_income and (entry.operation_type or "expense") == "income"):
                 rows.append(render_single_entry(entry))
