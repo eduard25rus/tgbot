@@ -14154,8 +14154,8 @@ def render_cashoperations_body(
       }}
       .cash-mobile-date-filter {{
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 104px;
-        gap: 8px;
+        grid-template-columns: minmax(0, 1fr) 108px;
+        gap: 10px;
         align-items: end;
         margin: 8px 0 10px;
       }}
@@ -14167,8 +14167,10 @@ def render_cashoperations_body(
         min-width: 0;
       }}
       .cash-date-input-wrap {{
-        display: block;
+        display: flex;
+        align-items: center;
         width: 100%;
+        height: 48px;
         max-width: 100%;
         min-width: 0;
         overflow: hidden;
@@ -14179,17 +14181,22 @@ def render_cashoperations_body(
       .cash-mobile-date-filter input {{
         display: block;
         width: 100%;
+        height: 100%;
         max-width: 100%;
         min-width: 0;
         inline-size: 100%;
         box-sizing: border-box;
         border: 1px solid var(--line);
         border-radius: 8px;
-        padding: 11px 10px;
+        padding: 0 10px;
         background: #fff;
         color: var(--ink);
         font: inherit;
         font-size: 16px;
+        line-height: 48px;
+        text-align: center;
+        -webkit-appearance: none;
+        appearance: none;
       }}
       .cash-date-input-wrap input {{
         border: 0;
@@ -14197,11 +14204,14 @@ def render_cashoperations_body(
         background: transparent;
       }}
       .cash-mobile-date-filter button {{
+        display: inline-grid;
+        place-items: center;
         width: 100%;
-        min-height: 42px;
+        height: 48px;
+        min-height: 48px;
         border: 0;
         border-radius: 8px;
-        padding: 10px 12px;
+        padding: 0 12px;
         background: #186844;
         color: #fff;
         font: inherit;
