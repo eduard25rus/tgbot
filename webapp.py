@@ -13591,8 +13591,15 @@ def render_cashoperations_body(
     work_report_screen = '<section class="cash-mobile-panel"><h2>Работа недоступна</h2><div class="cash-mobile-sub">Администратор должен включить доступ к отчетам о работе.</div></section>'
     if can_view_work_reports:
         work_report_screen = f"""
+        <section class="cash-mobile-work-head">
+          <h2>Учет рабочей силы</h2>
+          <div class="cash-mobile-actions">
+            <button class="cash-mobile-action income" type="button" data-work-toggle-form>Добавить смену</button>
+            <button class="cash-mobile-action" type="button" data-work-toggle-stats>Смотреть статистику</button>
+          </div>
+        </section>
         <section class="cash-mobile-panel">
-          <div class="cash-mobile-section-head"><h2>Отчеты о работе</h2></div>
+          <div class="cash-mobile-section-head"><h2>Добавить смену</h2></div>
           <form class="cash-mobile-form" method="post" action="/cashoperations/work-report">
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
             <label>Дата
@@ -13621,6 +13628,10 @@ def render_cashoperations_body(
             <button type="submit"{" disabled" if not builder_employees else ""}>Сохранить отчет</button>
           </form>
           {'<div class="cash-mobile-sub" style="margin-top:10px;">В справочнике пока нет активных сотрудников-работяг.</div>' if not builder_employees else ''}
+        </section>
+        <section class="cash-mobile-panel is-hidden" data-work-stats-panel>
+          <div class="cash-mobile-section-head"><h2>Статистика</h2></div>
+          <div class="cash-mobile-empty">Статистику соберем следующим шагом.</div>
         </section>
         <section class="cash-mobile-panel">
           <div class="cash-mobile-section-head"><h2>{escape(format_date(work_report_date))}</h2></div>
@@ -14124,6 +14135,15 @@ def render_cashoperations_body(
         display: grid;
         gap: 10px;
       }}
+      .cash-mobile-work-head {{
+        margin-top: 14px;
+      }}
+      .cash-mobile-work-head h2 {{
+        margin: 0 0 12px;
+        text-align: center;
+        font-size: 20px;
+        line-height: 1.2;
+      }}
       .cash-work-worker-row {{
         display: grid;
         grid-template-columns: 1fr 128px;
@@ -14132,7 +14152,7 @@ def render_cashoperations_body(
       }}
       .cash-mobile-date-filter {{
         display: grid;
-        grid-template-columns: 1fr auto;
+        grid-template-columns: minmax(0, 1fr) 104px;
         gap: 8px;
         align-items: end;
         margin: 8px 0 10px;
@@ -14156,6 +14176,7 @@ def render_cashoperations_body(
         font-size: 16px;
       }}
       .cash-mobile-date-filter button {{
+        width: 100%;
         min-height: 42px;
         border: 0;
         border-radius: 8px;
@@ -14481,6 +14502,9 @@ def render_cashoperations_body(
         const workForm = document.querySelector(".cash-mobile-form[action='/cashoperations/work-report']");
         const workWorkers = document.querySelector("[data-work-workers]");
         const workAddWorker = document.querySelector("[data-work-add-worker]");
+        const workToggleForm = document.querySelector("[data-work-toggle-form]");
+        const workToggleStats = document.querySelector("[data-work-toggle-stats]");
+        const workStatsPanel = document.querySelector("[data-work-stats-panel]");
         const manualRefresh = document.querySelector("[data-cash-refresh]");
         const flash = document.querySelector("[data-cash-flash]");
         const editbar = document.querySelector("[data-cash-editbar]");
@@ -14693,6 +14717,14 @@ def render_cashoperations_body(
             else select.value = "";
           }});
           workWorkers.appendChild(clone);
+        }});
+        workToggleForm && workToggleForm.addEventListener("click", () => {{
+          if (workForm) workForm.closest(".cash-mobile-panel").classList.remove("is-hidden");
+          if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
+        }});
+        workToggleStats && workToggleStats.addEventListener("click", () => {{
+          if (workForm) workForm.closest(".cash-mobile-panel").classList.add("is-hidden");
+          if (workStatsPanel) workStatsPanel.classList.remove("is-hidden");
         }});
         function resetExpenseForm() {{
           if (!expenseForm) return;
