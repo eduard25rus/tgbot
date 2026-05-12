@@ -7320,6 +7320,7 @@ class Storage:
         defaults = (
             ("eduard", "Касса Эдуарда"),
             ("denis", "Касса Дениса"),
+            ("ikram", "Касса Икрама"),
         )
         for index, (code, label) in enumerate(defaults, start=1):
             row = conn.execute(
@@ -7340,6 +7341,28 @@ class Storage:
                     """,
                     (owner_chat_id, code, label, index * 10, now, now),
                 )
+        owner_rows = conn.execute(
+            """
+            SELECT user_id, allowed_cashbox_codes
+            FROM mobile_cash_access
+            WHERE owner_chat_id = ?
+              AND role = 'owner'
+            """,
+            (owner_chat_id,),
+        ).fetchall()
+        for row in owner_rows:
+            codes = self._split_cashbox_codes(row["allowed_cashbox_codes"])
+            if "ikram" in codes:
+                continue
+            codes.append("ikram")
+            conn.execute(
+                """
+                UPDATE mobile_cash_access
+                SET allowed_cashbox_codes = ?, updated_at = ?
+                WHERE user_id = ?
+                """,
+                (",".join(codes), now, row["user_id"]),
+            )
 
     @staticmethod
     def _split_cashbox_codes(raw: str) -> list[str]:
@@ -7354,7 +7377,7 @@ class Storage:
                 "enabled": True,
                 "role": "owner",
                 "default_cashbox_code": "eduard",
-                "allowed_cashbox_codes": ["eduard", "denis"],
+                "allowed_cashbox_codes": ["eduard", "denis", "ikram"],
                 "preview_login": "eduard",
                 "preview_password_hash": "",
                 "can_view_all_cashboxes": False,
@@ -7375,6 +7398,25 @@ class Storage:
                 "default_cashbox_code": "denis",
                 "allowed_cashbox_codes": ["denis"],
                 "preview_login": "denis",
+                "preview_password_hash": "",
+                "can_view_all_cashboxes": False,
+                "can_add_expense": True,
+                "can_modify_other_cashboxes": False,
+                "can_reconcile": True,
+                "can_receive_push": False,
+                "push_detail_mode": "safe",
+                "can_view_letters": False,
+                "updated_at": "",
+            }
+        if "икрам" in login_name or "ikram" in login_name or "алимов" in login_name:
+            return {
+                "user_id": int(user["id"]),
+                "owner_chat_id": owner_chat_id,
+                "enabled": True,
+                "role": "limited",
+                "default_cashbox_code": "ikram",
+                "allowed_cashbox_codes": ["ikram"],
+                "preview_login": "ikram",
                 "preview_password_hash": "",
                 "can_view_all_cashboxes": False,
                 "can_add_expense": True,

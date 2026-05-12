@@ -12849,14 +12849,32 @@ EXPENSE_PAYMENT_SOURCE_META = {
 MONEY_OPERATION_TYPE_META = {
     "expense": "Расход",
     "income": "Приход",
+    "transfer": "Перемещение",
 }
 
 CASH_WITHDRAWAL_CATEGORY_CODE = "cash_withdrawal"
+CASH_TRANSFER_CATEGORY_CODES = {
+    "cash_transfer",
+    "cashbox_transfer",
+    "cashbox_transfer_between",
+    "transfer_between_cashboxes",
+    "transfer_cashboxes",
+}
+CASH_TRANSFER_CATEGORY_LABELS = {
+    "перевод между кассами",
+    "перемещение между кассами",
+    "перевод касса касса",
+}
 CASH_RECIPIENT_META = (
     ("учайкин денис павлович", "denis", "Денис"),
     ("учайкин", "denis", "Денис"),
     ("касса дениса", "denis", "Денис"),
     ("денис", "denis", "Денис"),
+    ("алимов икрам", "ikram", "Икрам"),
+    ("икрам алимов", "ikram", "Икрам"),
+    ("касса икрама", "ikram", "Икрам"),
+    ("алимов", "ikram", "Икрам"),
+    ("икрам", "ikram", "Икрам"),
     ("шевченко эдуард артурович", "eduard", "Эдуард"),
     ("шевченко", "eduard", "Эдуард"),
     ("касса эдуарда", "eduard", "Эдуард"),
@@ -12865,6 +12883,7 @@ CASH_RECIPIENT_META = (
 CASHBOX_OPTIONS = (
     ("eduard", "Касса Эдуарда"),
     ("denis", "Касса Дениса"),
+    ("ikram", "Касса Икрама"),
 )
 
 
@@ -12998,6 +13017,18 @@ def expense_category_label(code: str, category_labels: dict[str, str] | None = N
     return EXPENSE_CATEGORY_META.get(code, "Прочее")
 
 
+def _normalized_cash_category_text(value: str) -> str:
+    return " ".join((value or "").casefold().replace("ё", "е").split())
+
+
+def is_cash_transfer_category(code: str, category_labels: dict[str, str] | None = None) -> bool:
+    normalized_code = _normalized_cash_category_text(code)
+    if normalized_code in CASH_TRANSFER_CATEGORY_CODES or normalized_code in CASH_TRANSFER_CATEGORY_LABELS:
+        return True
+    label = category_labels.get(code, "") if category_labels else ""
+    return _normalized_cash_category_text(label) in CASH_TRANSFER_CATEGORY_LABELS
+
+
 def expense_payment_source_label(code: str) -> str:
     return EXPENSE_PAYMENT_SOURCE_META.get(code, EXPENSE_PAYMENT_SOURCE_META["bank"])
 
@@ -13019,22 +13050,43 @@ def cashbox_label(code: str) -> str:
 
 def cashbox_code_from_text(title: str, comment: str = "") -> str:
     haystack = f"{title} {comment}".casefold()
+    best_match: tuple[int, str] | None = None
     for marker, code, _label in CASH_RECIPIENT_META:
-        if marker in haystack:
-            return code
-    return ""
+        marker_index = haystack.find(marker)
+        if marker_index < 0:
+            continue
+        if best_match is None or marker_index < best_match[0]:
+            best_match = (marker_index, code)
+    return best_match[1] if best_match else ""
 
 
 def cashbox_code_from_entry(entry, cashboxes: list[dict]) -> str:
+    leading_marker = re.match(r"\s*\[([^\]]+)\]", entry.comment or "")
+    if leading_marker:
+        marker_text = leading_marker.group(1).casefold()
+        for cashbox in cashboxes:
+            label = str(cashbox.get("label", "")).strip()
+            code = str(cashbox.get("code", ""))
+            if label and label.casefold() in marker_text:
+                return code
+        for marker, code, _label in CASH_RECIPIENT_META:
+            if marker in marker_text:
+                return code
     static_code = cashbox_code_from_text(entry.title, entry.comment)
     if static_code:
         return static_code
     haystack = f"{entry.title} {entry.comment}".casefold()
+    best_match: tuple[int, str] | None = None
     for cashbox in cashboxes:
         label = str(cashbox.get("label", "")).strip()
-        if label and label.casefold() in haystack:
-            return str(cashbox.get("code", ""))
-    return ""
+        if not label:
+            continue
+        marker_index = haystack.find(label.casefold())
+        if marker_index < 0:
+            continue
+        if best_match is None or marker_index < best_match[0]:
+            best_match = (marker_index, str(cashbox.get("code", "")))
+    return best_match[1] if best_match else ""
 
 
 def cash_recipient_label(title: str, comment: str = "") -> str:
@@ -13220,6 +13272,15 @@ def render_cashoperations_body(
         for code, label in category_options_list
     )
     category_labels = dict(category_options_list)
+    transfer_category_codes = [
+        code for code, _label in category_options_list
+        if is_cash_transfer_category(code, category_labels)
+    ]
+    transfer_cashbox_options = "".join(
+        f'<option value="{item["code"]}">{escape(item["label"])}</option>'
+        for item in cashboxes
+        if item["code"] != selected_cashbox
+    )
     payroll_employees = [employee for employee in storage.list_payroll_employees(owner_chat_id) if employee.is_active]
     payroll_employee_options = '<option value="">Выберите сотрудника</option>' + "".join(
         f'<option value="{employee.id}">{escape(employee.full_name)}</option>'
@@ -13298,9 +13359,18 @@ def render_cashoperations_body(
         category = "Вывод в кассу" if kind == "income" else expense_category_label(entry.category_code, category_labels)
         if kind == "income" and title.startswith("Пополнение кассы:"):
             title, category = "Пополнение кассы", title.split(":", 1)[1].strip() or "Поступление"
+        is_transfer_entry = is_cash_transfer_category(entry.category_code, category_labels) or title.startswith("Перевод между кассами")
+        if is_transfer_entry:
+            title = "Перевод между кассами"
+            if kind == "income":
+                source_match = re.search(r"\[Источник:\s*([^\]]+)\]", entry.comment or "")
+                category = f"из {source_match.group(1).strip()}" if source_match else "приход"
+            else:
+                target_match = re.search(r"\[Касса получателя:\s*([^\]]+)\]", entry.comment or "")
+                category = f"в {target_match.group(1).strip()}" if target_match else "расход"
         comment = editable_comment(entry)
         if not comment:
-            comment = "Вывод денежных средств в кассу" if kind == "income" else "Без комментария"
+            comment = "Движение между кассами" if is_transfer_entry else ("Вывод денежных средств в кассу" if kind == "income" else "Без комментария")
         employee_line = (
             f'<span class="cash-mobile-op-meta">Сотрудник: {escape(entry.payroll_employee_name)}</span>'
             if kind != "income" and getattr(entry, "payroll_employee_name", "")
@@ -13313,7 +13383,7 @@ def render_cashoperations_body(
         )
         receipt_name = (getattr(entry, "receipt_file_name", "") or getattr(entry, "receipt_file_path", "") or "").lower()
         receipt_kind = "pdf" if receipt_name.endswith(".pdf") else "image"
-        if kind == "income" and can_edit:
+        if kind == "income" and can_edit and not is_transfer_entry:
             return f"""
             <button class="cash-mobile-op editable" type="button"
               data-edit-income="1"
@@ -13332,7 +13402,7 @@ def render_cashoperations_body(
               </span>
             </button>
             """
-        if kind == "expense" and can_edit:
+        if kind == "expense" and can_edit and not is_transfer_entry:
             return f"""
             <button class="cash-mobile-op editable" type="button"
               data-edit-expense="1"
@@ -13520,6 +13590,9 @@ def render_cashoperations_body(
             </label>
             <label data-cash-project-wrap>Объект
               <select name="project_code" data-cash-project required>{project_options}</select>
+            </label>
+            <label class="is-hidden" data-cash-transfer-wrap>Выбор кассы
+              <select name="target_cashbox" data-cash-transfer-target>{transfer_cashbox_options}</select>
             </label>
             <label class="is-hidden" data-cash-employee-wrap>Кому? Сотрудник
               <select name="payroll_employee_id" data-cash-employee>{payroll_employee_options}</select>
@@ -14244,6 +14317,9 @@ def render_cashoperations_body(
         const commentInput = document.querySelector("[data-cash-comment]");
         const employeeSelect = document.querySelector("[data-cash-employee]");
         const employeeWrap = document.querySelector("[data-cash-employee-wrap]");
+        const transferCategoryCodes = new Set({json.dumps(transfer_category_codes, ensure_ascii=False)});
+        const transferWrap = document.querySelector("[data-cash-transfer-wrap]");
+        const transferSelect = document.querySelector("[data-cash-transfer-target]");
         const receiptInput = document.querySelector("[data-cash-receipt]");
         const receiptLabel = document.querySelector("[data-cash-receipt-label]");
         const receiptClear = document.querySelector("[data-cash-receipt-clear]");
@@ -14401,25 +14477,31 @@ def render_cashoperations_body(
           if (!categorySelect || !projectSelect) return;
           const isAdmin = categorySelect.value === "admin";
           const isSalary = categorySelect.value === "salary";
-          if (isAdmin || isSalary) {{
+          const isTransfer = transferCategoryCodes.has(categorySelect.value);
+          if (isAdmin || isSalary || isTransfer) {{
             projectSelect.value = "admin";
           }}
-          projectSelect.disabled = isAdmin || isSalary;
-          projectSelect.required = !(isAdmin || isSalary);
-          projectWrap && projectWrap.classList.toggle("is-hidden", isSalary);
-          titleWrap && titleWrap.classList.toggle("is-hidden", isSalary);
+          projectSelect.disabled = isAdmin || isSalary || isTransfer;
+          projectSelect.required = !(isAdmin || isSalary || isTransfer);
+          projectWrap && projectWrap.classList.toggle("is-hidden", isSalary || isTransfer);
+          titleWrap && titleWrap.classList.toggle("is-hidden", isSalary || isTransfer);
           if (titleInput) {{
-            titleInput.required = !isSalary;
-            if (isSalary) titleInput.value = "";
+            titleInput.required = !(isSalary || isTransfer);
+            if (isSalary || isTransfer) titleInput.value = "";
           }}
           if (commentInput) {{
-            commentInput.placeholder = isSalary ? "наличные / перевод?" : "Коротко, что купили или оплатили";
+            commentInput.placeholder = isSalary ? "наличные / перевод?" : (isTransfer ? "Комментарий к переводу" : "Коротко, что купили или оплатили");
           }}
           if (employeeSelect) {{
             employeeSelect.disabled = !isSalary;
             employeeSelect.required = isSalary;
           }}
           employeeWrap && employeeWrap.classList.toggle("is-hidden", !isSalary);
+          if (transferSelect) {{
+            transferSelect.disabled = !isTransfer;
+            transferSelect.required = isTransfer;
+          }}
+          transferWrap && transferWrap.classList.toggle("is-hidden", !isTransfer);
         }}
         categorySelect && categorySelect.addEventListener("change", syncAdminProject);
         function resetExpenseForm() {{
@@ -16266,6 +16348,8 @@ def render_expenses_section(
         return entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
     def is_bank_cash_transfer(entry) -> bool:
         return is_cash_income_display(entry) and (entry.payment_source or "bank") == "bank"
+    def is_cashbox_transfer_display(entry) -> bool:
+        return is_cash_transfer_category(entry.category_code, category_labels)
     def is_income_display(entry) -> bool:
         return (entry.operation_type or "expense") == "income" or is_cash_income_display(entry)
     def dds_income_total(row_entries) -> float:
@@ -16273,13 +16357,13 @@ def render_expenses_section(
     def dds_expense_total(row_entries) -> float:
         return sum(
             entry.amount for entry in row_entries
-            if ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry))
+            if ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry) and not is_cashbox_transfer_display(entry))
             or is_bank_cash_transfer(entry)
         )
     def dds_signed_amount(entry) -> float:
         income_amount = entry.amount if is_income_display(entry) else 0
         expense_amount = entry.amount if (
-            ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry))
+            ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry) and not is_cashbox_transfer_display(entry))
             or is_bank_cash_transfer(entry)
         ) else 0
         return income_amount - expense_amount
@@ -16292,10 +16376,13 @@ def render_expenses_section(
         return f"{prefix}{format_amount(balance)}"
     today = datetime.now(VLADIVOSTOK_TZ).date()
     latest_bank_balance = storage.latest_bank_account_balance(owner_chat_id)
-    eduard_cash_balance = cashbox_balance_for_code(active_entries, cashboxes, "eduard")
-    denis_cash_balance = cashbox_balance_for_code(active_entries, cashboxes, "denis")
+    cashbox_balances = {
+        item["code"]: cashbox_balance_for_code(active_entries, cashboxes, item["code"])
+        for item in cashboxes
+    }
+    cashbox_total_balance = sum(cashbox_balances.values())
     bank_cash_balance = latest_bank_balance["closing_balance"] if latest_bank_balance else None
-    company_money_total = (bank_cash_balance + eduard_cash_balance + denis_cash_balance) if bank_cash_balance is not None else None
+    company_money_total = (bank_cash_balance + cashbox_total_balance) if bank_cash_balance is not None else None
     anchor_day = today
     day_window = [anchor_day - timedelta(days=offset) for offset in range(20, -1, -1)]
     active_selected_day = selected_day if selected_day in day_window and date_from is None and date_to is None else None
@@ -16602,6 +16689,16 @@ def render_expenses_section(
         <div class="dds-filter-summary">{escape(filter_summary)}</div>
       </form>
     """
+    cashbox_stat_cards = "".join(
+        f"""
+      <article class="card stat-card">
+        <div class="stat-label">{escape(item["label"])}</div>
+        <div class="stat-value">{format_amount(cashbox_balances.get(item["code"], 0))}</div>
+        <div class="stat-note">Расчетный остаток по кассовым операциям</div>
+      </article>
+        """
+        for item in cashboxes
+    )
     return f"""
     <section class="stats">
       <article class="card stat-card">
@@ -16609,20 +16706,11 @@ def render_expenses_section(
         <div class="stat-value">{format_amount(latest_bank_balance["closing_balance"]) if latest_bank_balance else "—"}</div>
         <div class="stat-note">{f'На {escape(format_date(latest_bank_balance["balance_date"]))}' if latest_bank_balance else 'Загрузите выписку 1С с остатками'}</div>
       </article>
-      <article class="card stat-card">
-        <div class="stat-label">Касса Эдуарда</div>
-        <div class="stat-value">{format_amount(eduard_cash_balance)}</div>
-        <div class="stat-note">Расчетный остаток по кассовым операциям</div>
-      </article>
-      <article class="card stat-card">
-        <div class="stat-label">Касса Дениса</div>
-        <div class="stat-value">{format_amount(denis_cash_balance)}</div>
-        <div class="stat-note">Расчетный остаток по кассовым операциям</div>
-      </article>
+      {cashbox_stat_cards}
       <article class="card stat-card">
         <div class="stat-label">Итого денег</div>
         <div class="stat-value">{format_amount(company_money_total) if company_money_total is not None else "—"}</div>
-        <div class="stat-note">Счет {format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}<br>Кассы {format_amount(eduard_cash_balance + denis_cash_balance)}</div>
+        <div class="stat-note">Счет {format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}<br>Кассы {format_amount(cashbox_total_balance)}</div>
       </article>
     </section>
     <section class="card panel" style="margin-top:22px;">
@@ -17764,8 +17852,6 @@ self.addEventListener("notificationclick", (event) => {
             category_code = form.get("category_code", "").strip()
             payroll_employee_id = None
             payroll_employee_name = ""
-            if category_code in {"admin", "salary"}:
-                project_code = "admin"
             title = form.get("title", "").strip()
             comment = form.get("comment", "").strip()
             entries = storage.list_expense_entries(current_owner)
@@ -17790,15 +17876,32 @@ self.addEventListener("notificationclick", (event) => {
                 if employee.is_active
             }
             project_codes = {code for code, _label in expense_project_options(storage, current_owner, entries)}
-            category_codes = {
-                code
-                for code, _label in expense_category_options(storage, current_owner, entries)
+            category_options_list = [
+                (code, label)
+                for code, label in expense_category_options(storage, current_owner, entries)
                 if code != CASH_WITHDRAWAL_CATEGORY_CODE
-            }
+            ]
+            category_labels = dict(category_options_list)
+            category_codes = {code for code, _label in category_options_list}
+            is_transfer_category = is_cash_transfer_category(category_code, category_labels)
+            if category_code in {"admin", "salary"} or is_transfer_category:
+                project_code = "admin"
             if project_code not in project_codes:
                 raise ValueError("Выберите объект")
             if category_code not in category_codes:
                 raise ValueError("Выберите статью расхода")
+            target_cashbox = form.get("target_cashbox", "").strip()
+            cashbox_codes = {item["code"] for item in cashboxes}
+            if is_transfer_category:
+                if expense_id:
+                    raise ValueError("Перевод между кассами нужно создать заново, редактирование пары пока закрыто")
+                if target_cashbox not in cashbox_codes:
+                    raise ValueError("Выберите кассу получателя")
+                if target_cashbox == selected_cashbox:
+                    raise ValueError("Касса списания и касса получателя должны отличаться")
+                source_label = cashbox_labels.get(selected_cashbox, "Касса")
+                target_label = cashbox_labels.get(target_cashbox, "Касса")
+                title = f"Перевод между кассами: {source_label} → {target_label}"
             if category_code == "salary":
                 try:
                     payroll_employee_id = int(form.get("payroll_employee_id", "0"))
@@ -17816,6 +17919,45 @@ self.addEventListener("notificationclick", (event) => {
             cashbox_marker = f"[{cashbox_labels.get(selected_cashbox, 'Касса')}]"
             employee_marker = f"[Сотрудник: {payroll_employee_name}]" if payroll_employee_name else ""
             normalized_comment = " ".join(part for part in (cashbox_marker, employee_marker, comment) if part)
+            if is_transfer_category:
+                source_label = cashbox_labels.get(selected_cashbox, "Касса")
+                target_label = cashbox_labels.get(target_cashbox, "Касса")
+                request_key = form.get("request_key", "").strip()
+                target_marker = f"[Касса получателя: {target_label}]"
+                transfer_comment = " ".join(part for part in (cashbox_marker, target_marker, comment) if part)
+                storage.add_expense_entry(
+                    current_owner,
+                    expense_date,
+                    project_code,
+                    category_code,
+                    title,
+                    amount,
+                    transfer_comment,
+                    "cash",
+                    False,
+                    (current_user or {}).get("id"),
+                    actor_name,
+                    client_request_key=f"{request_key}:out" if request_key else "",
+                    operation_type="transfer",
+                )
+                target_comment = " ".join(part for part in (f"[{target_label}]", f"[Источник: {source_label}]", comment) if part)
+                storage.add_expense_entry(
+                    current_owner,
+                    expense_date,
+                    project_code,
+                    CASH_WITHDRAWAL_CATEGORY_CODE,
+                    title,
+                    amount,
+                    target_comment,
+                    "bank",
+                    False,
+                    (current_user or {}).get("id"),
+                    actor_name,
+                    client_request_key=f"{request_key}:in" if request_key else "",
+                    operation_type="income",
+                )
+                flash = f"Перевод в {target_label} сохранен."
+                return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
             if expense_id:
                 storage.update_expense_entry(
                     current_owner,
