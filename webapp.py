@@ -13598,7 +13598,7 @@ def render_cashoperations_body(
             <button class="cash-mobile-action" type="button" data-work-toggle-stats>Смотреть статистику</button>
           </div>
         </section>
-        <section class="cash-mobile-panel">
+        <section class="cash-mobile-panel is-hidden" data-work-form-panel>
           <div class="cash-mobile-section-head"><h2>Добавить смену</h2></div>
           <form class="cash-mobile-form" method="post" action="/cashoperations/work-report">
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
@@ -14152,9 +14152,8 @@ def render_cashoperations_body(
       }}
       .cash-mobile-date-filter {{
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 104px;
+        grid-template-columns: 1fr;
         gap: 8px;
-        align-items: end;
         margin: 8px 0 10px;
       }}
       .cash-mobile-date-filter label {{
@@ -14177,7 +14176,7 @@ def render_cashoperations_body(
       }}
       .cash-mobile-date-filter button {{
         width: 100%;
-        min-height: 42px;
+        min-height: 46px;
         border: 0;
         border-radius: 8px;
         padding: 10px 12px;
@@ -14320,7 +14319,6 @@ def render_cashoperations_body(
         .cash-mobile-metrics {{ grid-template-columns: 1fr; }}
         .cash-mobile-actions {{ grid-template-columns: 1fr; }}
         .cash-mobile-letter-filter {{ grid-template-columns: 1fr; }}
-        .cash-mobile-date-filter {{ grid-template-columns: 1fr; }}
         .cash-work-worker-row {{ grid-template-columns: 1fr; }}
       }}
       .cash-receipt-viewer {{
@@ -14504,6 +14502,7 @@ def render_cashoperations_body(
         const workAddWorker = document.querySelector("[data-work-add-worker]");
         const workToggleForm = document.querySelector("[data-work-toggle-form]");
         const workToggleStats = document.querySelector("[data-work-toggle-stats]");
+        const workFormPanel = document.querySelector("[data-work-form-panel]");
         const workStatsPanel = document.querySelector("[data-work-stats-panel]");
         const manualRefresh = document.querySelector("[data-cash-refresh]");
         const flash = document.querySelector("[data-cash-flash]");
@@ -14719,11 +14718,11 @@ def render_cashoperations_body(
           workWorkers.appendChild(clone);
         }});
         workToggleForm && workToggleForm.addEventListener("click", () => {{
-          if (workForm) workForm.closest(".cash-mobile-panel").classList.remove("is-hidden");
+          if (workFormPanel) workFormPanel.classList.remove("is-hidden");
           if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
         }});
         workToggleStats && workToggleStats.addEventListener("click", () => {{
-          if (workForm) workForm.closest(".cash-mobile-panel").classList.add("is-hidden");
+          if (workFormPanel) workFormPanel.classList.add("is-hidden");
           if (workStatsPanel) workStatsPanel.classList.remove("is-hidden");
         }});
         function resetExpenseForm() {{
