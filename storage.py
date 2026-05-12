@@ -11,7 +11,7 @@ from typing import Optional
 
 
 DATE_FMT = "%Y-%m-%d"
-WEB_SECTION_IDS = ("contracts", "auctions", "events", "tasks", "directories", "payables", "expenses", "payroll", "finance", "jurisprudence", "access")
+WEB_SECTION_IDS = ("contracts", "auctions", "events", "tasks", "directories", "payables", "expenses", "payroll", "workforce", "finance", "jurisprudence", "access")
 DEFAULT_EXPENSE_CATEGORIES = (
     ("materials", "Материалы"),
     ("equipment", "Услуги техники"),

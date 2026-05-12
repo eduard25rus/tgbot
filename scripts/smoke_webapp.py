@@ -146,6 +146,7 @@ def main() -> int:
         "/expenses",
         "/expenses/imports",
         "/payroll",
+        "/workforce",
         "/finance-analysis",
         "/finance-register",
         "/finance-loans",

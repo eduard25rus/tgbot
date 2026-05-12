@@ -4547,6 +4547,7 @@ SECTIONS = [
     ("payables", "Кредиторка", "/payables"),
     ("expenses", "ДДС", "/expenses"),
     ("payroll", "Зарплата", "/payroll"),
+    ("workforce", "Рабочая сила", "/workforce"),
     ("finance", "Финансовый анализ", "/finance-analysis"),
     ("jurisprudence", "Юриспруденция", "/jurisprudence/letters"),
     ("access", "Доступы", "/access"),
@@ -4603,6 +4604,10 @@ SECTION_HERO = {
     "payroll": (
         "Зарплата",
         "Модуль для сотрудников, начислений, выплат, авансов и связки зарплат с объектами и этапами.",
+    ),
+    "workforce": (
+        "Рабочая сила",
+        "Учет фактически отработанных смен по объектам, дням и сотрудникам-строителям.",
     ),
     "finance": (
         "Финансовый анализ",
@@ -6233,6 +6238,49 @@ def layout(
       box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--warn) 72%, white 28%), 0 8px 18px rgba(184, 112, 18, 0.14);
       outline-color: color-mix(in srgb, var(--warn) 80%, white 20%);
     }}
+    .workforce-table td:not(:nth-child(2)) {{
+      text-align: center;
+    }}
+    .workforce-worker-list {{
+      margin: 6px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }}
+    .workforce-worker-picker {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      grid-column: 1 / -1;
+      max-height: 360px;
+      overflow: auto;
+      padding: 4px;
+    }}
+    .workforce-worker-option {{
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--paper);
+    }}
+    .workforce-worker-option label {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .workforce-worker-option select {{
+      width: 100%;
+    }}
+    .workforce-summary-grid {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 22px;
+      margin-top: 22px;
+    }}
     .contract-advance-stack {{
       display: grid;
       gap: 4px;
@@ -7758,6 +7806,9 @@ def layout(
         position: static;
       }}
       .grid, .detail-hero {{
+        grid-template-columns: 1fr;
+      }}
+      .workforce-summary-grid {{
         grid-template-columns: 1fr;
       }}
       .contract-money {{
@@ -12824,6 +12875,406 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
       </div>
       <div class="timeline">{payroll_upcoming_html}</div>
     </section>
+    """
+
+
+def workforce_units_label(value: float) -> str:
+    return str(int(value)) if abs(value - int(value)) < 0.001 else str(round(value, 2)).replace(".", ",")
+
+
+def workforce_day_part_label(value: float) -> str:
+    return "0,5 дня" if float(value) <= 0.5 else "1 день"
+
+
+def workforce_query_suffix(
+    owner_chat_id: int,
+    selected_month: date,
+    project_filter: str = "",
+    employee_filter: int = 0,
+    selected_day: date | None = None,
+) -> str:
+    parts = [
+        f"owner={owner_chat_id}",
+        f"month={selected_month.strftime('%Y-%m')}",
+    ]
+    if project_filter:
+        parts.append(f"project={quote_plus(project_filter)}")
+    if employee_filter:
+        parts.append(f"employee={employee_filter}")
+    if selected_day is not None:
+        parts.append(f"day={selected_day.isoformat()}")
+    return "?" + "&".join(parts)
+
+
+def parse_workforce_worker_items(raw_form: dict[str, list[str]], employees: list) -> list[dict]:
+    employees_by_id = {employee.id: employee for employee in employees}
+    worker_items = []
+    for raw_employee_id in raw_form.get("employee_id", []):
+        try:
+            employee_id = int(str(raw_employee_id).strip())
+        except ValueError:
+            continue
+        employee = employees_by_id.get(employee_id)
+        if employee is None:
+            continue
+        raw_day_part = raw_form.get(f"day_part_{employee_id}", ["1"])[0]
+        day_part = 0.5 if str(raw_day_part).strip() == "0.5" else 1.0
+        worker_items.append({
+            "employee_id": employee.id,
+            "employee_name": employee.full_name,
+            "day_part": day_part,
+        })
+    if not worker_items:
+        raise ValueError("Выберите хотя бы одного сотрудника")
+    return worker_items
+
+
+def render_workforce_worker_picker(employees: list, selected_parts: dict[int, float] | None = None) -> str:
+    selected_parts = selected_parts or {}
+    if not employees:
+        return '<div class="contract-table-subtle" style="grid-column:1 / -1;">В справочнике пока нет активных сотрудников-строителей.</div>'
+    return f"""
+    <div class="workforce-worker-picker">
+      {''.join(
+          f'''
+          <div class="workforce-worker-option">
+            <label>
+              <input type="checkbox" name="employee_id" value="{employee.id}" {'checked' if employee.id in selected_parts else ''}>
+              <span>{escape(employee.full_name)}</span>
+            </label>
+            <select name="day_part_{employee.id}">
+              <option value="1" {'selected' if selected_parts.get(employee.id, 1.0) > 0.5 else ''}>Полный день</option>
+              <option value="0.5" {'selected' if selected_parts.get(employee.id, 1.0) <= 0.5 else ''}>Половина дня</option>
+            </select>
+          </div>
+          '''
+          for employee in employees
+      )}
+    </div>
+    """
+
+
+def render_workforce_report_form(
+    owner_chat_id: int,
+    selected_month: date,
+    project_options_list: list[tuple[str, str]],
+    builder_employees: list,
+    current_user: dict | None,
+    report=None,
+    project_filter: str = "",
+    employee_filter: int = 0,
+    selected_day: date | None = None,
+) -> str:
+    can_edit = has_permission(current_user, "workforce", "edit")
+    if not can_edit:
+        return ""
+    report_date = report.report_date if report is not None else (selected_day or datetime.now(VLADIVOSTOK_TZ).date())
+    selected_project = report.project_code if report is not None else (project_filter or (project_options_list[0][0] if project_options_list else ""))
+    project_options = "".join(
+        f'<option value="{escape(code)}"{" selected" if code == selected_project else ""}>{escape(label)}</option>'
+        for code, label in project_options_list
+    )
+    selected_parts = (
+        {int(worker["employee_id"]): float(worker["day_part"]) for worker in report.workers}
+        if report is not None
+        else {}
+    )
+    action = (
+        f"/workforce/reports/{report.id}/update{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)}"
+        if report is not None
+        else f"/workforce/reports/new{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)}"
+    )
+    submit_label = "Сохранить изменения" if report is not None else "Сохранить смену"
+    return f"""
+    <form class="form-grid" method="post" action="{action}">
+      <div class="field">
+        <label>Дата</label>
+        <input type="date" name="report_date" value="{report_date.isoformat()}" required>
+      </div>
+      <div class="field">
+        <label>Объект</label>
+        <select name="project_code" required>{project_options}</select>
+      </div>
+      <div class="field span-2">
+        <label>Комментарий</label>
+        <textarea name="comment" placeholder="Коротко, что делали на объекте">{escape(report.comment if report is not None else "")}</textarea>
+      </div>
+      {render_workforce_worker_picker(builder_employees, selected_parts)}
+      <button class="submit-btn" type="submit"{" disabled" if not builder_employees or not project_options_list else ""}>{submit_label}</button>
+    </form>
+    """
+
+
+def render_workforce_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    selected_month: date | None = None,
+    project_filter: str = "",
+    employee_filter: int = 0,
+    selected_day: date | None = None,
+    flash_message: str = "",
+    success: bool = False,
+) -> str:
+    storage.ensure_payroll_seed(owner_chat_id)
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    selected_month = selected_month or today.replace(day=1)
+    next_month = month_add(selected_month, 1)
+    entries = storage.list_expense_entries(owner_chat_id)
+    project_options_list = expense_project_options(storage, owner_chat_id, entries, include_legacy_entries=False)
+    project_labels = dict(project_options_list)
+    if project_filter and project_filter not in project_labels:
+        project_filter = ""
+    payroll_employees = storage.list_payroll_employees(owner_chat_id)
+    builder_employees = [
+        employee for employee in payroll_employees
+        if employee.is_active and (employee.employee_group or "admin") == "builders"
+    ]
+    all_builder_employees = [
+        employee for employee in payroll_employees
+        if (employee.employee_group or "admin") == "builders"
+    ]
+    employee_lookup = {employee.id: employee for employee in payroll_employees}
+    reports = storage.list_mobile_work_reports_for_period(owner_chat_id, selected_month, next_month)
+    reports = [
+        report for report in reports
+        if (not project_filter or report.project_code == project_filter)
+        and (selected_day is None or report.report_date == selected_day)
+        and (not employee_filter or any(int(worker["employee_id"]) == employee_filter for worker in report.workers))
+    ]
+    month_options = []
+    for offset in range(-2, 4):
+        month_value = month_add(selected_month, offset)
+        month_options.append(
+            f'<option value="{month_value.strftime("%Y-%m")}"{" selected" if month_value == selected_month else ""}>{escape(format_month_label(month_value))}</option>'
+        )
+    project_options = "".join(
+        f'<option value="{escape(code)}"{" selected" if code == project_filter else ""}>{escape(label)}</option>'
+        for code, label in project_options_list
+    )
+    reported_employee_ids = {
+        int(worker["employee_id"])
+        for report in storage.list_mobile_work_reports_for_period(owner_chat_id, selected_month, next_month)
+        for worker in report.workers
+    }
+    filter_employees = sorted(
+        [
+            employee for employee in payroll_employees
+            if (employee.employee_group or "admin") == "builders" or employee.id in reported_employee_ids
+        ],
+        key=lambda employee: (not employee.is_active, employee.full_name.casefold(), employee.id),
+    )
+    employee_options = "".join(
+        f'<option value="{employee.id}"{" selected" if employee.id == employee_filter else ""}>{escape(employee.full_name)}{" · уволен" if not employee.is_active else ""}</option>'
+        for employee in filter_employees
+    )
+
+    unique_people = {
+        int(worker["employee_id"])
+        for report in reports
+        for worker in report.workers
+    }
+    total_units = sum(float(worker["day_part"]) for report in reports for worker in report.workers)
+    active_days = {report.report_date for report in reports}
+    active_projects = {report.project_code or report.project_label for report in reports}
+    employee_summary: dict[int, dict] = {}
+    project_summary: dict[str, dict] = {}
+    for report in reports:
+        project_key = report.project_code or report.project_label or "Без объекта"
+        project_label = report.project_label or project_labels.get(report.project_code, "Без объекта")
+        project_bucket = project_summary.setdefault(project_key, {"label": project_label, "units": 0.0, "people": set(), "days": set()})
+        project_bucket["days"].add(report.report_date)
+        for worker in report.workers:
+            employee_id = int(worker["employee_id"])
+            day_part = float(worker["day_part"])
+            employee_name = employee_lookup.get(employee_id).full_name if employee_id in employee_lookup else worker["employee_name"]
+            employee_bucket = employee_summary.setdefault(employee_id, {"name": employee_name, "units": 0.0, "days": set(), "projects": set()})
+            employee_bucket["units"] += day_part
+            employee_bucket["days"].add(report.report_date)
+            employee_bucket["projects"].add(project_label)
+            project_bucket["units"] += day_part
+            project_bucket["people"].add(employee_id)
+
+    stats = f"""
+    <section class="stats">
+      <article class="card stat-card">
+        <div class="stat-label">Сотрудников</div>
+        <div class="stat-value">{len(unique_people)}</div>
+        <div class="stat-note">Работали в выбранной выборке</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Смен</div>
+        <div class="stat-value">{escape(workforce_units_label(total_units))}</div>
+        <div class="stat-note">Полные и половинные дни суммарно</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Объектов</div>
+        <div class="stat-value">{len(active_projects)}</div>
+        <div class="stat-note">Где фиксировалась работа</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Дней</div>
+        <div class="stat-value">{len(active_days)}</div>
+        <div class="stat-note">Дни с занесенными сменами</div>
+      </article>
+    </section>
+    """
+    filter_reset = (
+        f'<a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}">Сбросить</a>'
+        if project_filter or employee_filter or selected_day is not None else ""
+    )
+    add_form = ""
+    if has_permission(current_user, "workforce", "edit"):
+        add_form = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn">Добавить смену</span></summary>
+          <div class="status-popover align-right" style="min-width:min(760px, 92vw);">
+            {render_workforce_report_form(owner_chat_id, selected_month, project_options_list, builder_employees, current_user, project_filter=project_filter, employee_filter=employee_filter, selected_day=selected_day)}
+          </div>
+        </details>
+        """
+    report_rows = []
+    for index, report in enumerate(reports, start=1):
+        worker_rows = "".join(
+            f'<li>{escape(employee_lookup.get(int(worker["employee_id"])).full_name if int(worker["employee_id"]) in employee_lookup else worker["employee_name"])} <span class="contract-table-subtle" style="display:inline;">· {escape(workforce_day_part_label(float(worker["day_part"])))}</span></li>'
+            for worker in report.workers
+        )
+        report_units = sum(float(worker["day_part"]) for worker in report.workers)
+        edit_control = ""
+        if has_permission(current_user, "workforce", "edit"):
+            edit_control = f"""
+            <details class="status-menu">
+              <summary><span class="secondary-btn mini">Изменить</span></summary>
+              <div class="status-popover align-right" style="min-width:min(760px, 92vw);">
+                {render_workforce_report_form(owner_chat_id, selected_month, project_options_list, all_builder_employees, current_user, report, project_filter, employee_filter, selected_day)}
+                <form method="post" action="/workforce/reports/{report.id}/delete{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)}" onsubmit="return confirm('Удалить смену из учета рабочей силы?');" style="margin-top:12px;">
+                  <button class="secondary-btn danger" type="submit">Удалить смену</button>
+                </form>
+              </div>
+            </details>
+            """
+        report_rows.append(
+            f"""
+            <tr>
+              <td class="nowrap">{index}</td>
+              <td>
+                <div class="timeline-title">{escape(report.project_label or "Без объекта")}</div>
+                <ol class="workforce-worker-list">{worker_rows}</ol>
+                {f'<div class="contract-table-subtle" style="white-space:pre-line;">{escape(report.comment)}</div>' if report.comment else ''}
+              </td>
+              <td class="nowrap">{format_date(report.report_date)}</td>
+              <td class="nowrap">{len(report.workers)}</td>
+              <td class="nowrap"><span class="payroll-amount">{escape(workforce_units_label(report_units))}</span></td>
+              <td>{escape(report.created_by_name or "Автор неизвестен")}<div class="contract-table-subtle">{format_date(report.created_at.astimezone(VLADIVOSTOK_TZ).date() if report.created_at.tzinfo else report.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div></td>
+              <td>{edit_control}</td>
+            </tr>
+            """
+        )
+    rows_html = "".join(report_rows) or '<tr><td colspan="7">Смен по выбранным условиям пока нет.</td></tr>'
+    employee_rows = "".join(
+        f"""
+        <tr>
+          <td><div class="timeline-title">{escape(item["name"])}</div></td>
+          <td class="nowrap">{escape(workforce_units_label(float(item["units"])))}</td>
+          <td class="nowrap">{len(item["days"])}</td>
+          <td>{escape(", ".join(sorted(item["projects"])) or "—")}</td>
+        </tr>
+        """
+        for _employee_id, item in sorted(employee_summary.items(), key=lambda pair: (-float(pair[1]["units"]), pair[1]["name"].casefold()))
+    ) or '<tr><td colspan="4">Нет данных по сотрудникам.</td></tr>'
+    project_rows = "".join(
+        f"""
+        <tr>
+          <td><div class="timeline-title">{escape(item["label"])}</div></td>
+          <td class="nowrap">{escape(workforce_units_label(float(item["units"])))}</td>
+          <td class="nowrap">{len(item["people"])}</td>
+          <td class="nowrap">{len(item["days"])}</td>
+        </tr>
+        """
+        for _project_key, item in sorted(project_summary.items(), key=lambda pair: (-float(pair[1]["units"]), pair[1]["label"].casefold()))
+    ) or '<tr><td colspan="4">Нет данных по объектам.</td></tr>'
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    return f"""
+    {stats}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Журнал смен</h2>
+          <div class="panel-sub">ПК-реестр смен из мобильного ввода касс с фильтрами и редактированием.</div>
+        </div>
+        <div class="action-row" style="gap:10px;">{add_form}</div>
+      </div>
+      <form class="form-grid" method="get" action="/workforce" style="margin-bottom:18px;">
+        <input type="hidden" name="owner" value="{owner_chat_id}">
+        <div class="field">
+          <label>Месяц</label>
+          <select name="month">{''.join(month_options)}</select>
+        </div>
+        <div class="field">
+          <label>Объект</label>
+          <select name="project">
+            <option value="">Все объекты</option>
+            {project_options}
+          </select>
+        </div>
+        <div class="field">
+          <label>Сотрудник</label>
+          <select name="employee">
+            <option value="">Все сотрудники</option>
+            {employee_options}
+          </select>
+        </div>
+        <div class="field">
+          <label>День</label>
+          <input type="date" name="day" value="{selected_day.isoformat() if selected_day else ""}">
+        </div>
+        <div class="action-row" style="align-items:flex-end;">
+          <button class="secondary-btn mini" type="submit">Показать</button>
+          {filter_reset}
+        </div>
+      </form>
+      {flash_html}
+      <table class="table contract-table workforce-table">
+        <thead>
+          <tr>
+            <th class="nowrap">№</th>
+            <th>Объект / сотрудники</th>
+            <th class="nowrap">Дата</th>
+            <th class="nowrap">Людей</th>
+            <th class="nowrap">Смен</th>
+            <th>Добавил</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </section>
+    <div class="workforce-summary-grid">
+      <section class="card panel">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title">По сотрудникам</h2>
+            <div class="panel-sub">Сумма смен, рабочие дни и объекты.</div>
+          </div>
+        </div>
+        <table class="table contract-table">
+          <thead><tr><th>Сотрудник</th><th class="nowrap">Смен</th><th class="nowrap">Дней</th><th>Объекты</th></tr></thead>
+          <tbody>{employee_rows}</tbody>
+        </table>
+      </section>
+      <section class="card panel">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title">По объектам</h2>
+            <div class="panel-sub">Нагрузка рабочей силы по объектам.</div>
+          </div>
+        </div>
+        <table class="table contract-table">
+          <thead><tr><th>Объект</th><th class="nowrap">Смен</th><th class="nowrap">Людей</th><th class="nowrap">Дней</th></tr></thead>
+          <tbody>{project_rows}</tbody>
+        </table>
+      </section>
+    </div>
     """
 
 
@@ -21893,6 +22344,130 @@ self.addEventListener("notificationclick", (event) => {
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
+    if path == "/workforce/reports/new" and method == "POST":
+        denied = guard("workforce", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        selected_month = parse_month_key(query.get("month", [""])[0]) or datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+        project_filter = query.get("project", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        try:
+            selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        except ValueError:
+            selected_day = None
+        try:
+            employee_filter = int(query.get("employee", ["0"])[0] or "0")
+        except ValueError:
+            employee_filter = 0
+        raw_form = read_post_data_multi(environ)
+        form = {key: values[0] for key, values in raw_form.items()}
+        try:
+            report_date_raw = form.get("report_date", "").strip()
+            report_date = parse_date(report_date_raw) if report_date_raw else None
+            if report_date is None:
+                raise ValueError("Укажите дату смены")
+            entries = storage.list_expense_entries(current_owner)
+            project_options_list = expense_project_options(storage, current_owner, entries, include_legacy_entries=False)
+            project_labels = dict(project_options_list)
+            project_code = form.get("project_code", "").strip()
+            if project_code not in project_labels:
+                raise ValueError("Выберите объект")
+            builder_employees = [
+                employee for employee in storage.list_payroll_employees(current_owner)
+                if employee.is_active and (employee.employee_group or "admin") == "builders"
+            ]
+            worker_items = parse_workforce_worker_items(raw_form, builder_employees)
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            storage.add_mobile_work_report(
+                current_owner,
+                report_date,
+                project_code,
+                project_labels[project_code],
+                worker_items,
+                form.get("comment", "").strip(),
+                (current_user or {}).get("id"),
+                actor_name,
+            )
+            target_month = report_date.replace(day=1)
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, target_month, project_filter, employee_filter, selected_day)}&ok=1&flash={quote_plus('Смена добавлена.')}")
+        except Exception as exc:
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&flash={quote_plus(f'Не удалось добавить смену: {exc}')}")
+
+    if path.startswith("/workforce/reports/") and path.endswith("/update") and method == "POST":
+        denied = guard("workforce", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        selected_month = parse_month_key(query.get("month", [""])[0]) or datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+        project_filter = query.get("project", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        try:
+            selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        except ValueError:
+            selected_day = None
+        try:
+            employee_filter = int(query.get("employee", ["0"])[0] or "0")
+        except ValueError:
+            employee_filter = 0
+        raw_form = read_post_data_multi(environ)
+        form = {key: values[0] for key, values in raw_form.items()}
+        try:
+            report_id = int(path.split("/")[3])
+            report_date_raw = form.get("report_date", "").strip()
+            report_date = parse_date(report_date_raw) if report_date_raw else None
+            if report_date is None:
+                raise ValueError("Укажите дату смены")
+            entries = storage.list_expense_entries(current_owner)
+            project_options_list = expense_project_options(storage, current_owner, entries, include_legacy_entries=False)
+            project_labels = dict(project_options_list)
+            project_code = form.get("project_code", "").strip()
+            if project_code not in project_labels:
+                raise ValueError("Выберите объект")
+            builder_employees = [
+                employee for employee in storage.list_payroll_employees(current_owner)
+                if (employee.employee_group or "admin") == "builders"
+            ]
+            worker_items = parse_workforce_worker_items(raw_form, builder_employees)
+            if not storage.update_mobile_work_report(
+                current_owner,
+                report_id,
+                report_date,
+                project_code,
+                project_labels[project_code],
+                worker_items,
+                form.get("comment", "").strip(),
+            ):
+                raise ValueError("Смена не найдена")
+            target_month = report_date.replace(day=1)
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, target_month, project_filter, employee_filter, selected_day)}&ok=1&flash={quote_plus('Смена обновлена.')}")
+        except Exception as exc:
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&flash={quote_plus(f'Не удалось обновить смену: {exc}')}")
+
+    if path.startswith("/workforce/reports/") and path.endswith("/delete") and method == "POST":
+        denied = guard("workforce", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        selected_month = parse_month_key(query.get("month", [""])[0]) or datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+        project_filter = query.get("project", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        try:
+            selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        except ValueError:
+            selected_day = None
+        try:
+            employee_filter = int(query.get("employee", ["0"])[0] or "0")
+        except ValueError:
+            employee_filter = 0
+        try:
+            report_id = int(path.split("/")[3])
+            if storage.delete_mobile_work_report(current_owner, report_id) is None:
+                raise ValueError("Смена не найдена")
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&ok=1&flash={quote_plus('Смена удалена.')}")
+        except Exception as exc:
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&flash={quote_plus(f'Не удалось удалить смену: {exc}')}")
+
     if path == "/payroll/employees/new" and method == "POST":
         denied = guard("payroll", "edit")
         if denied:
@@ -23608,6 +24183,39 @@ self.addEventListener("notificationclick", (event) => {
         selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0])
         body = render_payroll_section(storage, current_owner, current_user, selected_month)
         html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/workforce":
+        denied = guard("workforce", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        selected_month = parse_month_key(query.get("month", [""])[0])
+        project_filter = query.get("project", [""])[0].strip()
+        try:
+            employee_filter = int(query.get("employee", ["0"])[0] or "0")
+        except ValueError:
+            employee_filter = 0
+        selected_day_raw = query.get("day", [""])[0].strip()
+        try:
+            selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        except ValueError:
+            selected_day = None
+        flash_message = query.get("flash", [""])[0].strip()
+        success = query.get("ok", ["0"])[0] == "1"
+        body = render_workforce_section(
+            storage,
+            current_owner,
+            current_user,
+            selected_month,
+            project_filter,
+            employee_filter,
+            selected_day,
+            flash_message,
+            success,
+        )
+        html = layout("Рабочая сила", body, owners, current_owner, "workforce", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
