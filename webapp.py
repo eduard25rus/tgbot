@@ -14044,7 +14044,11 @@ def render_cashoperations_body(
     )
     work_reports = storage.list_mobile_work_reports(owner_chat_id, work_report_date) if can_view_work_reports else []
     work_month_reports = storage.list_mobile_work_reports_for_period(owner_chat_id, work_month, next_work_month) if can_view_work_reports else []
-    work_total_people = sum(len(report.workers) for report in work_reports)
+    work_total_people = len({
+        int(worker["employee_id"])
+        for report in work_reports
+        for worker in report.workers
+    })
     work_total_units = sum(sum(float(worker["day_part"]) for worker in report.workers) for report in work_reports)
     def work_units_label(value: float) -> str:
         return str(int(value)) if abs(value - int(value)) < 0.001 else str(value).replace(".", ",")
