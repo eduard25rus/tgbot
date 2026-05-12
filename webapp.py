@@ -14059,6 +14059,12 @@ def render_cashoperations_body(
             f"&work_month={first_day.strftime('%Y-%m')}&work_date={first_day.isoformat()}"
             f"{'&work_stats=1' if stats else ''}"
         )
+    def work_day_url(day_value: date) -> str:
+        month_value = day_value.replace(day=1)
+        return (
+            f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}"
+            f"&work_month={month_value.strftime('%Y-%m')}&work_date={day_value.isoformat()}"
+        )
     work_month_people = {
         int(worker["employee_id"])
         for report in work_month_reports
@@ -14082,7 +14088,7 @@ def render_cashoperations_body(
             day_stats["units"] += float(worker["day_part"])
     def work_stats_day_row(day_value: date, stats: dict) -> str:
         return f"""
-        <article class="cash-mobile-op">
+        <a class="cash-mobile-op cash-work-stat-day" href="{escape(work_day_url(day_value), quote=True)}">
           <div class="cash-mobile-op-main">
             <span class="cash-mobile-op-title"><strong>{escape(format_date(day_value))}</strong></span>
             <span class="cash-mobile-op-comment">{len(stats["people"])} чел. · {len(stats["projects"])} объект.</span>
@@ -14091,7 +14097,7 @@ def render_cashoperations_body(
             <b class="income">{escape(work_units_label(float(stats["units"])))}</b>
             <span class="cash-mobile-op-receipt">смен</span>
           </div>
-        </article>
+        </a>
         """
     work_stats_rows = "".join(
         work_stats_day_row(day_value, stats)
@@ -14194,11 +14200,13 @@ def render_cashoperations_body(
           </form>
           {'<div class="cash-mobile-sub" style="margin-top:10px;">В справочнике пока нет активных сотрудников-работяг.</div>' if not builder_employees else ''}
         </section>
-        <section class="cash-mobile-panel{" is-hidden" if not show_work_stats else ""}" data-work-stats-panel data-work-overview>
+        <section class="cash-mobile-panel{" is-hidden" if not show_work_stats else ""}" data-work-stats-panel>
+          <button class="cash-work-back" type="button" data-work-stats-back>Назад к работе</button>
           <div class="cash-mobile-section-head"><h2>Статистика</h2></div>
           <form class="cash-mobile-date-filter cash-mobile-month-filter" method="get" action="/cashoperations">
             <input type="hidden" name="screen" value="work">
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <input type="hidden" name="work_date" value="{work_report_date.isoformat()}">
             <input type="hidden" name="work_stats" value="1">
             <label>Месяц
               <span class="cash-date-input-wrap">
@@ -14745,6 +14753,21 @@ def render_cashoperations_body(
       .cash-work-month-card {{
         touch-action: pan-y;
       }}
+      .cash-work-back {{
+        width: 100%;
+        min-height: 44px;
+        margin-bottom: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--muted);
+        font: inherit;
+        font-size: 15px;
+        font-weight: 800;
+      }}
+      .cash-work-stat-day {{
+        text-decoration: none;
+      }}
       .cash-work-row-remove {{
         display: inline-grid;
         place-items: center;
@@ -15172,6 +15195,7 @@ def render_cashoperations_body(
         const workAddWorker = document.querySelector("[data-work-add-worker]");
         const workToggleForm = document.querySelector("[data-work-toggle-form]");
         const workToggleStats = document.querySelector("[data-work-toggle-stats]");
+        const workStatsBack = document.querySelector("[data-work-stats-back]");
         const workFormPanel = document.querySelector("[data-work-form-panel]");
         const workStatsPanel = document.querySelector("[data-work-stats-panel]");
         const workFormTitle = document.querySelector("[data-work-form-title]");
@@ -15424,6 +15448,13 @@ def render_cashoperations_body(
           showEditbar(true);
           window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
+        function closeWorkStats() {{
+          if (workScreen) workScreen.classList.remove("is-stats-mode");
+          if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
+          if (workFormPanel) workFormPanel.classList.add("is-hidden");
+          showEditbar(false);
+          show("work");
+        }}
         function editWorkReport(card) {{
           if (!workForm) return;
           clearNotice();
@@ -15490,6 +15521,7 @@ def render_cashoperations_body(
           showEditbar(false);
           if (workStatsPanel) workStatsPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
         }});
+        workStatsBack && workStatsBack.addEventListener("click", closeWorkStats);
         if (workMonthCard) {{
           let workSwipeStartX = 0;
           let workSwipeStartY = 0;
@@ -15603,6 +15635,10 @@ def render_cashoperations_body(
             if (button.dataset.cashNewIncome) {{
               resetExpenseForm();
               resetIncomeForm();
+            }}
+            if (button.dataset.cashScreen === "work" && workScreen && workScreen.classList.contains("is-stats-mode")) {{
+              closeWorkStats();
+              return;
             }}
             if (!button.dataset.cashNewExpense && !button.dataset.cashNewIncome && refreshIfStale(button.dataset.cashScreen, 300000)) return;
             if (button.dataset.cashScreen !== "expense" && button.dataset.cashScreen !== "income") showEditbar(false);
