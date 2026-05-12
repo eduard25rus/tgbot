@@ -315,6 +315,21 @@ class PayrollRow:
 
 
 @dataclass
+class MobileWorkReport:
+    id: int
+    owner_chat_id: int
+    report_date: date
+    project_code: str
+    project_label: str
+    comment: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+    updated_at: datetime
+    workers: list[dict]
+
+
+@dataclass
 class PayableEntry:
     id: int
     owner_chat_id: int
@@ -902,6 +917,31 @@ class Storage:
                     FOREIGN KEY(employee_id) REFERENCES payroll_employees(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS mobile_work_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    report_date TEXT NOT NULL,
+                    project_code TEXT NOT NULL DEFAULT '',
+                    project_label TEXT NOT NULL DEFAULT '',
+                    comment TEXT NOT NULL DEFAULT '',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    deleted_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS mobile_work_report_workers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    report_id INTEGER NOT NULL,
+                    employee_id INTEGER NOT NULL,
+                    employee_name TEXT NOT NULL DEFAULT '',
+                    day_part REAL NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(report_id) REFERENCES mobile_work_reports(id) ON DELETE CASCADE,
+                    FOREIGN KEY(employee_id) REFERENCES payroll_employees(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS payables (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_chat_id INTEGER NOT NULL,
@@ -1075,6 +1115,7 @@ class Storage:
                     can_receive_push INTEGER NOT NULL DEFAULT 0,
                     push_detail_mode TEXT NOT NULL DEFAULT 'safe',
                     can_view_letters INTEGER NOT NULL DEFAULT 0,
+                    can_view_work_reports INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
                 );
@@ -1155,6 +1196,27 @@ class Storage:
                            OR LOWER(COALESCE(full_name, '')) LIKE '%эдуард%'
                            OR LOWER(COALESCE(full_name, '')) LIKE '%шевченко%'
                            OR LOWER(COALESCE(full_name, '')) LIKE '%shevchenko%'
+                    )
+                    """
+                )
+            if "can_view_work_reports" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_view_work_reports INTEGER NOT NULL DEFAULT 0")
+                conn.execute(
+                    """
+                    UPDATE mobile_cash_access
+                    SET can_view_work_reports = 1
+                    WHERE user_id IN (
+                        SELECT id
+                        FROM web_users
+                        WHERE COALESCE(is_super_admin, 0) = 1
+                           OR LOWER(COALESCE(email, '')) LIKE '%eduard%'
+                           OR LOWER(COALESCE(email, '')) LIKE '%denis%'
+                           OR LOWER(COALESCE(email, '')) LIKE '%ikram%'
+                           OR LOWER(COALESCE(full_name, '')) LIKE '%эдуард%'
+                           OR LOWER(COALESCE(full_name, '')) LIKE '%денис%'
+                           OR LOWER(COALESCE(full_name, '')) LIKE '%икрам%'
+                           OR LOWER(COALESCE(full_name, '')) LIKE '%учайкин%'
+                           OR LOWER(COALESCE(full_name, '')) LIKE '%алимов%'
                     )
                     """
                 )
@@ -1791,7 +1853,8 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
-                       can_reconcile, can_receive_push, push_detail_mode, can_view_letters, updated_at
+                       can_reconcile, can_receive_push, push_detail_mode, can_view_letters,
+                       can_view_work_reports, updated_at
                 FROM mobile_cash_access
                 WHERE owner_chat_id = ? AND user_id IN (
                     SELECT id FROM web_users WHERE owner_chat_id = ?
@@ -1817,7 +1880,8 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
-                       can_reconcile, can_receive_push, push_detail_mode, can_view_letters, updated_at
+                       can_reconcile, can_receive_push, push_detail_mode, can_view_letters,
+                       can_view_work_reports, updated_at
                 FROM mobile_cash_access
                 WHERE user_id = ?
                 """,
@@ -1843,6 +1907,7 @@ class Storage:
         push_detail_mode: str = "safe",
         can_view_letters: bool = False,
         can_modify_other_cashboxes: bool = False,
+        can_view_work_reports: bool = False,
     ) -> bool:
         user = self.get_web_user_by_id(user_id)
         if user is None or int(user["owner_chat_id"]) != owner_chat_id:
@@ -1877,9 +1942,10 @@ class Storage:
                     user_id, owner_chat_id, enabled, role, default_cashbox_code,
                     allowed_cashbox_codes, preview_login, preview_password_hash,
                     can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
-                    can_reconcile, can_receive_push, push_detail_mode, can_view_letters, updated_at
+                    can_reconcile, can_receive_push, push_detail_mode, can_view_letters,
+                    can_view_work_reports, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     owner_chat_id = excluded.owner_chat_id,
                     enabled = excluded.enabled,
@@ -1895,6 +1961,7 @@ class Storage:
                     can_receive_push = excluded.can_receive_push,
                     push_detail_mode = excluded.push_detail_mode,
                     can_view_letters = excluded.can_view_letters,
+                    can_view_work_reports = excluded.can_view_work_reports,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1913,6 +1980,7 @@ class Storage:
                     1 if can_receive_push else 0,
                     push_detail_mode,
                     1 if can_view_letters else 0,
+                    1 if can_view_work_reports else 0,
                     datetime.utcnow().isoformat(),
                 ),
             )
@@ -5011,11 +5079,20 @@ class Storage:
                 SELECT id, owner_chat_id, full_name, role_title, employee_group, is_active, birth_date, terminated_date, created_at
                 FROM payroll_employees
                 WHERE owner_chat_id = ?
-                ORDER BY employee_group ASC, is_active DESC, id ASC
+                ORDER BY employee_group ASC, is_active DESC, LOWER(full_name) ASC, id ASC
                 """,
                 (owner_chat_id,),
             ).fetchall()
-        return [self._payroll_employee_from_row(row) for row in rows]
+        employees = [self._payroll_employee_from_row(row) for row in rows]
+        return sorted(
+            employees,
+            key=lambda employee: (
+                employee.employee_group,
+                not employee.is_active,
+                employee.full_name.casefold(),
+                employee.id,
+            ),
+        )
 
     def add_payroll_employee(self, owner_chat_id: int, full_name: str, role_title: str, employee_group: str = "admin", birth_date: Optional[date] = None) -> int:
         with self.connection() as conn:
@@ -5330,6 +5407,123 @@ class Storage:
                 return False
             self._upsert_payroll_entry(conn, owner_chat_id, employee_id, payroll_month, updated_field="note", updated_value=note.strip())
             return True
+
+    def add_mobile_work_report(
+        self,
+        owner_chat_id: int,
+        report_date: date,
+        project_code: str,
+        project_label: str,
+        worker_items: list[dict],
+        comment: str,
+        created_by_user_id: int | None,
+        created_by_name: str,
+    ) -> int:
+        cleaned_workers = []
+        seen: set[int] = set()
+        for item in worker_items:
+            employee_id = int(item["employee_id"])
+            if employee_id in seen:
+                continue
+            seen.add(employee_id)
+            day_part = 0.5 if float(item.get("day_part", 1)) <= 0.5 else 1.0
+            cleaned_workers.append({
+                "employee_id": employee_id,
+                "employee_name": str(item.get("employee_name", "")).strip(),
+                "day_part": day_part,
+            })
+        if not cleaned_workers:
+            raise ValueError("Добавьте хотя бы одного сотрудника")
+        with self.connection() as conn:
+            now = datetime.utcnow().isoformat()
+            cursor = conn.execute(
+                """
+                INSERT INTO mobile_work_reports (
+                    owner_chat_id, report_date, project_code, project_label, comment,
+                    created_by_user_id, created_by_name, deleted_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                """,
+                (
+                    owner_chat_id,
+                    report_date.strftime(DATE_FMT),
+                    project_code.strip(),
+                    project_label.strip(),
+                    comment.strip(),
+                    created_by_user_id,
+                    created_by_name.strip(),
+                    now,
+                    now,
+                ),
+            )
+            report_id = int(cursor.lastrowid)
+            for item in cleaned_workers:
+                conn.execute(
+                    """
+                    INSERT INTO mobile_work_report_workers (
+                        report_id, employee_id, employee_name, day_part, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (report_id, item["employee_id"], item["employee_name"], item["day_part"], now),
+                )
+            return report_id
+
+    def list_mobile_work_reports(self, owner_chat_id: int, report_date: date | None = None) -> list[MobileWorkReport]:
+        where = "owner_chat_id = ? AND deleted_at IS NULL"
+        params: list[object] = [owner_chat_id]
+        if report_date is not None:
+            where += " AND report_date = ?"
+            params.append(report_date.strftime(DATE_FMT))
+        with self.connection() as conn:
+            report_rows = conn.execute(
+                f"""
+                SELECT id, owner_chat_id, report_date, project_code, project_label, comment,
+                       created_by_user_id, created_by_name, created_at, updated_at
+                FROM mobile_work_reports
+                WHERE {where}
+                ORDER BY report_date DESC, created_at DESC, id DESC
+                """,
+                params,
+            ).fetchall()
+            report_ids = [int(row["id"]) for row in report_rows]
+            worker_rows = []
+            if report_ids:
+                placeholders = ",".join("?" for _ in report_ids)
+                worker_rows = conn.execute(
+                    f"""
+                    SELECT id, report_id, employee_id, employee_name, day_part, created_at
+                    FROM mobile_work_report_workers
+                    WHERE report_id IN ({placeholders})
+                    ORDER BY id ASC
+                    """,
+                    report_ids,
+                ).fetchall()
+        workers_by_report: dict[int, list[dict]] = {}
+        for row in worker_rows:
+            workers_by_report.setdefault(int(row["report_id"]), []).append({
+                "id": int(row["id"]),
+                "employee_id": int(row["employee_id"]),
+                "employee_name": row["employee_name"],
+                "day_part": float(row["day_part"]),
+                "created_at": datetime.fromisoformat(row["created_at"]),
+            })
+        return [
+            MobileWorkReport(
+                id=int(row["id"]),
+                owner_chat_id=int(row["owner_chat_id"]),
+                report_date=date.fromisoformat(row["report_date"]),
+                project_code=row["project_code"],
+                project_label=row["project_label"],
+                comment=row["comment"],
+                created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+                created_by_name=row["created_by_name"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+                workers=workers_by_report.get(int(row["id"]), []),
+            )
+            for row in report_rows
+        ]
 
     @staticmethod
     def _payroll_employee_from_row(row: sqlite3.Row) -> PayrollEmployee:
@@ -7387,6 +7581,7 @@ class Storage:
                 "can_receive_push": False,
                 "push_detail_mode": "safe",
                 "can_view_letters": True,
+                "can_view_work_reports": True,
                 "updated_at": "",
             }
         if "денис" in login_name or "denis" in login_name or "учайкин" in login_name:
@@ -7406,6 +7601,7 @@ class Storage:
                 "can_receive_push": False,
                 "push_detail_mode": "safe",
                 "can_view_letters": False,
+                "can_view_work_reports": True,
                 "updated_at": "",
             }
         if "икрам" in login_name or "ikram" in login_name or "алимов" in login_name:
@@ -7425,6 +7621,7 @@ class Storage:
                 "can_receive_push": False,
                 "push_detail_mode": "safe",
                 "can_view_letters": False,
+                "can_view_work_reports": True,
                 "updated_at": "",
             }
         return {
@@ -7443,6 +7640,7 @@ class Storage:
             "can_receive_push": False,
             "push_detail_mode": "safe",
             "can_view_letters": False,
+            "can_view_work_reports": False,
             "updated_at": "",
         }
 
@@ -7463,6 +7661,7 @@ class Storage:
             "can_receive_push": bool(row["can_receive_push"]) if "can_receive_push" in row.keys() else False,
             "push_detail_mode": row["push_detail_mode"] if "push_detail_mode" in row.keys() and row["push_detail_mode"] in {"safe", "amount"} else "safe",
             "can_view_letters": bool(row["can_view_letters"]) if "can_view_letters" in row.keys() else False,
+            "can_view_work_reports": bool(row["can_view_work_reports"]) if "can_view_work_reports" in row.keys() else False,
             "updated_at": row["updated_at"],
         }
 

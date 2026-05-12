@@ -13232,6 +13232,7 @@ def render_cashoperations_body(
     success: bool = False,
     selected_letter_object_filter: str = "",
     initial_screen: str = "home",
+    selected_work_report_date: date | None = None,
 ) -> str:
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     cashbox_labels = {item["code"]: item["label"] for item in cashboxes}
@@ -13267,6 +13268,11 @@ def render_cashoperations_body(
         f'<option value="{code}">{escape(label)}</option>'
         for code, label in project_options_list
     )
+    work_project_options = "".join(
+        f'<option value="{code}">{escape(label)}</option>'
+        for code, label in project_options_list
+        if code != "admin"
+    ) or project_options
     category_options = "".join(
         f'<option value="{code}">{escape(label)}</option>'
         for code, label in category_options_list
@@ -13461,6 +13467,7 @@ def render_cashoperations_body(
         for kind, entry in operations
     ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
     can_view_letters = bool(cash_access.get("can_view_letters"))
+    can_view_work_reports = bool(cash_access.get("can_view_work_reports"))
     letters_screen_html = ""
     letters_nav_html = ""
     if can_view_letters:
@@ -13542,11 +13549,101 @@ def render_cashoperations_body(
         """
         letters_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="letters">Письма</button>'
 
+    work_report_date = selected_work_report_date or today
+    builder_employees = [
+        employee for employee in payroll_employees
+        if (employee.employee_group or "admin") == "builders"
+    ]
+    builder_options = '<option value="">Выберите сотрудника</option>' + "".join(
+        f'<option value="{employee.id}">{escape(employee.full_name)}</option>'
+        for employee in builder_employees
+    )
+    work_reports = storage.list_mobile_work_reports(owner_chat_id, work_report_date) if can_view_work_reports else []
+    work_total_people = sum(len(report.workers) for report in work_reports)
+    work_total_units = sum(sum(float(worker["day_part"]) for worker in report.workers) for report in work_reports)
+    def work_units_label(value: float) -> str:
+        return str(int(value)) if abs(value - int(value)) < 0.001 else str(value).replace(".", ",")
+    def work_day_part_label(value: float) -> str:
+        return "половина дня" if float(value) <= 0.5 else "полный день"
+    def work_report_card(report) -> str:
+        workers = report.workers
+        worker_names = ", ".join(
+            f'{worker["employee_name"]} ({work_day_part_label(float(worker["day_part"]))})'
+            for worker in workers
+        ) or "Сотрудники не указаны"
+        report_units = sum(float(worker["day_part"]) for worker in workers)
+        comment_html = f'<span class="cash-mobile-op-comment">{escape(report.comment)}</span>' if report.comment else ""
+        return f"""
+        <article class="cash-mobile-op cash-work-report-card">
+          <div class="cash-mobile-op-main">
+            <span class="cash-mobile-op-title"><strong>{escape(report.project_label or "Без объекта")}</strong><span> · {len(workers)} чел.</span></span>
+            <span class="cash-mobile-op-comment">{escape(worker_names)}</span>
+            {comment_html}
+          </div>
+          <div class="cash-mobile-op-side">
+            <b class="income">{escape(work_units_label(report_units))}</b>
+            <span class="cash-mobile-op-receipt">смен</span>
+          </div>
+        </article>
+        """
+    work_report_rows = "".join(work_report_card(report) for report in work_reports) or '<div class="cash-mobile-empty">За этот день отчетов пока нет.</div>'
+    work_report_screen = '<section class="cash-mobile-panel"><h2>Работа недоступна</h2><div class="cash-mobile-sub">Администратор должен включить доступ к отчетам о работе.</div></section>'
+    if can_view_work_reports:
+        work_report_screen = f"""
+        <section class="cash-mobile-panel">
+          <div class="cash-mobile-section-head"><h2>Отчеты о работе</h2></div>
+          <form class="cash-mobile-form" method="post" action="/cashoperations/work-report">
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <label>Дата
+              <input type="date" name="report_date" value="{work_report_date.isoformat()}" required>
+            </label>
+            <label>Объект
+              <select name="project_code" required>{work_project_options}</select>
+            </label>
+            <div class="cash-work-workers" data-work-workers>
+              <div class="cash-work-worker-row">
+                <label>Сотрудник
+                  <select name="employee_id" required>{builder_options}</select>
+                </label>
+                <label>День
+                  <select name="day_part">
+                    <option value="1" selected>Полный день</option>
+                    <option value="0.5">Половина дня</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <button class="secondary" type="button" data-work-add-worker{" disabled" if not builder_employees else ""}>Добавить сотрудника</button>
+            <label>Комментарий
+              <textarea name="comment" placeholder="Коротко, что делали на объекте"></textarea>
+            </label>
+            <button type="submit"{" disabled" if not builder_employees else ""}>Сохранить отчет</button>
+          </form>
+          {'<div class="cash-mobile-sub" style="margin-top:10px;">В справочнике пока нет активных сотрудников-работяг.</div>' if not builder_employees else ''}
+        </section>
+        <section class="cash-mobile-panel">
+          <div class="cash-mobile-section-head"><h2>{escape(format_date(work_report_date))}</h2></div>
+          <form class="cash-mobile-date-filter" method="get" action="/cashoperations">
+            <input type="hidden" name="screen" value="work">
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <label>День
+              <input type="date" name="work_date" value="{work_report_date.isoformat()}">
+            </label>
+            <button type="submit">Показать</button>
+          </form>
+          {work_report_rows}
+          <div class="cash-work-summary">
+            <strong>Итого за день</strong>
+            <span>{work_total_people} чел. · {escape(work_units_label(work_total_units))} смен</span>
+          </div>
+        </section>
+        """
+
     cashbox_tabs = "".join(
         f'<a class="cash-mobile-tab{" active" if item["code"] == selected_cashbox else ""}" href="/cashoperations?cashbox={item["code"]}">{escape(item["label"])}</a>'
         for item in allowed_cashboxes
     )
-    cashbox_tabs_extra_class = " is-hidden" if initial_screen == "letters" else ""
+    cashbox_tabs_extra_class = " is-hidden" if initial_screen in {"letters", "work"} else ""
     flash_html = f'<div class="cash-mobile-flash{" ok" if success else ""}" data-cash-flash>{escape(flash_message)}</div>' if flash_message else ""
     edit_back_html = '<div class="cash-mobile-editbar is-hidden" data-cash-editbar><button type="button" data-cash-edit-back>Назад</button></div>'
     warnings = []
@@ -13669,7 +13766,7 @@ def render_cashoperations_body(
     """ if can_edit else ""
     cash_action_buttons += """
           <button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>
-          <button class="cash-mobile-action" type="button" data-cash-screen="reconcile">Сверить кассу</button>
+          <button class="cash-mobile-action" type="button" data-cash-screen="work">Отчеты о работе</button>
     """
 
     reconcile_screen = (
@@ -14022,6 +14119,60 @@ def render_cashoperations_body(
         font-weight: 800;
         white-space: nowrap;
       }}
+      .cash-work-workers {{
+        display: grid;
+        gap: 10px;
+      }}
+      .cash-work-worker-row {{
+        display: grid;
+        grid-template-columns: 1fr 128px;
+        gap: 8px;
+        align-items: end;
+      }}
+      .cash-mobile-date-filter {{
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: end;
+        margin: 8px 0 10px;
+      }}
+      .cash-mobile-date-filter label {{
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }}
+      .cash-mobile-date-filter input {{
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px 10px;
+        background: #fff;
+        color: var(--ink);
+        font: inherit;
+        font-size: 16px;
+      }}
+      .cash-mobile-date-filter button {{
+        min-height: 42px;
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #186844;
+        color: #fff;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 800;
+      }}
+      .cash-work-summary {{
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: 8px;
+        background: #e3f2e9;
+        color: #186844;
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 13px;
+      }}
       .cash-mobile-empty {{
         color: var(--muted);
         padding: 14px 0 4px;
@@ -14138,6 +14289,8 @@ def render_cashoperations_body(
         .cash-mobile-metrics {{ grid-template-columns: 1fr; }}
         .cash-mobile-actions {{ grid-template-columns: 1fr; }}
         .cash-mobile-letter-filter {{ grid-template-columns: 1fr; }}
+        .cash-mobile-date-filter {{ grid-template-columns: 1fr; }}
+        .cash-work-worker-row {{ grid-template-columns: 1fr; }}
       }}
       .cash-receipt-viewer {{
         position: fixed;
@@ -14260,13 +14413,13 @@ def render_cashoperations_body(
           {history_rows}
         </section>
       </section>
-      <section id="cashScreenReconcile" class="cash-mobile-screen">{reconcile_screen}</section>
+      <section id="cashScreenWork" class="cash-mobile-screen">{work_report_screen}</section>
     </section>
     <nav class="cash-mobile-bottom-tabs">
       <button class="cash-mobile-nav active" type="button" data-cash-screen="home">Касса</button>
       {letters_nav_html}
       <button class="cash-mobile-nav" type="button" data-cash-screen="history">История</button>
-      <button class="cash-mobile-nav" type="button" data-cash-screen="reconcile">Сверка</button>
+      <button class="cash-mobile-nav" type="button" data-cash-screen="work">Работа</button>
     </nav>
     <section class="cash-receipt-viewer" data-cash-receipt-viewer aria-hidden="true">
       <div class="cash-receipt-viewer-head">
@@ -14291,7 +14444,7 @@ def render_cashoperations_body(
           income: document.querySelector("#cashScreenIncome"),
           letters: document.querySelector("#cashScreenLetters"),
           history: document.querySelector("#cashScreenHistory"),
-          reconcile: document.querySelector("#cashScreenReconcile")
+          work: document.querySelector("#cashScreenWork")
         }};
         const cashboxTabs = document.querySelector("[data-cashbox-tabs]");
         function show(name) {{
@@ -14299,7 +14452,7 @@ def render_cashoperations_body(
           document.querySelectorAll("[data-cash-screen]").forEach((button) => {{
             button.classList.toggle("active", button.dataset.cashScreen === name);
           }});
-          if (cashboxTabs) cashboxTabs.classList.toggle("is-hidden", name === "letters");
+          if (cashboxTabs) cashboxTabs.classList.toggle("is-hidden", name === "letters" || name === "work");
           window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
         const expenseForm = document.querySelector(".cash-mobile-form[action='/cashoperations/expense']");
@@ -14315,6 +14468,8 @@ def render_cashoperations_body(
         const incomeIdInput = document.querySelector("[data-cash-income-id]");
         const incomeRequestKeyInput = document.querySelector("[data-cash-income-request-key]");
         const incomeSourceSelect = document.querySelector("[data-cash-income-source]");
+        const workWorkers = document.querySelector("[data-work-workers]");
+        const workAddWorker = document.querySelector("[data-work-add-worker]");
         const flash = document.querySelector("[data-cash-flash]");
         const editbar = document.querySelector("[data-cash-editbar]");
         const editBack = document.querySelector("[data-cash-edit-back]");
@@ -14513,6 +14668,17 @@ def render_cashoperations_body(
           transferWrap && transferWrap.classList.toggle("is-hidden", !isTransfer);
         }}
         categorySelect && categorySelect.addEventListener("change", syncAdminProject);
+        workAddWorker && workAddWorker.addEventListener("click", () => {{
+          if (!workWorkers) return;
+          const firstRow = workWorkers.querySelector(".cash-work-worker-row");
+          if (!firstRow) return;
+          const clone = firstRow.cloneNode(true);
+          clone.querySelectorAll("select").forEach((select) => {{
+            if (select.name === "day_part") select.value = "1";
+            else select.value = "";
+          }});
+          workWorkers.appendChild(clone);
+        }});
         function resetExpenseForm() {{
           if (!expenseForm) return;
           expenseForm.reset();
@@ -16127,6 +16293,7 @@ def render_access_section(
                     <span class="badge{" warn" if user_access["can_receive_push"] and push_device_count == 0 else ""}">Пуш-устройств: {push_device_count}</span>
                     <span class="badge">Пуши: {push_mode_label}</span>
                     <span class="badge">Письма: {"да" if user_access.get("can_view_letters") else "нет"}</span>
+                    <span class="badge">Работа: {"да" if user_access.get("can_view_work_reports") else "нет"}</span>
                   </div>
                 </div>
                 <div class="access-cash-grid is-collapsed">
@@ -16169,6 +16336,7 @@ def render_access_section(
                       <label><input type="checkbox" name="can_reconcile" value="1" {"checked" if user_access["can_reconcile"] else ""}> Может сверять кассу</label>
                       <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Получает пуши</label>
                       <label><input type="checkbox" name="can_view_letters" value="1" {"checked" if user_access.get("can_view_letters") else ""}> Доступны письма</label>
+                      <label><input type="checkbox" name="can_view_work_reports" value="1" {"checked" if user_access.get("can_view_work_reports") else ""}> Доступна работа</label>
                     </div>
                   </div>
                   <div class="field span-2 cash-setting"{cash_settings_hidden}>
@@ -17141,6 +17309,15 @@ def read_post_data(environ) -> dict[str, str]:
     return {key: values[0] for key, values in parsed.items()}
 
 
+def read_post_data_multi(environ) -> dict[str, list[str]]:
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "0") or "0")
+    except ValueError:
+        length = 0
+    raw = environ["wsgi.input"].read(length).decode("utf-8")
+    return parse_qs(raw)
+
+
 def read_json_data(environ) -> dict:
     try:
         length = int(environ.get("CONTENT_LENGTH", "0") or "0")
@@ -17649,9 +17826,14 @@ self.addEventListener("notificationclick", (event) => {
         selected_cashbox = query.get("cashbox", [""])[0].strip()
         selected_letter_object_filter = query.get("letter_object", [""])[0].strip()
         initial_screen = query.get("screen", ["home"])[0].strip()
+        work_date_raw = query.get("work_date", [""])[0].strip()
+        try:
+            selected_work_report_date = parse_date(work_date_raw) if work_date_raw else None
+        except ValueError:
+            selected_work_report_date = None
         flash_message = query.get("flash", [""])[0].strip()
         success = query.get("ok", ["0"])[0] == "1"
-        body = render_cashoperations_body(storage, current_owner, current_user, selected_cashbox, flash_message, success, selected_letter_object_filter, initial_screen)
+        body = render_cashoperations_body(storage, current_owner, current_user, selected_cashbox, flash_message, success, selected_letter_object_filter, initial_screen, selected_work_report_date)
         html = render_cashoperations_standalone_page(body, current_user)
         start_response("200 OK", [
             ("Content-Type", "text/html; charset=utf-8"),
@@ -18106,6 +18288,66 @@ self.addEventListener("notificationclick", (event) => {
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
+
+    if path == "/cashoperations/work-report" and method == "POST":
+        raw_form = read_post_data_multi(environ)
+        form = {key: values[0] for key, values in raw_form.items()}
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        selected_cashbox = form.get("cashbox", "").strip()
+        try:
+            if not cash_access or not cash_access["enabled"] or not cash_access.get("can_view_work_reports"):
+                raise ValueError("Нет доступа к отчетам о работе")
+            report_date_raw = form.get("report_date", "").strip()
+            report_date = parse_date(report_date_raw) if report_date_raw else None
+            if report_date is None:
+                raise ValueError("Укажите дату отчета")
+            entries = storage.list_expense_entries(current_owner)
+            project_options_list = expense_project_options(storage, current_owner, entries)
+            project_labels = dict(project_options_list)
+            project_code = form.get("project_code", "").strip()
+            if project_code not in project_labels:
+                raise ValueError("Выберите объект")
+            employee_values = raw_form.get("employee_id", [])
+            day_part_values = raw_form.get("day_part", [])
+            builder_lookup = {
+                employee.id: employee
+                for employee in storage.list_payroll_employees(current_owner)
+                if employee.is_active and (employee.employee_group or "admin") == "builders"
+            }
+            worker_items = []
+            for index, raw_employee_id in enumerate(employee_values):
+                try:
+                    employee_id = int(str(raw_employee_id).strip())
+                except ValueError:
+                    continue
+                employee = builder_lookup.get(employee_id)
+                if employee is None:
+                    continue
+                raw_day_part = day_part_values[index] if index < len(day_part_values) else "1"
+                day_part = 0.5 if str(raw_day_part).strip() == "0.5" else 1.0
+                worker_items.append({
+                    "employee_id": employee.id,
+                    "employee_name": employee.full_name,
+                    "day_part": day_part,
+                })
+            if not worker_items:
+                raise ValueError("Выберите хотя бы одного работягу")
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            storage.add_mobile_work_report(
+                current_owner,
+                report_date,
+                project_code,
+                project_labels[project_code],
+                worker_items,
+                form.get("comment", "").strip(),
+                (current_user or {}).get("id"),
+                actor_name,
+            )
+            flash = "Отчет о работе сохранен."
+            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
+        except ValueError as exc:
+            work_date = form.get("report_date", "").strip()
+            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={quote_plus(work_date)}&flash={quote_plus(str(exc))}")
 
     if path == "/cashoperations/reconcile" and method == "POST":
         form = read_post_data(environ)
@@ -20802,6 +21044,7 @@ self.addEventListener("notificationclick", (event) => {
                 form.get("push_detail_mode", "safe"),
                 form.get("can_view_letters") == "1",
                 form.get("can_modify_other_cashboxes") == "1",
+                form.get("can_view_work_reports") == "1",
             )
             if not updated:
                 raise ValueError("Пользователь не найден")
