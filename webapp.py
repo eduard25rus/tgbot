@@ -13591,6 +13591,13 @@ def cashbox_balance_for_code(entries, cashboxes: list[dict], cashbox_code: str) 
     return round(sum(entry.amount for entry in cash_income_entries) - sum(entry.amount for entry in cash_expense_entries), 2)
 
 
+def cashbox_label_from_directory(cashboxes: list[dict], code: str) -> str:
+    for cashbox in cashboxes:
+        if str(cashbox.get("code", "")) == code:
+            return str(cashbox.get("label", "")).strip() or cashbox_label(code)
+    return cashbox_label(code)
+
+
 def mobile_cash_can_modify_cashbox(cash_access: dict | None, cashbox_code: str) -> bool:
     if not cash_access or not cash_access.get("enabled") or not cash_access.get("can_add_expense"):
         return False
@@ -17407,13 +17414,13 @@ def render_expenses_section(
     def dds_expense_total(row_entries) -> float:
         return sum(
             entry.amount for entry in row_entries
-            if ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry) and not is_cashbox_transfer_display(entry))
+            if ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry))
             or is_bank_cash_transfer(entry)
         )
     def dds_signed_amount(entry) -> float:
         income_amount = entry.amount if is_income_display(entry) else 0
         expense_amount = entry.amount if (
-            ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry) and not is_cashbox_transfer_display(entry))
+            ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry))
             or is_bank_cash_transfer(entry)
         ) else 0
         return income_amount - expense_amount
@@ -17499,11 +17506,13 @@ def render_expenses_section(
     )
     def render_cash_income_row(entry) -> str:
         source_label = "Банк" if (entry.payment_source or "bank") == "bank" and entry.import_source else "Мобильное приложение"
+        cashbox_code = cashbox_code_from_entry(entry, cashboxes)
+        recipient_label = cashbox_label_from_directory(cashboxes, cashbox_code) if cashbox_code else cash_recipient_label(entry.title, entry.comment)
         return f"""
             <tr>
               <td class="nowrap">{format_date(entry.expense_date)}</td>
               <td>
-                <div class="timeline-title">Пополнение кассы: {escape(cash_recipient_label(entry.title, entry.comment))}</div>
+                <div class="timeline-title">Пополнение кассы: {escape(recipient_label)}</div>
                 <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Вывод денежных средств в кассу"} <span class="dds-source-inline">· Касса</span></div>
                 <div class="dds-meta-row">
                   <span class="chip">Касса</span>
@@ -19053,7 +19062,7 @@ self.addEventListener("notificationclick", (event) => {
                         expense_date,
                         project_code,
                         CASH_WITHDRAWAL_CATEGORY_CODE,
-                        title,
+                        f"Пополнение кассы: {target_label}",
                         amount,
                         target_comment,
                         "bank",
@@ -19066,7 +19075,7 @@ self.addEventListener("notificationclick", (event) => {
                         expense_date,
                         project_code,
                         CASH_WITHDRAWAL_CATEGORY_CODE,
-                        title,
+                        f"Пополнение кассы: {target_label}",
                         amount,
                         target_comment,
                         "bank",
