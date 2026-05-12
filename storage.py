@@ -5572,40 +5572,6 @@ class Storage:
             )
             return date.fromisoformat(row["report_date"])
 
-    def delete_mobile_work_report_worker(self, owner_chat_id: int, worker_id: int) -> tuple[date, bool] | None:
-        with self.connection() as conn:
-            row = conn.execute(
-                """
-                SELECT worker.report_id, report.report_date
-                FROM mobile_work_report_workers worker
-                JOIN mobile_work_reports report ON report.id = worker.report_id
-                WHERE worker.id = ? AND report.owner_chat_id = ? AND report.deleted_at IS NULL
-                """,
-                (worker_id, owner_chat_id),
-            ).fetchone()
-            if row is None:
-                return None
-            report_id = int(row["report_id"])
-            report_date = date.fromisoformat(row["report_date"])
-            conn.execute("DELETE FROM mobile_work_report_workers WHERE id = ?", (worker_id,))
-            remaining = conn.execute(
-                "SELECT COUNT(*) AS count FROM mobile_work_report_workers WHERE report_id = ?",
-                (report_id,),
-            ).fetchone()
-            report_deleted = int(remaining["count"] if remaining else 0) == 0
-            now = datetime.utcnow().isoformat()
-            if report_deleted:
-                conn.execute(
-                    "UPDATE mobile_work_reports SET deleted_at = ?, updated_at = ? WHERE id = ? AND owner_chat_id = ?",
-                    (now, now, report_id, owner_chat_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE mobile_work_reports SET updated_at = ? WHERE id = ? AND owner_chat_id = ?",
-                    (now, report_id, owner_chat_id),
-                )
-            return report_date, report_deleted
-
     def list_mobile_work_reports(self, owner_chat_id: int, report_date: date | None = None) -> list[MobileWorkReport]:
         where = "owner_chat_id = ? AND deleted_at IS NULL"
         params: list[object] = [owner_chat_id]
@@ -5622,6 +5588,60 @@ class Storage:
                 ORDER BY report_date DESC, created_at DESC, id DESC
                 """,
                 params,
+            ).fetchall()
+            report_ids = [int(row["id"]) for row in report_rows]
+            worker_rows = []
+            if report_ids:
+                placeholders = ",".join("?" for _ in report_ids)
+                worker_rows = conn.execute(
+                    f"""
+                    SELECT id, report_id, employee_id, employee_name, day_part, created_at
+                    FROM mobile_work_report_workers
+                    WHERE report_id IN ({placeholders})
+                    ORDER BY id ASC
+                    """,
+                    report_ids,
+                ).fetchall()
+        workers_by_report: dict[int, list[dict]] = {}
+        for row in worker_rows:
+            workers_by_report.setdefault(int(row["report_id"]), []).append({
+                "id": int(row["id"]),
+                "employee_id": int(row["employee_id"]),
+                "employee_name": row["employee_name"],
+                "day_part": float(row["day_part"]),
+                "created_at": datetime.fromisoformat(row["created_at"]),
+            })
+        return [
+            MobileWorkReport(
+                id=int(row["id"]),
+                owner_chat_id=int(row["owner_chat_id"]),
+                report_date=date.fromisoformat(row["report_date"]),
+                project_code=row["project_code"],
+                project_label=row["project_label"],
+                comment=row["comment"],
+                created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+                created_by_name=row["created_by_name"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+                workers=workers_by_report.get(int(row["id"]), []),
+            )
+            for row in report_rows
+        ]
+
+    def list_mobile_work_reports_for_period(self, owner_chat_id: int, date_from: date, date_to: date) -> list[MobileWorkReport]:
+        with self.connection() as conn:
+            report_rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, report_date, project_code, project_label, comment,
+                       created_by_user_id, created_by_name, created_at, updated_at
+                FROM mobile_work_reports
+                WHERE owner_chat_id = ?
+                  AND deleted_at IS NULL
+                  AND report_date >= ?
+                  AND report_date < ?
+                ORDER BY report_date ASC, created_at ASC, id ASC
+                """,
+                (owner_chat_id, date_from.strftime(DATE_FMT), date_to.strftime(DATE_FMT)),
             ).fetchall()
             report_ids = [int(row["id"]) for row in report_rows]
             worker_rows = []

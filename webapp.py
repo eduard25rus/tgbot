@@ -493,6 +493,26 @@ def format_date(value: date) -> str:
     return f"{value.day} {RU_MONTH_GENITIVE_NAMES[value.month]} {value.year}г."
 
 
+RU_MONTH_PREPOSITIONAL_NAMES = {
+    1: "январе",
+    2: "феврале",
+    3: "марте",
+    4: "апреле",
+    5: "мае",
+    6: "июне",
+    7: "июле",
+    8: "августе",
+    9: "сентябре",
+    10: "октябре",
+    11: "ноябре",
+    12: "декабре",
+}
+
+
+def format_month_in_label(value: date) -> str:
+    return f"в {RU_MONTH_PREPOSITIONAL_NAMES[value.month]}"
+
+
 RU_MONTH_NAMES = {
     1: "Январь",
     2: "Февраль",
@@ -13234,6 +13254,8 @@ def render_cashoperations_body(
     selected_letter_object_filter: str = "",
     initial_screen: str = "home",
     selected_work_report_date: date | None = None,
+    selected_work_month: date | None = None,
+    show_work_stats: bool = False,
 ) -> str:
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     cashbox_labels = {item["code"]: item["label"] for item in cashboxes}
@@ -13551,6 +13573,9 @@ def render_cashoperations_body(
         letters_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="letters">Письма</button>'
 
     work_report_date = selected_work_report_date or today
+    work_month = (selected_work_month or work_report_date).replace(day=1)
+    previous_work_month = month_add(work_month, -1)
+    next_work_month = month_add(work_month, 1)
     builder_employees = [
         employee for employee in payroll_employees
         if (employee.employee_group or "admin") == "builders"
@@ -13560,12 +13585,60 @@ def render_cashoperations_body(
         for employee in builder_employees
     )
     work_reports = storage.list_mobile_work_reports(owner_chat_id, work_report_date) if can_view_work_reports else []
+    work_month_reports = storage.list_mobile_work_reports_for_period(owner_chat_id, work_month, next_work_month) if can_view_work_reports else []
     work_total_people = sum(len(report.workers) for report in work_reports)
     work_total_units = sum(sum(float(worker["day_part"]) for worker in report.workers) for report in work_reports)
     def work_units_label(value: float) -> str:
         return str(int(value)) if abs(value - int(value)) < 0.001 else str(value).replace(".", ",")
     def work_day_part_label(value: float) -> str:
         return "половина дня" if float(value) <= 0.5 else "полный день"
+    def work_project_key(report) -> str:
+        return report.project_code or report.project_label or "Без объекта"
+    def work_month_url(month_value: date, stats: bool = False) -> str:
+        first_day = month_value.replace(day=1)
+        return (
+            f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}"
+            f"&work_month={first_day.strftime('%Y-%m')}&work_date={first_day.isoformat()}"
+            f"{'&work_stats=1' if stats else ''}"
+        )
+    work_month_people = {
+        int(worker["employee_id"])
+        for report in work_month_reports
+        for worker in report.workers
+    }
+    work_month_units = sum(
+        float(worker["day_part"])
+        for report in work_month_reports
+        for worker in report.workers
+    )
+    work_month_projects = {
+        work_project_key(report)
+        for report in work_month_reports
+    }
+    work_daily_stats: dict[date, dict] = {}
+    for report in work_month_reports:
+        day_stats = work_daily_stats.setdefault(report.report_date, {"people": set(), "projects": set(), "units": 0.0})
+        day_stats["projects"].add(work_project_key(report))
+        for worker in report.workers:
+            day_stats["people"].add(int(worker["employee_id"]))
+            day_stats["units"] += float(worker["day_part"])
+    def work_stats_day_row(day_value: date, stats: dict) -> str:
+        return f"""
+        <article class="cash-mobile-op">
+          <div class="cash-mobile-op-main">
+            <span class="cash-mobile-op-title"><strong>{escape(format_date(day_value))}</strong></span>
+            <span class="cash-mobile-op-comment">{len(stats["people"])} чел. · {len(stats["projects"])} объект.</span>
+          </div>
+          <div class="cash-mobile-op-side">
+            <b class="income">{escape(work_units_label(float(stats["units"])))}</b>
+            <span class="cash-mobile-op-receipt">смен</span>
+          </div>
+        </article>
+        """
+    work_stats_rows = "".join(
+        work_stats_day_row(day_value, stats)
+        for day_value, stats in sorted(work_daily_stats.items())
+    ) or '<div class="cash-mobile-empty">За этот месяц отчетов пока нет.</div>'
     def work_report_card(report) -> str:
         workers = report.workers
         worker_items_json = json.dumps(
@@ -13582,11 +13655,6 @@ def render_cashoperations_body(
             f"""
             <li>
               <span>{escape(worker["employee_name"])} <small>({escape(work_day_part_label(float(worker["day_part"])))})</small></span>
-              <form method="post" action="/cashoperations/work-report-worker/delete" onsubmit="return confirm('Удалить сотрудника из смены?');">
-                <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
-                <input type="hidden" name="worker_id" value="{int(worker["id"])}">
-                <button class="cash-work-icon-delete" type="submit" aria-label="Удалить сотрудника">×</button>
-              </form>
             </li>
             """
             for worker in workers
@@ -13609,11 +13677,6 @@ def render_cashoperations_body(
           <div class="cash-mobile-op-side">
             <b class="income">{escape(work_units_label(report_units))}</b>
             <span class="cash-mobile-op-receipt">смен</span>
-            <form method="post" action="/cashoperations/work-report/delete" onsubmit="return confirm('Удалить смену целиком?');">
-              <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
-              <input type="hidden" name="report_id" value="{report.id}">
-              <button class="cash-work-delete-report" type="submit">Удалить</button>
-            </form>
           </div>
         </article>
         """
@@ -13621,8 +13684,19 @@ def render_cashoperations_body(
     work_report_screen = '<section class="cash-mobile-panel"><h2>Работа недоступна</h2><div class="cash-mobile-sub">Администратор должен включить доступ к отчетам о работе.</div></section>'
     if can_view_work_reports:
         work_report_screen = f"""
-        <section class="cash-mobile-work-head">
+        <section class="cash-mobile-work-head" data-work-overview>
           <h2>Учет рабочей силы</h2>
+        </section>
+        <section class="cash-mobile-panel cash-work-month-card" data-work-overview data-work-month-card data-prev-month-url="{escape(work_month_url(previous_work_month, show_work_stats), quote=True)}" data-next-month-url="{escape(work_month_url(next_work_month, show_work_stats), quote=True)}">
+          <div class="cash-mobile-sub">{escape(format_month_label(work_month))}</div>
+          <div class="cash-mobile-balance income">{len(work_month_people)} чел.</div>
+          <div class="cash-mobile-metrics">
+            <div class="cash-mobile-metric"><span>Работало {escape(format_month_in_label(work_month))}</span><b>{len(work_month_people)} чел.</b></div>
+            <div class="cash-mobile-metric"><span>Смен отработало</span><b>{escape(work_units_label(work_month_units))}</b></div>
+            <div class="cash-mobile-metric"><span>На объектах</span><b>{len(work_month_projects)}</b></div>
+          </div>
+        </section>
+        <section class="cash-mobile-work-head" data-work-overview>
           <div class="cash-mobile-actions">
             <button class="cash-mobile-action income" type="button" data-work-toggle-form>Добавить смену</button>
             <button class="cash-mobile-action" type="button" data-work-toggle-stats>Смотреть статистику</button>
@@ -13662,15 +13736,31 @@ def render_cashoperations_body(
           </form>
           {'<div class="cash-mobile-sub" style="margin-top:10px;">В справочнике пока нет активных сотрудников-работяг.</div>' if not builder_employees else ''}
         </section>
-        <section class="cash-mobile-panel is-hidden" data-work-stats-panel>
+        <section class="cash-mobile-panel{" is-hidden" if not show_work_stats else ""}" data-work-stats-panel data-work-overview>
           <div class="cash-mobile-section-head"><h2>Статистика</h2></div>
-          <div class="cash-mobile-empty">Статистику соберем следующим шагом.</div>
+          <form class="cash-mobile-date-filter cash-mobile-month-filter" method="get" action="/cashoperations">
+            <input type="hidden" name="screen" value="work">
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <input type="hidden" name="work_stats" value="1">
+            <label>Месяц
+              <span class="cash-date-input-wrap">
+                <input type="month" name="work_month" value="{work_month.strftime('%Y-%m')}">
+              </span>
+            </label>
+            <button type="submit">Показать</button>
+          </form>
+          {work_stats_rows}
+          <div class="cash-work-summary">
+            <strong>Итого за месяц</strong>
+            <span>{len(work_month_people)} чел. · {len(work_month_projects)} объект. · {escape(work_units_label(work_month_units))} смен</span>
+          </div>
         </section>
-        <section class="cash-mobile-panel">
+        <section class="cash-mobile-panel" data-work-overview data-work-daily-panel>
           <div class="cash-mobile-section-head"><h2>{escape(format_date(work_report_date))}</h2></div>
           <form class="cash-mobile-date-filter" method="get" action="/cashoperations">
             <input type="hidden" name="screen" value="work">
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <input type="hidden" name="work_month" value="{work_month.strftime('%Y-%m')}">
             <label>День
               <span class="cash-date-input-wrap">
                 <input type="date" name="work_date" value="{work_report_date.isoformat()}">
@@ -13893,6 +13983,9 @@ def render_cashoperations_body(
       }}
       .cash-mobile-balance.negative {{
         color: #9b2f2f;
+      }}
+      .cash-mobile-balance.income {{
+        color: #186844;
       }}
       .cash-mobile-sub {{
         color: var(--muted);
@@ -14185,8 +14278,16 @@ def render_cashoperations_body(
         gap: 8px;
         align-items: end;
       }}
-      .cash-work-row-remove,
-      .cash-work-icon-delete {{
+      .cash-work-screen.is-form-mode [data-work-overview] {{
+        display: none;
+      }}
+      .cash-work-screen.is-stats-mode [data-work-daily-panel] {{
+        display: none;
+      }}
+      .cash-work-month-card {{
+        touch-action: pan-y;
+      }}
+      .cash-work-row-remove {{
         display: inline-grid;
         place-items: center;
         border: 1px solid var(--line);
@@ -14213,7 +14314,7 @@ def render_cashoperations_body(
       .cash-work-worker-list li {{
         counter-increment: work-worker;
         display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-columns: auto minmax(0, 1fr);
         align-items: center;
         gap: 6px;
         margin-top: 4px;
@@ -14225,25 +14326,6 @@ def render_cashoperations_body(
       }}
       .cash-work-worker-list small {{
         color: var(--muted);
-      }}
-      .cash-work-worker-list form {{
-        flex: 0 0 auto;
-      }}
-      .cash-work-icon-delete {{
-        width: 28px;
-        height: 28px;
-        font-size: 15px;
-      }}
-      .cash-work-delete-report {{
-        margin-top: 8px;
-        border: 1px solid #edd2d2;
-        border-radius: 8px;
-        background: #fff;
-        color: #9b2f2f;
-        font: inherit;
-        font-size: 11px;
-        font-weight: 800;
-        padding: 6px 8px;
       }}
       .cash-mobile-date-filter {{
         display: grid;
@@ -14571,7 +14653,7 @@ def render_cashoperations_body(
           {history_rows}
         </section>
       </section>
-      <section id="cashScreenWork" class="cash-mobile-screen">{work_report_screen}</section>
+      <section id="cashScreenWork" class="cash-mobile-screen cash-work-screen{" is-stats-mode" if show_work_stats else ""}">{work_report_screen}</section>
     </section>
     <nav class="cash-mobile-bottom-tabs">
       <button class="cash-mobile-nav active" type="button" data-cash-screen="home">Касса</button>
@@ -14611,6 +14693,7 @@ def render_cashoperations_body(
             button.classList.toggle("active", button.dataset.cashScreen === name);
           }});
           if (cashboxTabs) cashboxTabs.classList.toggle("is-hidden", name === "letters" || name === "work");
+          if (name !== "work" && screens.work) screens.work.classList.remove("is-form-mode");
           window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
         const expenseForm = document.querySelector(".cash-mobile-form[action='/cashoperations/expense']");
@@ -14637,6 +14720,8 @@ def render_cashoperations_body(
         const workSubmit = document.querySelector("[data-work-submit]");
         const workDeleteReport = document.querySelector("[data-work-delete-report]");
         const workReportIdInput = document.querySelector("[data-work-report-id-input]");
+        const workScreen = document.querySelector("#cashScreenWork");
+        const workMonthCard = document.querySelector("[data-work-month-card]");
         const workWorkerTemplate = workWorkers && workWorkers.querySelector(".cash-work-worker-row")
           ? workWorkers.querySelector(".cash-work-worker-row").cloneNode(true)
           : null;
@@ -14872,9 +14957,14 @@ def render_cashoperations_body(
           formDirty = false;
         }}
         function openWorkForm() {{
+          if (workScreen) {{
+            workScreen.classList.add("is-form-mode");
+            workScreen.classList.remove("is-stats-mode");
+          }}
           if (workFormPanel) workFormPanel.classList.remove("is-hidden");
           if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
-          if (workFormPanel) workFormPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
+          showEditbar(true);
+          window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
         function editWorkReport(card) {{
           if (!workForm) return;
@@ -14932,9 +15022,35 @@ def render_cashoperations_body(
           openWorkForm();
         }});
         workToggleStats && workToggleStats.addEventListener("click", () => {{
+          resetWorkForm();
+          if (workScreen) {{
+            workScreen.classList.remove("is-form-mode");
+            workScreen.classList.add("is-stats-mode");
+          }}
           if (workFormPanel) workFormPanel.classList.add("is-hidden");
           if (workStatsPanel) workStatsPanel.classList.remove("is-hidden");
+          showEditbar(false);
+          if (workStatsPanel) workStatsPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
         }});
+        if (workMonthCard) {{
+          let workSwipeStartX = 0;
+          let workSwipeStartY = 0;
+          workMonthCard.addEventListener("touchstart", (event) => {{
+            const touch = event.changedTouches && event.changedTouches[0];
+            if (!touch) return;
+            workSwipeStartX = touch.clientX;
+            workSwipeStartY = touch.clientY;
+          }}, {{ passive: true }});
+          workMonthCard.addEventListener("touchend", (event) => {{
+            const touch = event.changedTouches && event.changedTouches[0];
+            if (!touch) return;
+            const deltaX = touch.clientX - workSwipeStartX;
+            const deltaY = touch.clientY - workSwipeStartY;
+            if (Math.abs(deltaX) < 45 || Math.abs(deltaX) < Math.abs(deltaY) * 1.4) return;
+            const targetUrl = deltaX < 0 ? workMonthCard.dataset.nextMonthUrl : workMonthCard.dataset.prevMonthUrl;
+            if (targetUrl) window.location.href = targetUrl;
+          }}, {{ passive: true }});
+        }}
         function resetExpenseForm() {{
           if (!expenseForm) return;
           expenseForm.reset();
@@ -15056,6 +15172,9 @@ def render_cashoperations_body(
           resetExpenseForm();
           resetIncomeForm();
           resetWorkForm();
+          if (workScreen) workScreen.classList.remove("is-form-mode");
+          if (workScreen) workScreen.classList.remove("is-stats-mode");
+          if (workFormPanel) workFormPanel.classList.add("is-hidden");
           show(editBackScreen || "history");
         }});
         receiptInput && receiptInput.addEventListener("change", () => {{
@@ -18129,13 +18248,30 @@ self.addEventListener("notificationclick", (event) => {
         selected_letter_object_filter = query.get("letter_object", [""])[0].strip()
         initial_screen = query.get("screen", ["home"])[0].strip()
         work_date_raw = query.get("work_date", [""])[0].strip()
+        work_month_raw = query.get("work_month", [""])[0].strip()
+        selected_work_month = parse_month_key(work_month_raw)
         try:
             selected_work_report_date = parse_date(work_date_raw) if work_date_raw else None
         except ValueError:
             selected_work_report_date = None
+        if selected_work_report_date is None and selected_work_month is not None:
+            selected_work_report_date = selected_work_month
+        show_work_stats = query.get("work_stats", ["0"])[0] == "1"
         flash_message = query.get("flash", [""])[0].strip()
         success = query.get("ok", ["0"])[0] == "1"
-        body = render_cashoperations_body(storage, current_owner, current_user, selected_cashbox, flash_message, success, selected_letter_object_filter, initial_screen, selected_work_report_date)
+        body = render_cashoperations_body(
+            storage,
+            current_owner,
+            current_user,
+            selected_cashbox,
+            flash_message,
+            success,
+            selected_letter_object_filter,
+            initial_screen,
+            selected_work_report_date,
+            selected_work_month,
+            show_work_stats,
+        )
         html = render_cashoperations_standalone_page(body, current_user)
         start_response("200 OK", [
             ("Content-Type", "text/html; charset=utf-8"),
@@ -18681,23 +18817,6 @@ self.addEventListener("notificationclick", (event) => {
             if report_date is None:
                 raise ValueError("Смена не найдена")
             flash = "Смена удалена."
-            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
-        except ValueError as exc:
-            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
-
-    if path == "/cashoperations/work-report-worker/delete" and method == "POST":
-        form = read_post_data(environ)
-        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
-        selected_cashbox = form.get("cashbox", "").strip()
-        try:
-            if not cash_access or not cash_access["enabled"] or not cash_access.get("can_view_work_reports"):
-                raise ValueError("Нет доступа к отчетам о работе")
-            worker_id = int(form.get("worker_id", "0"))
-            result = storage.delete_mobile_work_report_worker(current_owner, worker_id)
-            if result is None:
-                raise ValueError("Сотрудник в смене не найден")
-            report_date, report_deleted = result
-            flash = "Смена удалена." if report_deleted else "Сотрудник удален из смены."
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
