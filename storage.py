@@ -5152,6 +5152,57 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def payroll_employee_usage_counts(self, owner_chat_id: int, employee_id: int) -> dict[str, int]:
+        with self.connection() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM payroll_employees WHERE id = ? AND owner_chat_id = ?",
+                (employee_id, owner_chat_id),
+            ).fetchone()
+            if exists is None:
+                return {"exists": 0, "payroll": 0, "work_reports": 0, "expenses": 0}
+            payroll_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM payroll_entries
+                WHERE owner_chat_id = ? AND employee_id = ?
+                """,
+                (owner_chat_id, employee_id),
+            ).fetchone()["count"]
+            work_reports_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM mobile_work_report_workers w
+                JOIN mobile_work_reports r ON r.id = w.report_id
+                WHERE r.owner_chat_id = ? AND w.employee_id = ? AND r.deleted_at IS NULL
+                """,
+                (owner_chat_id, employee_id),
+            ).fetchone()["count"]
+            expenses_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM expense_entries
+                WHERE owner_chat_id = ? AND payroll_employee_id = ? AND deleted_at IS NULL
+                """,
+                (owner_chat_id, employee_id),
+            ).fetchone()["count"]
+        return {
+            "exists": 1,
+            "payroll": int(payroll_count or 0),
+            "work_reports": int(work_reports_count or 0),
+            "expenses": int(expenses_count or 0),
+        }
+
+    def delete_payroll_employee(self, owner_chat_id: int, employee_id: int) -> bool:
+        usage = self.payroll_employee_usage_counts(owner_chat_id, employee_id)
+        if not usage.get("exists") or usage.get("payroll") or usage.get("work_reports") or usage.get("expenses"):
+            return False
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM payroll_employees WHERE id = ? AND owner_chat_id = ?",
+                (employee_id, owner_chat_id),
+            )
+            return cursor.rowcount > 0
+
     def clone_payroll_month(self, owner_chat_id: int, source_month: date, target_month: date) -> bool:
         if source_month == target_month:
             return False

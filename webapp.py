@@ -10157,6 +10157,9 @@ def render_directories_section(
                     </div>
                     <button class="submit-btn" type="submit">Сохранить сотрудника</button>
                   </form>
+                  <form method="post" action="/directories/employees/{employee.id}/delete?owner={owner_chat_id}&employee_group={active_employee_group}" onsubmit="return confirm('Удалить сотрудника из справочника? Это можно сделать только если на него нет зарплат, смен и расходов.');" style="margin-top:10px;">
+                    <button class="secondary-btn danger" type="submit">Удалить сотрудника</button>
+                  </form>
                 </div>
               </details>
               ''' if can_edit else escape(employee.full_name)}
@@ -13529,6 +13532,20 @@ CASH_TRANSFER_CATEGORY_LABELS = {
     "перемещение между кассами",
     "перевод касса касса",
 }
+LABOR_FORCE_CATEGORY_CODES = {
+    "labor_force",
+    "workforce",
+    "workers",
+    "builder_labor",
+}
+LABOR_FORCE_CATEGORY_LABELS = {
+    "рабочая сила",
+    "рабочие",
+    "аванс рабочим",
+    "авансы рабочим",
+    "рабочие аванс",
+    "рабочая сила аванс",
+}
 CASH_RECIPIENT_META = (
     ("учайкин денис павлович", "denis", "Денис"),
     ("учайкин", "denis", "Денис"),
@@ -13692,6 +13709,14 @@ def is_cash_transfer_category(code: str, category_labels: dict[str, str] | None 
         return True
     label = category_labels.get(code, "") if category_labels else ""
     return _normalized_cash_category_text(label) in CASH_TRANSFER_CATEGORY_LABELS
+
+
+def is_labor_force_category(code: str, category_labels: dict[str, str] | None = None) -> bool:
+    normalized_code = _normalized_cash_category_text(code)
+    if normalized_code in LABOR_FORCE_CATEGORY_CODES or normalized_code in LABOR_FORCE_CATEGORY_LABELS:
+        return True
+    label = category_labels.get(code, "") if category_labels else ""
+    return _normalized_cash_category_text(label) in LABOR_FORCE_CATEGORY_LABELS
 
 
 def expense_payment_source_label(code: str) -> str:
@@ -13956,6 +13981,10 @@ def render_cashoperations_body(
         code for code, _label in category_options_list
         if is_cash_transfer_category(code, category_labels)
     ]
+    labor_force_category_codes = [
+        code for code, _label in category_options_list
+        if is_labor_force_category(code, category_labels)
+    ]
     transfer_cashbox_options = "".join(
         f'<option value="{item["code"]}">{escape(item["label"])}</option>'
         for item in cashboxes
@@ -13965,6 +13994,14 @@ def render_cashoperations_body(
     payroll_employee_options = '<option value="">Выберите сотрудника</option>' + "".join(
         f'<option value="{employee.id}">{escape(employee.full_name)}</option>'
         for employee in payroll_employees
+    )
+    builder_employees = [
+        employee for employee in payroll_employees
+        if (employee.employee_group or "admin") == "builders"
+    ]
+    builder_employee_options = '<option value="">Выберите рабочего</option>' + "".join(
+        f'<option value="{employee.id}">{escape(employee.full_name)}</option>'
+        for employee in builder_employees
     )
 
     cash_income_entries = [
@@ -14227,10 +14264,6 @@ def render_cashoperations_body(
     work_month = (selected_work_month or work_report_date).replace(day=1)
     previous_work_month = month_add(work_month, -1)
     next_work_month = month_add(work_month, 1)
-    builder_employees = [
-        employee for employee in payroll_employees
-        if (employee.employee_group or "admin") == "builders"
-    ]
     builder_options = '<option value="">Выберите сотрудника</option>' + "".join(
         f'<option value="{employee.id}">{escape(employee.full_name)}</option>'
         for employee in builder_employees
@@ -14504,6 +14537,9 @@ def render_cashoperations_body(
             </label>
             <label class="is-hidden" data-cash-employee-wrap>Кому? Сотрудник
               <select name="payroll_employee_id" data-cash-employee>{payroll_employee_options}</select>
+            </label>
+            <label class="is-hidden" data-cash-worker-wrap>Кому? Рабочий
+              <select name="builder_employee_id" data-cash-worker>{builder_employee_options}</select>
             </label>
             <label data-cash-title-wrap>Наименование
               <input type="text" name="title" placeholder="Например, материалы / доставка" required>
@@ -15481,6 +15517,9 @@ def render_cashoperations_body(
         const employeeSelect = document.querySelector("[data-cash-employee]");
         const employeeWrap = document.querySelector("[data-cash-employee-wrap]");
         const transferCategoryCodes = new Set({json.dumps(transfer_category_codes, ensure_ascii=False)});
+        const laborForceCategoryCodes = new Set({json.dumps(labor_force_category_codes, ensure_ascii=False)});
+        const workerSelect = document.querySelector("[data-cash-worker]");
+        const workerWrap = document.querySelector("[data-cash-worker-wrap]");
         const transferWrap = document.querySelector("[data-cash-transfer-wrap]");
         const transferSelect = document.querySelector("[data-cash-transfer-target]");
         const receiptInput = document.querySelector("[data-cash-receipt]");
@@ -15644,25 +15683,31 @@ def render_cashoperations_body(
           const isAdmin = categorySelect.value === "admin";
           const isSalary = categorySelect.value === "salary";
           const isTransfer = transferCategoryCodes.has(categorySelect.value);
+          const isLaborForce = laborForceCategoryCodes.has(categorySelect.value);
           if (isAdmin || isSalary || isTransfer) {{
             projectSelect.value = "admin";
           }}
           projectSelect.disabled = isAdmin || isSalary || isTransfer;
           projectSelect.required = !(isAdmin || isSalary || isTransfer);
           projectWrap && projectWrap.classList.toggle("is-hidden", isSalary || isTransfer);
-          titleWrap && titleWrap.classList.toggle("is-hidden", isSalary || isTransfer);
+          titleWrap && titleWrap.classList.toggle("is-hidden", isSalary || isTransfer || isLaborForce);
           if (titleInput) {{
-            titleInput.required = !(isSalary || isTransfer);
-            if (isSalary || isTransfer) titleInput.value = "";
+            titleInput.required = !(isSalary || isTransfer || isLaborForce);
+            if (isSalary || isTransfer || isLaborForce) titleInput.value = "";
           }}
           if (commentInput) {{
-            commentInput.placeholder = isSalary ? "наличные / перевод?" : (isTransfer ? "Комментарий к переводу" : "Коротко, что купили или оплатили");
+            commentInput.placeholder = (isSalary || isLaborForce) ? "наличные / перевод?" : (isTransfer ? "Комментарий к переводу" : "Коротко, что купили или оплатили");
           }}
           if (employeeSelect) {{
             employeeSelect.disabled = !isSalary;
             employeeSelect.required = isSalary;
           }}
           employeeWrap && employeeWrap.classList.toggle("is-hidden", !isSalary);
+          if (workerSelect) {{
+            workerSelect.disabled = !isLaborForce;
+            workerSelect.required = isLaborForce;
+          }}
+          workerWrap && workerWrap.classList.toggle("is-hidden", !isLaborForce);
           if (transferSelect) {{
             transferSelect.disabled = !isTransfer;
             transferSelect.required = isTransfer;
@@ -15857,6 +15902,7 @@ def render_cashoperations_body(
           if (projectSelect) projectSelect.value = button.dataset.expenseProject || "admin";
           if (transferSelect) transferSelect.value = button.dataset.expenseTransferTarget || transferSelect.value;
           if (employeeSelect) employeeSelect.value = button.dataset.expenseEmployee || "";
+          if (workerSelect) workerSelect.value = button.dataset.expenseEmployee || "";
           if (expenseForm.elements.title) expenseForm.elements.title.value = button.dataset.expenseTitle || "";
           if (expenseForm.elements.expense_date) expenseForm.elements.expense_date.value = button.dataset.expenseDate || "{today.isoformat()}";
           if (expenseForm.elements.comment) expenseForm.elements.comment.value = button.dataset.expenseComment || "";
@@ -19307,6 +19353,7 @@ self.addEventListener("notificationclick", (event) => {
             category_labels = dict(category_options_list)
             category_codes = {code for code, _label in category_options_list}
             is_transfer_category = is_cash_transfer_category(category_code, category_labels)
+            is_labor_category = is_labor_force_category(category_code, category_labels)
             if category_code in {"admin", "salary"} or is_transfer_category:
                 project_code = "admin"
             if project_code not in project_codes:
@@ -19334,6 +19381,17 @@ self.addEventListener("notificationclick", (event) => {
                 payroll_employee_name = payroll_employee.full_name
                 if not title:
                     title = f"Выплата зарплаты: {payroll_employee_name}"
+            elif is_labor_category:
+                try:
+                    payroll_employee_id = int(form.get("builder_employee_id", "0"))
+                except ValueError:
+                    payroll_employee_id = 0
+                payroll_employee = payroll_employee_lookup.get(payroll_employee_id)
+                if payroll_employee is None or (payroll_employee.employee_group or "admin") != "builders":
+                    raise ValueError("Выберите рабочего")
+                payroll_employee_name = payroll_employee.full_name
+                if not title:
+                    title = f"Аванс рабочему: {payroll_employee_name}"
             if not title:
                 raise ValueError("Укажите наименование траты")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
@@ -20761,6 +20819,37 @@ self.addEventListener("notificationclick", (event) => {
             return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={target_employee_group}#directory-employees")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, "employees", active_employee_group, f"Не удалось обновить сотрудника: {exc}")
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/directories/employees/") and path.endswith("/delete") and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        try:
+            employee_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            employee_id = -1
+        active_employee_group = query.get("employee_group", ["admin"])[0]
+        try:
+            usage = storage.payroll_employee_usage_counts(current_owner, employee_id)
+            if not usage.get("exists"):
+                raise ValueError("Сотрудник не найден")
+            if usage.get("payroll") or usage.get("work_reports") or usage.get("expenses"):
+                parts = []
+                if usage.get("payroll"):
+                    parts.append(f"зарплатных строк: {usage['payroll']}")
+                if usage.get("work_reports"):
+                    parts.append(f"смен: {usage['work_reports']}")
+                if usage.get("expenses"):
+                    parts.append(f"расходов: {usage['expenses']}")
+                raise ValueError("Нельзя удалить: есть связи (" + ", ".join(parts) + ")")
+            if not storage.delete_payroll_employee(current_owner, employee_id):
+                raise ValueError("Сотрудник не найден")
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={active_employee_group}#directory-employees")
+        except Exception as exc:
+            body = render_directories_section(storage, current_owner, current_user, "employees", active_employee_group, f"Не удалось удалить сотрудника: {exc}")
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
