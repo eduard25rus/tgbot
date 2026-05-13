@@ -14359,7 +14359,7 @@ def render_cashoperations_body(
         </section>
         <section class="cash-mobile-work-head" data-work-overview>
           <div class="cash-mobile-actions">
-            <button class="cash-mobile-action income" type="button" data-work-toggle-form>Добавить смену</button>
+            <button class="cash-mobile-action expense" type="button" data-work-toggle-form>Добавить смену</button>
             <button class="cash-mobile-action" type="button" data-work-toggle-stats>Смотреть статистику</button>
           </div>
         </section>
