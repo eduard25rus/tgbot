@@ -15175,6 +15175,37 @@ def render_cashoperations_body(
       .cash-mobile-form button:disabled {{
         opacity: .68;
       }}
+      .cash-android .cash-work-worker-row {{
+        grid-template-columns: minmax(0, 1fr) 116px 38px;
+        gap: 6px;
+      }}
+      .cash-android .cash-work-worker-row select {{
+        padding-left: 10px;
+        padding-right: 28px;
+        font-size: 15px;
+      }}
+      .cash-android .cash-work-row-remove {{
+        width: 38px;
+        height: 48px;
+        min-height: 48px;
+        padding: 0;
+        border-radius: 8px;
+        background: #186844;
+        color: #fff;
+        line-height: 1;
+      }}
+      @media (max-width: 390px) {{
+        .cash-android .cash-work-worker-row {{
+          grid-template-columns: 1fr 1fr 42px;
+        }}
+        .cash-android .cash-mobile-form input,
+        .cash-android .cash-mobile-form select,
+        .cash-android .cash-mobile-form textarea {{
+          padding-left: 10px;
+          padding-right: 10px;
+          font-size: 15px;
+        }}
+      }}
       .cash-mobile-bottom-tabs {{
         position: fixed;
         left: 50%;
@@ -15356,6 +15387,8 @@ def render_cashoperations_body(
     </section>
     <script>
       (() => {{
+        const isAndroid = /Android/i.test(navigator.userAgent || "");
+        document.documentElement.classList.toggle("cash-android", isAndroid);
         const screens = {{
           home: document.querySelector("#cashScreenHome"),
           expense: document.querySelector("#cashScreenExpense"),
