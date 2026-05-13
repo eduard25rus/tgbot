@@ -14040,6 +14040,7 @@ def render_cashoperations_body(
         ("expense", entry) for entry in cash_expense_entries
     ]
     operations.sort(key=lambda item: (item[1].expense_date, item[1].created_at, item[1].id), reverse=True)
+    worker_allocations_by_entry = storage.list_expense_worker_allocations(owner_chat_id, [entry.id for _kind, entry in operations])
     latest_operations = operations[:14]
     can_edit = mobile_cash_can_modify_cashbox(cash_access, selected_cashbox)
     can_reconcile_selected = mobile_cash_can_reconcile_cashbox(cash_access, selected_cashbox)
@@ -14096,9 +14097,30 @@ def render_cashoperations_body(
         comment = editable_comment(entry)
         if not comment:
             comment = "Движение между кассами" if is_transfer_entry else ("Вывод денежных средств в кассу" if kind == "income" else "Без комментария")
+        worker_allocations = worker_allocations_by_entry.get(entry.id, []) if kind != "income" else []
+        worker_allocations_json = json.dumps(
+            [
+                {
+                    "employee_id": int(item["employee_id"]),
+                    "employee_name": item["employee_name"],
+                    "amount": float(item["amount"]),
+                }
+                for item in worker_allocations
+            ],
+            ensure_ascii=False,
+        )
+        allocation_summary = "; ".join(
+            f'{item["employee_name"]} - {format_amount(float(item["amount"]))}'
+            for item in worker_allocations
+        )
+        allocation_line = (
+            f'<span class="cash-mobile-op-meta">Рабочие: {escape(allocation_summary)}</span>'
+            if allocation_summary
+            else ""
+        )
         employee_line = (
             f'<span class="cash-mobile-op-meta">Сотрудник: {escape(entry.payroll_employee_name)}</span>'
-            if kind != "income" and getattr(entry, "payroll_employee_name", "")
+            if kind != "income" and getattr(entry, "payroll_employee_name", "") and not worker_allocations
             else ""
         )
         receipt_line = (
@@ -14137,6 +14159,7 @@ def render_cashoperations_body(
               data-expense-project="{escape(entry.project_code)}"
               data-expense-transfer-target="{escape(transfer_target_code)}"
               data-expense-employee="{escape(str(entry.payroll_employee_id or ''))}"
+              data-expense-worker-allocations="{escape(worker_allocations_json, quote=True)}"
               data-expense-title="{escape(entry.title)}"
               data-expense-date="{entry.expense_date.isoformat()}"
               data-expense-comment="{escape(editable_comment(entry))}"
@@ -14145,6 +14168,7 @@ def render_cashoperations_body(
               <span class="cash-mobile-op-main">
                 <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
                 <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
+                {allocation_line}
                 {employee_line}
                 <span class="cash-mobile-op-comment">{escape(comment)}</span>
               </span>
@@ -14159,6 +14183,7 @@ def render_cashoperations_body(
           <div class="cash-mobile-op-main">
             <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
             <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
+            {allocation_line}
             {employee_line}
             <span class="cash-mobile-op-comment">{escape(comment)}</span>
           </div>
@@ -14331,7 +14356,7 @@ def render_cashoperations_body(
         """
     work_stats_rows = "".join(
         work_stats_day_row(day_value, stats)
-        for day_value, stats in sorted(work_daily_stats.items())
+        for day_value, stats in sorted(work_daily_stats.items(), reverse=True)
     ) or '<div class="cash-mobile-empty">За этот месяц отчетов пока нет.</div>'
     def work_report_card(report) -> str:
         workers = report.workers
@@ -14538,9 +14563,19 @@ def render_cashoperations_body(
             <label class="is-hidden" data-cash-employee-wrap>Кому? Сотрудник
               <select name="payroll_employee_id" data-cash-employee>{payroll_employee_options}</select>
             </label>
-            <label class="is-hidden" data-cash-worker-wrap>Кому? Рабочий
-              <select name="builder_employee_id" data-cash-worker>{builder_employee_options}</select>
-            </label>
+            <section class="cash-labor-allocation-wrap is-hidden" data-cash-worker-wrap>
+              <div class="cash-mobile-sub">Кому и сколько выдали</div>
+              <div class="cash-labor-allocations" data-cash-worker-allocations>
+                <div class="cash-labor-allocation-row" data-cash-worker-row>
+                  <select data-cash-worker>{builder_employee_options}</select>
+                  <input type="text" inputmode="decimal" placeholder="Сумма" data-cash-worker-amount>
+                  <button class="cash-work-row-remove" type="button" data-cash-worker-remove aria-label="Убрать рабочего">×</button>
+                </div>
+              </div>
+              <input type="hidden" name="labor_allocations_json" value="[]" data-cash-labor-allocations-json>
+              <button class="secondary" type="button" data-cash-worker-add{" disabled" if not builder_employees else ""}>Добавить рабочего</button>
+              <div class="cash-mobile-sub" data-cash-worker-total>Распределено: 0 ₽</div>
+            </section>
             <label data-cash-title-wrap>Наименование
               <input type="text" name="title" placeholder="Например, материалы / доставка" required>
             </label>
@@ -14980,6 +15015,20 @@ def render_cashoperations_body(
         gap: 8px;
         align-items: end;
       }}
+      .cash-labor-allocation-wrap {{
+        display: grid;
+        gap: 8px;
+      }}
+      .cash-labor-allocations {{
+        display: grid;
+        gap: 8px;
+      }}
+      .cash-labor-allocation-row {{
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 112px 38px;
+        gap: 8px;
+        align-items: center;
+      }}
       .cash-work-screen.is-form-mode [data-work-overview] {{
         display: none;
       }}
@@ -15218,9 +15267,19 @@ def render_cashoperations_body(
         grid-template-columns: minmax(0, 1fr) 116px 38px;
         gap: 6px;
       }}
+      .cash-android .cash-labor-allocation-row {{
+        grid-template-columns: minmax(0, 1fr) 104px 38px;
+        gap: 6px;
+      }}
       .cash-android .cash-work-worker-row select {{
         padding-left: 10px;
         padding-right: 28px;
+        font-size: 15px;
+      }}
+      .cash-android .cash-labor-allocation-row select,
+      .cash-android .cash-labor-allocation-row input {{
+        padding-left: 10px;
+        padding-right: 10px;
         font-size: 15px;
       }}
       .cash-android .cash-work-row-remove {{
@@ -15279,6 +15338,7 @@ def render_cashoperations_body(
         .cash-mobile-actions {{ grid-template-columns: 1fr; }}
         .cash-mobile-letter-filter {{ grid-template-columns: 1fr; }}
         .cash-work-worker-row {{ grid-template-columns: 1fr; }}
+        .cash-labor-allocation-row {{ grid-template-columns: 1fr; }}
       }}
       .cash-android .cash-mobile-metrics {{
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -15305,6 +15365,9 @@ def render_cashoperations_body(
         padding: 10px 8px;
         font-size: 15px;
         line-height: 1.15;
+      }}
+      .cash-android .cash-labor-allocation-row {{
+        grid-template-columns: minmax(0, 1fr) 104px 38px;
       }}
       .cash-receipt-viewer {{
         position: fixed;
@@ -15518,8 +15581,14 @@ def render_cashoperations_body(
         const employeeWrap = document.querySelector("[data-cash-employee-wrap]");
         const transferCategoryCodes = new Set({json.dumps(transfer_category_codes, ensure_ascii=False)});
         const laborForceCategoryCodes = new Set({json.dumps(labor_force_category_codes, ensure_ascii=False)});
-        const workerSelect = document.querySelector("[data-cash-worker]");
         const workerWrap = document.querySelector("[data-cash-worker-wrap]");
+        const workerRows = document.querySelector("[data-cash-worker-allocations]");
+        const workerTemplate = workerRows && workerRows.querySelector("[data-cash-worker-row]")
+          ? workerRows.querySelector("[data-cash-worker-row]").cloneNode(true)
+          : null;
+        const workerAdd = document.querySelector("[data-cash-worker-add]");
+        const workerAllocationsInput = document.querySelector("[data-cash-labor-allocations-json]");
+        const workerTotal = document.querySelector("[data-cash-worker-total]");
         const transferWrap = document.querySelector("[data-cash-transfer-wrap]");
         const transferSelect = document.querySelector("[data-cash-transfer-target]");
         const receiptInput = document.querySelector("[data-cash-receipt]");
@@ -15556,6 +15625,68 @@ def render_cashoperations_body(
             return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
           }}
           return String(Date.now()) + Math.random().toString(16).slice(2);
+        }}
+        function parseMoneyInput(value) {{
+          const normalized = String(value || "").replace(/\s/g, "").replace(",", ".");
+          const parsed = Number.parseFloat(normalized);
+          return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
+        }}
+        function formatMoneyInput(value) {{
+          return new Intl.NumberFormat("ru-RU", {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }}).format(value) + " ₽";
+        }}
+        function createLaborWorkerRow(employeeId, amount) {{
+          if (!workerTemplate) return null;
+          const row = workerTemplate.cloneNode(true);
+          const select = row.querySelector("[data-cash-worker]");
+          const amountInput = row.querySelector("[data-cash-worker-amount]");
+          if (select) select.value = employeeId || "";
+          if (amountInput) amountInput.value = amount ? String(amount).replace(".", ",") : "";
+          return row;
+        }}
+        function ensureLaborWorkerRow() {{
+          if (!workerRows || workerRows.querySelector("[data-cash-worker-row]")) return;
+          const row = createLaborWorkerRow("", "");
+          if (row) workerRows.appendChild(row);
+        }}
+        function collectLaborAllocations(showErrors) {{
+          const rows = workerRows ? Array.from(workerRows.querySelectorAll("[data-cash-worker-row]")) : [];
+          const allocations = [];
+          const seen = new Set();
+          for (const row of rows) {{
+            const select = row.querySelector("[data-cash-worker]");
+            const amountInput = row.querySelector("[data-cash-worker-amount]");
+            const employeeId = select ? select.value : "";
+            const employeeName = select && select.selectedOptions[0] ? select.selectedOptions[0].textContent.trim() : "";
+            const rowAmount = parseMoneyInput(amountInput ? amountInput.value : "");
+            if (!employeeId && rowAmount <= 0) continue;
+            if (!employeeId) {{
+              if (showErrors) alert("Выберите рабочего в каждой строке распределения.");
+              return null;
+            }}
+            if (seen.has(employeeId)) {{
+              if (showErrors) alert("Один рабочий указан два раза. Объедините сумму в одну строку.");
+              return null;
+            }}
+            if (rowAmount <= 0) {{
+              if (showErrors) alert("Укажите сумму для каждого рабочего.");
+              return null;
+            }}
+            seen.add(employeeId);
+            allocations.push({{ employee_id: Number(employeeId), employee_name: employeeName, amount: rowAmount }});
+          }}
+          return allocations;
+        }}
+        function syncLaborAllocationTotal() {{
+          const allocations = collectLaborAllocations(false) || [];
+          const total = Math.round(allocations.reduce((sum, item) => sum + item.amount, 0) * 100) / 100;
+          const expenseAmount = expenseForm && expenseForm.elements.amount ? parseMoneyInput(expenseForm.elements.amount.value) : 0;
+          if (workerTotal) {{
+            const suffix = expenseAmount ? " из " + formatMoneyInput(expenseAmount) : "";
+            workerTotal.textContent = "Распределено: " + formatMoneyInput(total) + suffix;
+            workerTotal.style.color = expenseAmount && Math.abs(total - expenseAmount) > 0.009 ? "#9b2f2f" : "";
+          }}
+          if (workerAllocationsInput) workerAllocationsInput.value = JSON.stringify(allocations);
+          return {{ allocations, total, expenseAmount }};
         }}
         function base64UrlToUint8Array(value) {{
           const padding = "=".repeat((4 - value.length % 4) % 4);
@@ -15703,11 +15834,16 @@ def render_cashoperations_body(
             employeeSelect.required = isSalary;
           }}
           employeeWrap && employeeWrap.classList.toggle("is-hidden", !isSalary);
-          if (workerSelect) {{
-            workerSelect.disabled = !isLaborForce;
-            workerSelect.required = isLaborForce;
+          if (workerRows) {{
+            ensureLaborWorkerRow();
+            workerRows.querySelectorAll("[data-cash-worker], [data-cash-worker-amount]").forEach((input) => {{
+              input.disabled = !isLaborForce;
+              input.required = isLaborForce;
+            }});
           }}
           workerWrap && workerWrap.classList.toggle("is-hidden", !isLaborForce);
+          if (workerAdd) workerAdd.disabled = !isLaborForce || {str(not bool(builder_employees)).lower()};
+          syncLaborAllocationTotal();
           if (transferSelect) {{
             transferSelect.disabled = !isTransfer;
             transferSelect.required = isTransfer;
@@ -15798,6 +15934,28 @@ def render_cashoperations_body(
           showEditbar(true);
           openWorkForm();
         }}
+        workerAdd && workerAdd.addEventListener("click", () => {{
+          const row = createLaborWorkerRow("", "");
+          if (row && workerRows) workerRows.appendChild(row);
+          formDirty = true;
+          syncLaborAllocationTotal();
+        }});
+        workerRows && workerRows.addEventListener("click", (event) => {{
+          const button = event.target.closest("[data-cash-worker-remove]");
+          if (!button) return;
+          const rows = workerRows.querySelectorAll("[data-cash-worker-row]");
+          if (rows.length <= 1) {{
+            const row = button.closest("[data-cash-worker-row]");
+            row && row.querySelectorAll("select, input").forEach((input) => input.value = "");
+          }} else {{
+            const row = button.closest("[data-cash-worker-row]");
+            if (row) row.remove();
+          }}
+          formDirty = true;
+          syncLaborAllocationTotal();
+        }});
+        workerRows && workerRows.addEventListener("input", () => syncLaborAllocationTotal());
+        workerRows && workerRows.addEventListener("change", () => syncLaborAllocationTotal());
         workAddWorker && workAddWorker.addEventListener("click", () => {{
           const row = createWorkWorkerRow("", "1");
           if (row && workWorkers) workWorkers.appendChild(row);
@@ -15872,6 +16030,12 @@ def render_cashoperations_body(
             receiptStatus.textContent = "";
             receiptStatus.classList.add("is-hidden");
           }}
+          if (workerRows) {{
+            workerRows.innerHTML = "";
+            const row = createLaborWorkerRow("", "");
+            if (row) workerRows.appendChild(row);
+          }}
+          if (workerAllocationsInput) workerAllocationsInput.value = "[]";
           if (removeReceiptInput) removeReceiptInput.value = "";
           currentExpenseHasReceipt = false;
           currentReceiptKind = "image";
@@ -15902,7 +16066,23 @@ def render_cashoperations_body(
           if (projectSelect) projectSelect.value = button.dataset.expenseProject || "admin";
           if (transferSelect) transferSelect.value = button.dataset.expenseTransferTarget || transferSelect.value;
           if (employeeSelect) employeeSelect.value = button.dataset.expenseEmployee || "";
-          if (workerSelect) workerSelect.value = button.dataset.expenseEmployee || "";
+          if (workerRows) {{
+            workerRows.innerHTML = "";
+            let allocations = [];
+            try {{
+              allocations = JSON.parse(button.dataset.expenseWorkerAllocations || "[]");
+            }} catch (_err) {{
+              allocations = [];
+            }}
+            if (!allocations.length && button.dataset.expenseEmployee) {{
+              allocations = [{{ employee_id: Number(button.dataset.expenseEmployee), amount: button.dataset.expenseAmount || "" }}];
+            }}
+            allocations.forEach((item) => {{
+              const row = createLaborWorkerRow(String(item.employee_id || ""), item.amount || "");
+              if (row) workerRows.appendChild(row);
+            }});
+            ensureLaborWorkerRow();
+          }}
           if (expenseForm.elements.title) expenseForm.elements.title.value = button.dataset.expenseTitle || "";
           if (expenseForm.elements.expense_date) expenseForm.elements.expense_date.value = button.dataset.expenseDate || "{today.isoformat()}";
           if (expenseForm.elements.comment) expenseForm.elements.comment.value = button.dataset.expenseComment || "";
@@ -16053,15 +16233,33 @@ def render_cashoperations_body(
         manualRefresh && manualRefresh.addEventListener("click", () => refreshCash(activeScreenName(), true));
         expenseForm && expenseForm.addEventListener("input", () => {{
           formDirty = true;
+          syncLaborAllocationTotal();
         }});
         expenseForm && expenseForm.addEventListener("change", () => {{
           formDirty = true;
+          syncLaborAllocationTotal();
         }});
         expenseForm && expenseForm.addEventListener("submit", (event) => {{
           const submitter = event.submitter;
           if (submitter && submitter.dataset.cashExpenseDelete && !confirm("Удалить расход?")) {{
             event.preventDefault();
             return;
+          }}
+          if (!(submitter && submitter.dataset.cashExpenseDelete) && categorySelect && laborForceCategoryCodes.has(categorySelect.value)) {{
+            const allocations = collectLaborAllocations(true);
+            if (!allocations || !allocations.length) {{
+              alert("Добавьте хотя бы одного рабочего.");
+              event.preventDefault();
+              return;
+            }}
+            const total = Math.round(allocations.reduce((sum, item) => sum + item.amount, 0) * 100) / 100;
+            const expenseAmount = expenseForm.elements.amount ? parseMoneyInput(expenseForm.elements.amount.value) : 0;
+            if (Math.abs(total - expenseAmount) > 0.009) {{
+              alert("Сумма по рабочим должна совпадать с общей суммой расхода.");
+              event.preventDefault();
+              return;
+            }}
+            if (workerAllocationsInput) workerAllocationsInput.value = JSON.stringify(allocations);
           }}
           isSubmitting = true;
           expenseForm.querySelectorAll("button").forEach((button) => {{
@@ -19370,6 +19568,7 @@ self.addEventListener("notificationclick", (event) => {
                 source_label = cashbox_labels.get(selected_cashbox, "Касса")
                 target_label = cashbox_labels.get(target_cashbox, "Касса")
                 title = f"Перевод между кассами: {source_label} → {target_label}"
+            labor_allocations = []
             if category_code == "salary":
                 try:
                     payroll_employee_id = int(form.get("payroll_employee_id", "0"))
@@ -19383,15 +19582,46 @@ self.addEventListener("notificationclick", (event) => {
                     title = f"Выплата зарплаты: {payroll_employee_name}"
             elif is_labor_category:
                 try:
-                    payroll_employee_id = int(form.get("builder_employee_id", "0"))
-                except ValueError:
-                    payroll_employee_id = 0
-                payroll_employee = payroll_employee_lookup.get(payroll_employee_id)
-                if payroll_employee is None or (payroll_employee.employee_group or "admin") != "builders":
-                    raise ValueError("Выберите рабочего")
-                payroll_employee_name = payroll_employee.full_name
+                    raw_allocations = json.loads(form.get("labor_allocations_json", "[]") or "[]")
+                except json.JSONDecodeError:
+                    raw_allocations = []
+                if not isinstance(raw_allocations, list) or not raw_allocations:
+                    raise ValueError("Добавьте хотя бы одного рабочего")
+                labor_allocations = []
+                seen_worker_ids = set()
+                for item in raw_allocations:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        worker_id = int(item.get("employee_id", 0) or 0)
+                    except (TypeError, ValueError):
+                        worker_id = 0
+                    worker = payroll_employee_lookup.get(worker_id)
+                    if worker is None or (worker.employee_group or "admin") != "builders":
+                        raise ValueError("Выберите рабочего")
+                    if worker_id in seen_worker_ids:
+                        raise ValueError("Один рабочий указан два раза")
+                    seen_worker_ids.add(worker_id)
+                    worker_amount = round(float(item.get("amount", 0) or 0), 2)
+                    if worker_amount <= 0:
+                        raise ValueError("Укажите сумму для каждого рабочего")
+                    labor_allocations.append({
+                        "employee_id": worker.id,
+                        "employee_name": worker.full_name,
+                        "amount": worker_amount,
+                    })
+                allocations_total = round(sum(item["amount"] for item in labor_allocations), 2)
+                if abs(allocations_total - round(amount, 2)) > 0.009:
+                    raise ValueError("Сумма по рабочим должна совпадать с общей суммой расхода")
+                if len(labor_allocations) == 1:
+                    payroll_employee_id = labor_allocations[0]["employee_id"]
+                    payroll_employee_name = labor_allocations[0]["employee_name"]
+                else:
+                    payroll_employee_name = f"{len(labor_allocations)} рабочих"
                 if not title:
-                    title = f"Аванс рабочему: {payroll_employee_name}"
+                    title = f"Аванс рабочим: {payroll_employee_name}"
+            else:
+                labor_allocations = []
             if not title:
                 raise ValueError("Укажите наименование траты")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
@@ -19419,6 +19649,7 @@ self.addEventListener("notificationclick", (event) => {
                         False,
                         operation_type="transfer",
                     )
+                    storage.set_expense_worker_allocations(current_owner, source_entry_id, [])
                 else:
                     source_entry_id = storage.add_expense_entry(
                         current_owner,
@@ -19435,6 +19666,7 @@ self.addEventListener("notificationclick", (event) => {
                         client_request_key=f"{request_key}:out" if request_key else "",
                         operation_type="transfer",
                     )
+                    storage.set_expense_worker_allocations(current_owner, source_entry_id, [])
                 pair_marker = f"[Связанный расход: {source_entry_id}]"
                 target_comment = " ".join(part for part in (f"[{target_label}]", f"[Источник: {source_label}]", pair_marker, comment) if part)
                 linked_income = next(
@@ -19505,6 +19737,7 @@ self.addEventListener("notificationclick", (event) => {
                     payroll_employee_id=payroll_employee_id,
                     payroll_employee_name=payroll_employee_name,
                 )
+                storage.set_expense_worker_allocations(current_owner, expense_id, labor_allocations)
                 upload = next((item for item in files.get("receipt_file", []) if item.data), None)
                 if form.get("remove_receipt") == "1" and upload is None:
                     storage.clear_expense_receipt(current_owner, expense_id)
@@ -19528,6 +19761,7 @@ self.addEventListener("notificationclick", (event) => {
                 payroll_employee_name=payroll_employee_name,
                 client_request_key=form.get("request_key", ""),
             )
+            storage.set_expense_worker_allocations(current_owner, saved_expense_id, labor_allocations)
             upload = next((item for item in files.get("receipt_file", []) if item.data), None)
             save_cash_receipt_upload(storage, current_owner, saved_expense_id, upload)
             notify_cash_expense_created(storage, current_owner, amount, actor_name)

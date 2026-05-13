@@ -1010,6 +1010,18 @@ class Storage:
                     client_request_key TEXT NOT NULL DEFAULT ''
                 );
 
+                CREATE TABLE IF NOT EXISTS expense_worker_allocations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    expense_entry_id INTEGER NOT NULL,
+                    employee_id INTEGER NOT NULL,
+                    employee_name TEXT NOT NULL DEFAULT '',
+                    amount REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(expense_entry_id) REFERENCES expense_entries(id) ON DELETE CASCADE,
+                    FOREIGN KEY(employee_id) REFERENCES payroll_employees(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS bank_account_balances (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_chat_id INTEGER NOT NULL,
@@ -5177,7 +5189,7 @@ class Storage:
                 """,
                 (owner_chat_id, employee_id),
             ).fetchone()["count"]
-            expenses_count = conn.execute(
+            direct_expenses_count = conn.execute(
                 """
                 SELECT COUNT(*) AS count
                 FROM expense_entries
@@ -5185,11 +5197,20 @@ class Storage:
                 """,
                 (owner_chat_id, employee_id),
             ).fetchone()["count"]
+            allocated_expenses_count = conn.execute(
+                """
+                SELECT COUNT(DISTINCT e.id) AS count
+                FROM expense_worker_allocations a
+                JOIN expense_entries e ON e.id = a.expense_entry_id
+                WHERE a.owner_chat_id = ? AND a.employee_id = ? AND e.deleted_at IS NULL
+                """,
+                (owner_chat_id, employee_id),
+            ).fetchone()["count"]
         return {
             "exists": 1,
             "payroll": int(payroll_count or 0),
             "work_reports": int(work_reports_count or 0),
-            "expenses": int(expenses_count or 0),
+            "expenses": int(direct_expenses_count or 0) + int(allocated_expenses_count or 0),
         }
 
     def delete_payroll_employee(self, owner_chat_id: int, employee_id: int) -> bool:
@@ -6876,6 +6897,77 @@ class Storage:
                 (datetime.utcnow().isoformat(), datetime.utcnow().isoformat(), entry_id, owner_chat_id),
             )
             return cursor.rowcount > 0
+
+    def set_expense_worker_allocations(self, owner_chat_id: int, entry_id: int, allocations: list[dict]) -> bool:
+        now = datetime.utcnow().isoformat()
+        cleaned_allocations = []
+        for item in allocations:
+            employee_id = int(item.get("employee_id") or 0)
+            employee_name = str(item.get("employee_name") or "").strip()
+            amount = round(float(item.get("amount") or 0), 2)
+            if employee_id > 0 and employee_name and amount > 0:
+                cleaned_allocations.append({
+                    "employee_id": employee_id,
+                    "employee_name": employee_name,
+                    "amount": amount,
+                })
+        with self.connection() as conn:
+            entry = conn.execute(
+                """
+                SELECT id
+                FROM expense_entries
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (entry_id, owner_chat_id),
+            ).fetchone()
+            if entry is None:
+                return False
+            conn.execute(
+                "DELETE FROM expense_worker_allocations WHERE owner_chat_id = ? AND expense_entry_id = ?",
+                (owner_chat_id, entry_id),
+            )
+            for item in cleaned_allocations:
+                conn.execute(
+                    """
+                    INSERT INTO expense_worker_allocations (
+                        owner_chat_id, expense_entry_id, employee_id, employee_name, amount, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        owner_chat_id,
+                        entry_id,
+                        item["employee_id"],
+                        item["employee_name"],
+                        item["amount"],
+                        now,
+                    ),
+                )
+        return True
+
+    def list_expense_worker_allocations(self, owner_chat_id: int, entry_ids: list[int]) -> dict[int, list[dict]]:
+        cleaned_ids = sorted({int(entry_id) for entry_id in entry_ids if int(entry_id) > 0})
+        if not cleaned_ids:
+            return {}
+        placeholders = ",".join("?" for _ in cleaned_ids)
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT expense_entry_id, employee_id, employee_name, amount
+                FROM expense_worker_allocations
+                WHERE owner_chat_id = ? AND expense_entry_id IN ({placeholders})
+                ORDER BY id ASC
+                """,
+                [owner_chat_id, *cleaned_ids],
+            ).fetchall()
+        result: dict[int, list[dict]] = {}
+        for row in rows:
+            result.setdefault(int(row["expense_entry_id"]), []).append({
+                "employee_id": int(row["employee_id"]),
+                "employee_name": row["employee_name"],
+                "amount": float(row["amount"]),
+            })
+        return result
 
     def expense_import_hash_exists(self, owner_chat_id: int, import_hash: str) -> bool:
         if not import_hash.strip():
