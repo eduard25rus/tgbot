@@ -15241,6 +15241,22 @@ def render_cashoperations_body(
         .cash-mobile-letter-filter {{ grid-template-columns: 1fr; }}
         .cash-work-worker-row {{ grid-template-columns: 1fr; }}
       }}
+      .cash-android .cash-mobile-metrics {{
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px;
+      }}
+      .cash-android .cash-mobile-metric {{
+        padding: 9px 6px;
+      }}
+      .cash-android .cash-mobile-metric span {{
+        font-size: 10px;
+        line-height: 1.18;
+        min-height: 25px;
+      }}
+      .cash-android .cash-mobile-metric b {{
+        font-size: 12px;
+        line-height: 1.15;
+      }}
       .cash-receipt-viewer {{
         position: fixed;
         inset: 0;
