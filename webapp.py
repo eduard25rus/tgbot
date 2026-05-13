@@ -14522,6 +14522,7 @@ def render_cashoperations_body(
             <button class="secondary" type="button" data-cash-receipt-view hidden>Посмотреть чек</button>
             <button class="danger secondary-danger" type="button" data-cash-receipt-clear hidden>Удалить чек</button>
             <button type="submit" data-cash-expense-submit>Сохранить расход</button>
+            <button class="danger" type="button" data-cash-expense-cancel>Отменить</button>
             <button class="danger" type="submit" formaction="/cashoperations/expense/delete" data-cash-expense-delete hidden>Удалить расход</button>
           </form>
         </section>
@@ -15438,6 +15439,7 @@ def render_cashoperations_body(
         const incomeForm = document.querySelector(".cash-mobile-form[action='/cashoperations/income']");
         const expenseHeading = document.querySelector("[data-cash-expense-title]");
         const expenseSubmit = document.querySelector("[data-cash-expense-submit]");
+        const expenseCancel = document.querySelector("[data-cash-expense-cancel]");
         const expenseDelete = document.querySelector("[data-cash-expense-delete]");
         const expenseIdInput = document.querySelector("[data-cash-expense-id]");
         const requestKeyInput = document.querySelector("[data-cash-request-key]");
@@ -15806,6 +15808,7 @@ def render_cashoperations_body(
           if (expenseForm.elements.expense_date) expenseForm.elements.expense_date.value = "{today.isoformat()}";
           if (expenseHeading) expenseHeading.textContent = "Добавить расход";
           if (expenseSubmit) expenseSubmit.textContent = "Сохранить расход";
+          if (expenseCancel) expenseCancel.hidden = false;
           if (expenseDelete) expenseDelete.hidden = true;
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
           if (receiptClear) receiptClear.hidden = true;
@@ -15849,6 +15852,7 @@ def render_cashoperations_body(
           if (expenseForm.elements.comment) expenseForm.elements.comment.value = button.dataset.expenseComment || "";
           if (expenseHeading) expenseHeading.textContent = "Редактировать расход";
           if (expenseSubmit) expenseSubmit.textContent = "Сохранить изменения";
+          if (expenseCancel) expenseCancel.hidden = true;
           if (expenseDelete) expenseDelete.hidden = false;
           if (receiptLabel) receiptLabel.textContent = "Добавить чек";
           currentExpenseHasReceipt = Boolean(button.dataset.expenseReceipt);
@@ -15927,6 +15931,10 @@ def render_cashoperations_body(
           if (workScreen) workScreen.classList.remove("is-stats-mode");
           if (workFormPanel) workFormPanel.classList.add("is-hidden");
           show(editBackScreen || "history");
+        }});
+        expenseCancel && expenseCancel.addEventListener("click", () => {{
+          resetExpenseForm();
+          show("home");
         }});
         receiptInput && receiptInput.addEventListener("change", () => {{
           const file = receiptInput.files && receiptInput.files[0];
