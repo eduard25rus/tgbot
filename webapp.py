@@ -13719,6 +13719,22 @@ def is_labor_force_category(code: str, category_labels: dict[str, str] | None = 
     return _normalized_cash_category_text(label) in LABOR_FORCE_CATEGORY_LABELS
 
 
+def labor_force_category_codes(storage: Storage, owner_chat_id: int) -> list[str]:
+    categories = storage.list_expense_categories(owner_chat_id)
+    category_labels = {item.code: item.label for item in categories}
+    return [
+        item.code for item in categories
+        if is_labor_force_category(item.code, category_labels)
+    ]
+
+
+def detach_labor_force_expense_projects(storage: Storage, owner_chat_id: int | None) -> int:
+    if owner_chat_id is None:
+        return 0
+    codes = labor_force_category_codes(storage, owner_chat_id)
+    return storage.detach_expense_projects_for_categories(owner_chat_id, codes, "admin")
+
+
 def expense_payment_source_label(code: str) -> str:
     return EXPENSE_PAYMENT_SOURCE_META.get(code, EXPENSE_PAYMENT_SOURCE_META["bank"])
 
@@ -19001,6 +19017,8 @@ def app(environ, start_response):
     if current_user is not None:
         current_user["role_notifications"] = compute_role_notifications(storage, current_owner, current_user)
     owners = owner_options(storage)
+    if current_owner is not None:
+        detach_labor_force_expense_projects(storage, current_owner)
 
     path = environ.get("PATH_INFO", "/")
     method = environ.get("REQUEST_METHOD", "GET").upper()

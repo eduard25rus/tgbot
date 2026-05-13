@@ -6479,6 +6479,26 @@ class Storage:
                 changed_count += cursor.rowcount
             return changed_count
 
+    def detach_expense_projects_for_categories(self, owner_chat_id: int, category_codes: list[str], project_code: str = "admin") -> int:
+        cleaned_codes = sorted({code.strip() for code in category_codes if code.strip()})
+        if not cleaned_codes:
+            return 0
+        placeholders = ",".join("?" for _ in cleaned_codes)
+        now = datetime.utcnow().isoformat()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE expense_entries
+                SET project_code = ?, updated_at = ?
+                WHERE owner_chat_id = ?
+                  AND category_code IN ({placeholders})
+                  AND deleted_at IS NULL
+                  AND COALESCE(project_code, '') != ?
+                """,
+                [project_code.strip() or "admin", now, owner_chat_id, *cleaned_codes, project_code.strip() or "admin"],
+            )
+            return cursor.rowcount
+
     def delete_expense_category(self, owner_chat_id: int, category_id: int) -> bool:
         category = self.get_expense_category(owner_chat_id, category_id)
         if category is None:
