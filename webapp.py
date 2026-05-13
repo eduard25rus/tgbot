@@ -14096,7 +14096,7 @@ def render_cashoperations_body(
                     break
         comment = editable_comment(entry)
         if not comment:
-            comment = "Движение между кассами" if is_transfer_entry else ("Вывод денежных средств в кассу" if kind == "income" else "Без комментария")
+            comment = "Движение между кассами" if is_transfer_entry else ("Вывод денежных средств в кассу" if kind == "income" else "")
         worker_allocations = worker_allocations_by_entry.get(entry.id, []) if kind != "income" else []
         worker_allocations_json = json.dumps(
             [
@@ -14109,12 +14109,12 @@ def render_cashoperations_body(
             ],
             ensure_ascii=False,
         )
-        allocation_summary = "; ".join(
-            f'{item["employee_name"]} - {format_amount(float(item["amount"]))}'
-            for item in worker_allocations
+        allocation_summary = "".join(
+            f'<span>{index}. {escape(item["employee_name"])} - {escape(format_amount(float(item["amount"])))}</span>'
+            for index, item in enumerate(worker_allocations, start=1)
         )
         allocation_line = (
-            f'<span class="cash-mobile-op-meta">Рабочие: {escape(allocation_summary)}</span>'
+            f'<span class="cash-mobile-op-meta cash-mobile-worker-list">{allocation_summary}</span>'
             if allocation_summary
             else ""
         )
@@ -14142,7 +14142,7 @@ def render_cashoperations_body(
               <span class="cash-mobile-op-main">
                 <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
                 <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
-                <span class="cash-mobile-op-comment">{escape(comment)}</span>
+                {f'<span class="cash-mobile-op-comment">{escape(comment)}</span>' if comment else ''}
               </span>
               <span class="cash-mobile-op-side">
                 <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
@@ -14170,7 +14170,7 @@ def render_cashoperations_body(
                 <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
                 {allocation_line}
                 {employee_line}
-                <span class="cash-mobile-op-comment">{escape(comment)}</span>
+                {f'<span class="cash-mobile-op-comment">{escape(comment)}</span>' if comment else ''}
               </span>
               <span class="cash-mobile-op-side">
                 <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
@@ -14185,7 +14185,7 @@ def render_cashoperations_body(
             <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
             {allocation_line}
             {employee_line}
-            <span class="cash-mobile-op-comment">{escape(comment)}</span>
+            {f'<span class="cash-mobile-op-comment">{escape(comment)}</span>' if comment else ''}
           </div>
           <div class="cash-mobile-op-side">
             <b class="{kind}">{'+' if kind == 'income' else '-'}{escape(format_amount(entry.amount))}</b>
@@ -14890,6 +14890,9 @@ def render_cashoperations_body(
       .cash-mobile-op-comment,
       .cash-mobile-op-meta {{
         margin-top: 4px;
+      }}
+      .cash-mobile-worker-list span {{
+        display: block;
       }}
       .cash-mobile-letter-object {{
         color: var(--ink);
