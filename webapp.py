@@ -14393,6 +14393,7 @@ def render_cashoperations_body(
               <textarea name="comment" placeholder="Коротко, что делали на объекте"></textarea>
             </label>
             <button type="submit" data-work-submit{" disabled" if not builder_employees else ""}>Сохранить отчет</button>
+            <button class="danger" type="button" data-work-cancel>Отменить</button>
             <button class="cash-mobile-danger" type="submit" formaction="/cashoperations/work-report/delete" data-work-delete-report hidden>Удалить смену</button>
           </form>
           {'<div class="cash-mobile-sub" style="margin-top:10px;">В справочнике пока нет активных сотрудников-работяг.</div>' if not builder_employees else ''}
@@ -15459,6 +15460,7 @@ def render_cashoperations_body(
         const workStatsPanel = document.querySelector("[data-work-stats-panel]");
         const workFormTitle = document.querySelector("[data-work-form-title]");
         const workSubmit = document.querySelector("[data-work-submit]");
+        const workCancel = document.querySelector("[data-work-cancel]");
         const workDeleteReport = document.querySelector("[data-work-delete-report]");
         const workReportIdInput = document.querySelector("[data-work-report-id-input]");
         const workScreen = document.querySelector("#cashScreenWork");
@@ -15707,6 +15709,13 @@ def render_cashoperations_body(
           showEditbar(true);
           window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
+        function closeWorkForm() {{
+          resetWorkForm();
+          if (workScreen) workScreen.classList.remove("is-form-mode");
+          if (workFormPanel) workFormPanel.classList.add("is-hidden");
+          showEditbar(false);
+          show("work");
+        }}
         function closeWorkStats() {{
           if (workScreen) workScreen.classList.remove("is-stats-mode");
           if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
@@ -15781,6 +15790,7 @@ def render_cashoperations_body(
           if (workStatsPanel) workStatsPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
         }});
         workStatsBack && workStatsBack.addEventListener("click", closeWorkStats);
+        workCancel && workCancel.addEventListener("click", closeWorkForm);
         if (workMonthCard) {{
           let workSwipeStartX = 0;
           let workSwipeStartY = 0;
