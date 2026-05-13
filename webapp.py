@@ -14443,7 +14443,8 @@ def render_cashoperations_body(
         f'<a class="cash-mobile-tab{" active" if item["code"] == selected_cashbox else ""}" href="/cashoperations?cashbox={item["code"]}">{escape(item["label"])}</a>'
         for item in allowed_cashboxes
     )
-    cashbox_tabs_extra_class = " is-hidden" if initial_screen in {"letters", "work"} else ""
+    show_cashbox_tabs = len(allowed_cashboxes) > 1
+    cashbox_tabs_extra_class = " is-hidden" if not show_cashbox_tabs or initial_screen in {"letters", "work"} else ""
     flash_html = f'<div class="cash-mobile-flash{" ok" if success else ""}" data-cash-flash>{escape(flash_message)}</div>' if flash_message else ""
     edit_back_html = '<div class="cash-mobile-editbar is-hidden" data-cash-editbar><button type="button" data-cash-edit-back>Назад</button></div>'
     warnings = []
