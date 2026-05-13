@@ -15257,6 +15257,16 @@ def render_cashoperations_body(
         font-size: 12px;
         line-height: 1.15;
       }}
+      .cash-android .cash-mobile-actions {{
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }}
+      .cash-android .cash-mobile-action {{
+        min-height: 48px;
+        padding: 10px 8px;
+        font-size: 15px;
+        line-height: 1.15;
+      }}
       .cash-receipt-viewer {{
         position: fixed;
         inset: 0;
