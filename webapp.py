@@ -15818,12 +15818,12 @@ def render_cashoperations_body(
           const isSalary = categorySelect.value === "salary";
           const isTransfer = transferCategoryCodes.has(categorySelect.value);
           const isLaborForce = laborForceCategoryCodes.has(categorySelect.value);
-          if (isAdmin || isSalary || isTransfer) {{
+          if (isAdmin || isSalary || isTransfer || isLaborForce) {{
             projectSelect.value = "admin";
           }}
-          projectSelect.disabled = isAdmin || isSalary || isTransfer;
-          projectSelect.required = !(isAdmin || isSalary || isTransfer);
-          projectWrap && projectWrap.classList.toggle("is-hidden", isSalary || isTransfer);
+          projectSelect.disabled = isAdmin || isSalary || isTransfer || isLaborForce;
+          projectSelect.required = !(isAdmin || isSalary || isTransfer || isLaborForce);
+          projectWrap && projectWrap.classList.toggle("is-hidden", isSalary || isTransfer || isLaborForce);
           titleWrap && titleWrap.classList.toggle("is-hidden", isSalary || isTransfer || isLaborForce);
           if (titleInput) {{
             titleInput.required = !(isSalary || isTransfer || isLaborForce);
@@ -19555,7 +19555,7 @@ self.addEventListener("notificationclick", (event) => {
             category_codes = {code for code, _label in category_options_list}
             is_transfer_category = is_cash_transfer_category(category_code, category_labels)
             is_labor_category = is_labor_force_category(category_code, category_labels)
-            if category_code in {"admin", "salary"} or is_transfer_category:
+            if category_code in {"admin", "salary"} or is_transfer_category or is_labor_category:
                 project_code = "admin"
             if project_code not in project_codes:
                 raise ValueError("Выберите объект")
