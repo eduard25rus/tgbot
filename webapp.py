@@ -7435,16 +7435,29 @@ def layout(
     .directory-edit-form .submit-btn {{
       font-weight: 500;
     }}
+    html.has-directory-employee-popover,
     body.has-directory-employee-popover {{
       overflow: hidden;
+      height: 100%;
     }}
     .directory-employee-popover {{
-      width: min(720px, calc(100vw - 24px));
+      width: calc(100vw - 24px);
+      height: calc(100vh - 24px);
       max-height: calc(100vh - 24px);
       overflow-y: auto;
       overscroll-behavior: contain;
       align-content: start;
-      padding: 14px;
+      padding: 18px;
+    }}
+    .directory-employee-popover.is-viewport-fitted {{
+      top: 12px !important;
+      left: 12px !important;
+      right: auto !important;
+      bottom: auto !important;
+      width: calc(100vw - 24px) !important;
+      height: calc(100vh - 24px) !important;
+      max-width: calc(100vw - 24px) !important;
+      max-height: calc(100vh - 24px) !important;
     }}
     .directory-employee-form {{
       gap: 12px;
@@ -8185,6 +8198,22 @@ function fitStatusMenuPopover(menu) {{
   popover.style.minWidth = `${{Math.min(popover.getBoundingClientRect().width, availableWidth)}}px`;
   popover.style.maxHeight = `${{Math.max(180, window.innerHeight - viewportPad * 2)}}px`;
 
+  if (popover.classList.contains("directory-employee-popover")) {{
+    const modalWidth = window.innerWidth - viewportPad * 2;
+    const modalHeight = window.innerHeight - viewportPad * 2;
+    popover.style.left = `${{viewportPad}}px`;
+    popover.style.top = `${{viewportPad}}px`;
+    popover.style.right = "auto";
+    popover.style.bottom = "auto";
+    popover.style.width = `${{modalWidth}}px`;
+    popover.style.minWidth = `${{modalWidth}}px`;
+    popover.style.maxWidth = `${{modalWidth}}px`;
+    popover.style.height = `${{modalHeight}}px`;
+    popover.style.maxHeight = `${{modalHeight}}px`;
+    popover.style.visibility = "";
+    return;
+  }}
+
   const popoverRect = popover.getBoundingClientRect();
   const popoverWidth = Math.min(popoverRect.width, availableWidth);
   const popoverHeight = Math.min(popoverRect.height, window.innerHeight - viewportPad * 2);
@@ -8215,6 +8244,7 @@ function fitOpenStatusPopovers() {{
 
 function updateDirectoryEmployeePopoverLock() {{
   const hasOpenEmployeePopover = Boolean(document.querySelector(".status-menu[open] .directory-employee-popover"));
+  document.documentElement.classList.toggle("has-directory-employee-popover", hasOpenEmployeePopover);
   document.body.classList.toggle("has-directory-employee-popover", hasOpenEmployeePopover);
 }}
 
@@ -10302,7 +10332,41 @@ def render_directories_section(
     def employee_compensation_cell(employee) -> str:
         rate_history = employee_rate_history.get(employee.id, [])
         current_rate = payroll_latest_rate(rate_history)
-        history_note = payroll_rate_history_note(rate_history, employee.employee_group)
+        effective_note = (
+            f"Действует с {format_date(current_rate['effective_from'])}"
+            if current_rate.get("effective_from") is not None else
+            "Ставка не задана"
+        )
+        sorted_rates = sorted(rate_history, key=lambda rate: (rate["effective_from"], rate.get("id", 0)), reverse=True)
+        current_rate_id = current_rate.get("id")
+        previous_rates = [
+            rate for rate in sorted_rates
+            if current_rate_id is None or rate.get("id") != current_rate_id
+        ]
+        if current_rate_id is None and previous_rates:
+            previous_rates = previous_rates[1:]
+        if employee.employee_group == "builders":
+            history_rows = "".join(
+                f'<div class="contract-table-subtle">{format_date(rate["effective_from"])}: {escape(format_amount(float(rate.get("day_rate") or 0)))}/смена</div>'
+                for rate in previous_rates
+            )
+        else:
+            history_rows = "".join(
+                f'<div class="contract-table-subtle">{format_date(rate["effective_from"])}: ЗП {escape(format_amount(float(rate.get("salary_amount") or 0)))}, аванс {escape(format_amount(float(rate.get("advance_amount") or 0)))}</div>'
+                for rate in previous_rates
+            )
+        history_control = (
+            f"""
+            <details class="status-menu">
+              <summary><span class="contract-table-subtle directory-title-link">История ставок</span></summary>
+              <div class="status-popover compact">
+                <div class="timeline-title">История ставок</div>
+                {history_rows}
+              </div>
+            </details>
+            """
+            if previous_rates else ""
+        )
         if employee.employee_group == "builders":
             main_value = format_amount(float(current_rate.get("day_rate") or 0)) if float(current_rate.get("day_rate") or 0) > 0.009 else "—"
             caption = "за смену"
@@ -10313,7 +10377,8 @@ def render_directories_section(
         return f"""
         <div class="nowrap"><span class="payroll-amount">{main_value}</span></div>
         <div class="contract-table-subtle">{escape(caption)}</div>
-        <div class="contract-table-subtle">{escape(history_note)}</div>
+        <div class="contract-table-subtle">{escape(effective_note)}</div>
+        {history_control}
         """
 
     def render_employee_status_control(employee) -> str:
