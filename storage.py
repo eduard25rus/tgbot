@@ -917,6 +917,19 @@ class Storage:
                     FOREIGN KEY(employee_id) REFERENCES payroll_employees(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS payroll_employee_rates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    employee_id INTEGER NOT NULL,
+                    effective_from TEXT NOT NULL,
+                    day_rate REAL NOT NULL DEFAULT 0,
+                    salary_amount REAL NOT NULL DEFAULT 0,
+                    advance_amount REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, employee_id, effective_from),
+                    FOREIGN KEY(employee_id) REFERENCES payroll_employees(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS mobile_work_reports (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_chat_id INTEGER NOT NULL,
@@ -5164,6 +5177,76 @@ class Storage:
             )
             return cursor.rowcount > 0
 
+    def set_payroll_employee_rate(
+        self,
+        owner_chat_id: int,
+        employee_id: int,
+        effective_from: date,
+        day_rate: float = 0.0,
+        salary_amount: float = 0.0,
+        advance_amount: float = 0.0,
+    ) -> bool:
+        with self.connection() as conn:
+            employee = conn.execute(
+                "SELECT 1 FROM payroll_employees WHERE id = ? AND owner_chat_id = ?",
+                (employee_id, owner_chat_id),
+            ).fetchone()
+            if employee is None:
+                return False
+            conn.execute(
+                """
+                INSERT INTO payroll_employee_rates (
+                    owner_chat_id, employee_id, effective_from,
+                    day_rate, salary_amount, advance_amount, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_chat_id, employee_id, effective_from) DO UPDATE SET
+                    day_rate = excluded.day_rate,
+                    salary_amount = excluded.salary_amount,
+                    advance_amount = excluded.advance_amount
+                """,
+                (
+                    owner_chat_id,
+                    employee_id,
+                    effective_from.strftime(DATE_FMT),
+                    round(float(day_rate or 0), 2),
+                    round(float(salary_amount or 0), 2),
+                    round(float(advance_amount or 0), 2),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            return True
+
+    def list_payroll_employee_rate_history(self, owner_chat_id: int, employee_ids: list[int] | None = None) -> dict[int, list[dict]]:
+        cleaned_ids = sorted({int(employee_id) for employee_id in (employee_ids or []) if int(employee_id) > 0})
+        params: list[object] = [owner_chat_id]
+        id_clause = ""
+        if cleaned_ids:
+            id_clause = f" AND employee_id IN ({','.join('?' for _ in cleaned_ids)})"
+            params.extend(cleaned_ids)
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, employee_id, effective_from, day_rate, salary_amount, advance_amount, created_at
+                FROM payroll_employee_rates
+                WHERE owner_chat_id = ?{id_clause}
+                ORDER BY employee_id ASC, effective_from ASC, id ASC
+                """,
+                params,
+            ).fetchall()
+        result: dict[int, list[dict]] = {}
+        for row in rows:
+            result.setdefault(int(row["employee_id"]), []).append({
+                "id": int(row["id"]),
+                "employee_id": int(row["employee_id"]),
+                "effective_from": date.fromisoformat(row["effective_from"]),
+                "day_rate": float(row["day_rate"] or 0),
+                "salary_amount": float(row["salary_amount"] or 0),
+                "advance_amount": float(row["advance_amount"] or 0),
+                "created_at": datetime.fromisoformat(row["created_at"]),
+            })
+        return result
+
     def payroll_employee_usage_counts(self, owner_chat_id: int, employee_id: int) -> dict[str, int]:
         with self.connection() as conn:
             exists = conn.execute(
@@ -5505,6 +5588,86 @@ class Storage:
                 return False
             self._upsert_payroll_entry(conn, owner_chat_id, employee_id, payroll_month, updated_field="note", updated_value=note.strip())
             return True
+
+    def list_payroll_money_links(self, owner_chat_id: int, payroll_month: date) -> dict[int, list[dict]]:
+        period_start = payroll_month.replace(day=1)
+        if period_start.month == 12:
+            period_end = date(period_start.year + 1, 1, 1)
+        else:
+            period_end = date(period_start.year, period_start.month + 1, 1)
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    e.id AS expense_id,
+                    e.expense_date,
+                    e.payroll_employee_id AS employee_id,
+                    e.payroll_employee_name AS employee_name,
+                    e.amount,
+                    e.category_code,
+                    e.title,
+                    e.payment_source,
+                    'direct' AS link_kind
+                FROM expense_entries e
+                WHERE e.owner_chat_id = ?
+                  AND e.deleted_at IS NULL
+                  AND COALESCE(NULLIF(e.operation_type, ''), 'expense') = 'expense'
+                  AND e.expense_date >= ?
+                  AND e.expense_date < ?
+                  AND e.payroll_employee_id IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM expense_worker_allocations a
+                    WHERE a.owner_chat_id = e.owner_chat_id
+                      AND a.expense_entry_id = e.id
+                  )
+                UNION ALL
+                SELECT
+                    e.id AS expense_id,
+                    e.expense_date,
+                    a.employee_id,
+                    a.employee_name,
+                    a.amount,
+                    e.category_code,
+                    e.title,
+                    e.payment_source,
+                    'allocation' AS link_kind
+                FROM expense_worker_allocations a
+                JOIN expense_entries e
+                  ON e.id = a.expense_entry_id
+                 AND e.owner_chat_id = a.owner_chat_id
+                WHERE a.owner_chat_id = ?
+                  AND e.deleted_at IS NULL
+                  AND COALESCE(NULLIF(e.operation_type, ''), 'expense') = 'expense'
+                  AND e.expense_date >= ?
+                  AND e.expense_date < ?
+                ORDER BY expense_date DESC, expense_id DESC
+                """,
+                (
+                    owner_chat_id,
+                    period_start.strftime(DATE_FMT),
+                    period_end.strftime(DATE_FMT),
+                    owner_chat_id,
+                    period_start.strftime(DATE_FMT),
+                    period_end.strftime(DATE_FMT),
+                ),
+            ).fetchall()
+        result: dict[int, list[dict]] = {}
+        for row in rows:
+            employee_id = int(row["employee_id"] or 0)
+            if employee_id <= 0:
+                continue
+            result.setdefault(employee_id, []).append({
+                "expense_id": int(row["expense_id"]),
+                "expense_date": date.fromisoformat(row["expense_date"]),
+                "employee_name": row["employee_name"] or "",
+                "amount": float(row["amount"] or 0),
+                "category_code": row["category_code"] or "",
+                "title": row["title"] or "",
+                "payment_source": row["payment_source"] or "",
+                "link_kind": row["link_kind"] or "",
+            })
+        return result
 
     def add_mobile_work_report(
         self,

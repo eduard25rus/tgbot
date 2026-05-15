@@ -4549,7 +4549,7 @@ SECTIONS = [
     ("directories", "Справочники", "/directories"),
     ("payables", "Кредиторка", "/payables"),
     ("expenses", "ДДС", "/expenses"),
-    ("payroll", "Зарплата", "/payroll"),
+    ("payroll", "ФОТ", "/payroll"),
     ("workforce", "Рабочая сила", "/workforce"),
     ("finance", "Финансовый анализ", "/finance-analysis"),
     ("jurisprudence", "Юриспруденция", "/jurisprudence/letters"),
@@ -4558,6 +4558,7 @@ SECTIONS = [
 
 FINANCE_NAV_SECTIONS = [
     ("finance", "Финанализ", "/finance-analysis"),
+    ("payroll", "ФОТ", "/payroll"),
     ("expenses", "ДДС", "/expenses"),
     ("cashoperations", "Кассы", "/cashoperations"),
 ]
@@ -4605,8 +4606,8 @@ SECTION_HERO = {
         "Движение денежных средств: банковская выписка, кассы, приходы, расходы и неразнесенные операции.",
     ),
     "payroll": (
-        "Зарплата",
-        "Модуль для сотрудников, начислений, выплат, авансов и связки зарплат с объектами и этапами.",
+        "ФОТ",
+        "Фонд оплаты труда: административный персонал отдельно от рабочих на объектах, с начислениями, ставками и выплатами.",
     ),
     "workforce": (
         "Рабочая сила",
@@ -4683,7 +4684,7 @@ def layout(
     finance_nav_ids = {item[0] for item in FINANCE_NAV_SECTIONS}
     jurisprudence_nav_ids = {item[0] for item in JURISPRUDENCE_NAV_SECTIONS}
     settings_nav_ids = {item[0] for item in SETTINGS_NAV_SECTIONS}
-    show_finance_group = bool(current_user and current_user.get("is_super_admin"))
+    show_finance_group = bool(current_user and has_permission(current_user, "finance", "view"))
     show_jurisprudence_group = bool(current_user and has_permission(current_user, "jurisprudence", "view"))
     settings_links_source = [
         item for item in SETTINGS_NAV_SECTIONS
@@ -4692,9 +4693,11 @@ def layout(
     show_settings_group = bool(settings_links_source)
     visible_sections = []
     for section_id, label, href in SECTIONS:
+        if section_id == "payroll":
+            continue
         if current_user is not None and not has_permission(current_user, section_id, "view"):
             continue
-        if show_finance_group and section_id in {"finance", "payables", "expenses"}:
+        if show_finance_group and section_id in {"finance", "payables", "expenses", "payroll"}:
             continue
         if show_jurisprudence_group and section_id == "jurisprudence":
             continue
@@ -4711,9 +4714,17 @@ def layout(
             if active_subsection in finance_nav_ids
             else (active_section if active_section in finance_nav_ids else "")
         )
+        finance_links_source = [
+            (code, label, href)
+            for code, label, href in FINANCE_NAV_SECTIONS
+            if (
+                code in {"finance", "payroll", "cashoperations"}
+                or (current_user is not None and has_permission(current_user, code, "view"))
+            )
+        ]
         finance_links = "".join(
             f'<a class="nav-sublink{" active" if code == active_finance_key else ""}" href="{href}">{label}</a>'
-            for code, label, href in FINANCE_NAV_SECTIONS
+            for code, label, href in finance_links_source
         )
         nav_links += f"""
         <details class="nav-group"{" open" if active_finance_key else ""}>
@@ -9797,6 +9808,7 @@ def render_directories_section(
     manual_objects = storage.list_jurisprudence_object_records(owner_chat_id)
     expense_categories = storage.list_expense_categories(owner_chat_id)
     employees = storage.list_payroll_employees(owner_chat_id)
+    employee_rate_history = storage.list_payroll_employee_rate_history(owner_chat_id, [employee.id for employee in employees])
     if not active_directory_mode:
         active_employees_count = sum(1 for employee in employees if employee.is_active)
         terminated_employees_count = sum(1 for employee in employees if not employee.is_active)
@@ -10092,6 +10104,54 @@ def render_directories_section(
 
     today_iso = datetime.now(VLADIVOSTOK_TZ).date().isoformat()
 
+    def employee_compensation_fields(employee_group: str, rate_history: list[dict]) -> str:
+        latest_rate = payroll_latest_rate(rate_history)
+        effective_value = today_iso
+        if latest_rate.get("effective_from") is not None:
+            effective_value = latest_rate["effective_from"].isoformat()
+        if employee_group == "builders":
+            return f"""
+            <div class="field">
+              <label>Ставка действует с</label>
+              <input type="date" name="rate_effective_from" value="{effective_value}">
+            </div>
+            <div class="field">
+              <label>Ставка за смену</label>
+              <input type="text" name="day_rate" value="{escape(format_amount_input(float(latest_rate.get("day_rate") or 0)))}" data-money-input="1" placeholder="3500">
+            </div>
+            """
+        return f"""
+        <div class="field">
+          <label>Ставка действует с</label>
+          <input type="date" name="rate_effective_from" value="{effective_value}">
+        </div>
+        <div class="field">
+          <label>Зарплата</label>
+          <input type="text" name="salary_amount" value="{escape(format_amount_input(float(latest_rate.get("salary_amount") or 0)))}" data-money-input="1" placeholder="150000">
+        </div>
+        <div class="field">
+          <label>Аванс</label>
+          <input type="text" name="advance_amount" value="{escape(format_amount_input(float(latest_rate.get("advance_amount") or 0)))}" data-money-input="1" placeholder="50000">
+        </div>
+        """
+
+    def employee_compensation_cell(employee) -> str:
+        rate_history = employee_rate_history.get(employee.id, [])
+        current_rate = payroll_latest_rate(rate_history)
+        history_note = payroll_rate_history_note(rate_history, employee.employee_group)
+        if employee.employee_group == "builders":
+            main_value = format_amount(float(current_rate.get("day_rate") or 0)) if float(current_rate.get("day_rate") or 0) > 0.009 else "—"
+            caption = "за смену"
+        else:
+            main_value = format_amount(float(current_rate.get("salary_amount") or 0)) if float(current_rate.get("salary_amount") or 0) > 0.009 else "—"
+            advance_value = float(current_rate.get("advance_amount") or 0)
+            caption = f"аванс {format_amount(advance_value)}" if advance_value > 0.009 else "аванс не задан"
+        return f"""
+        <div class="nowrap"><span class="payroll-amount">{main_value}</span></div>
+        <div class="contract-table-subtle">{escape(caption)}</div>
+        <div class="contract-table-subtle">{escape(history_note)}</div>
+        """
+
     def render_employee_status_control(employee) -> str:
         date_value = employee.terminated_date.isoformat() if employee.terminated_date else today_iso
         date_note = (
@@ -10129,7 +10189,7 @@ def render_directories_section(
 
     show_employee_source_group = active_employee_group == "terminated"
     employee_group_header = '<th class="nowrap">Раздел</th>' if show_employee_source_group else ''
-    employee_group_empty_colspan = 5 if show_employee_source_group else 4
+    employee_group_empty_colspan = 6 if show_employee_source_group else 5
     employee_group_cell = (
         lambda employee: f'<td><span class="chip">{escape(employee_work_groups.get(employee.employee_group, "Административные"))}</span></td>'
     )
@@ -10174,6 +10234,7 @@ def render_directories_section(
                       <label>Дата увольнения</label>
                       <input type="date" name="terminated_date" value="{employee.terminated_date.isoformat() if employee.terminated_date else today_iso}" {"required" if not employee.is_active else ""}>
                     </div>
+                    {employee_compensation_fields(employee.employee_group, employee_rate_history.get(employee.id, []))}
                     <button class="submit-btn" type="submit">Сохранить сотрудника</button>
                   </form>
                   <form method="post" action="/directories/employees/{employee.id}/delete?owner={owner_chat_id}&employee_group={active_employee_group}" onsubmit="return confirm('Удалить сотрудника из справочника? Это можно сделать только если на него нет зарплат, смен и расходов.');" style="margin-top:10px;">
@@ -10186,6 +10247,7 @@ def render_directories_section(
             {f'<div class="contract-table-subtle">День рождения: {format_date(employee.birth_date)}</div>' if employee.birth_date else ''}
           </td>
           <td>{escape(employee.role_title or "Без должности")}</td>
+          <td>{employee_compensation_cell(employee)}</td>
           {employee_group_cell(employee) if show_employee_source_group else ""}
           <td style="text-align:center;">{render_employee_status_control(employee)}</td>
         </tr>
@@ -10217,6 +10279,7 @@ def render_directories_section(
                   {employee_group_options(active_employee_group if active_employee_group != "terminated" else "admin")}
                 </select>
               </div>
+              {employee_compensation_fields(active_employee_group if active_employee_group == "builders" else "admin", [])}
               <button class="submit-btn" type="submit">Добавить сотрудника</button>
             </form>
           </div>
@@ -10273,6 +10336,7 @@ def render_directories_section(
             <th class="nowrap">№</th>
             <th>Сотрудник</th>
             <th>Должность</th>
+            <th class="nowrap">Ставка</th>
             {employee_group_header}
             <th class="nowrap">Статус</th>
           </tr>
@@ -10767,6 +10831,41 @@ def payroll_row_metrics(row) -> dict[str, float | str]:
     }
 
 
+def payroll_rate_for_date(rate_history: list[dict], target_date: date) -> dict:
+    active_rate = {"day_rate": 0.0, "salary_amount": 0.0, "advance_amount": 0.0, "effective_from": None}
+    for item in sorted(rate_history, key=lambda rate: (rate["effective_from"], rate.get("id", 0))):
+        if item["effective_from"] <= target_date:
+            active_rate = item
+        else:
+            break
+    return active_rate
+
+
+def payroll_latest_rate(rate_history: list[dict]) -> dict:
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    if not rate_history:
+        return {"day_rate": 0.0, "salary_amount": 0.0, "advance_amount": 0.0, "effective_from": None}
+    current_rate = payroll_rate_for_date(rate_history, today)
+    if current_rate.get("effective_from") is not None:
+        return current_rate
+    return sorted(rate_history, key=lambda rate: (rate["effective_from"], rate.get("id", 0)))[-1]
+
+
+def payroll_rate_history_note(rate_history: list[dict], employee_group: str) -> str:
+    if not rate_history:
+        return "Ставка не задана"
+    latest_items = sorted(rate_history, key=lambda rate: (rate["effective_from"], rate.get("id", 0)), reverse=True)[:3]
+    if employee_group == "builders":
+        return " · ".join(
+            f"{format_date(item['effective_from'])}: {format_amount(item['day_rate'])}/смена"
+            for item in latest_items
+        )
+    return " · ".join(
+        f"{format_date(item['effective_from'])}: ЗП {format_amount(item['salary_amount'])}, аванс {format_amount(item['advance_amount'])}"
+        for item in latest_items
+    )
+
+
 def payroll_deadline_for_kind(payroll_month: date, payment_kind: str) -> date:
     if payment_kind in {"advance_card", "advance_cash"}:
         return payroll_month.replace(day=20)
@@ -11067,7 +11166,7 @@ def build_events_calendar_items(
                     )
                 )
 
-    if has_permission(current_user, "payroll", "view"):
+    if has_permission(current_user, "finance", "view"):
         salary_date = date(month.year, month.month, 5)
         previous_payroll_month = month_add(month, -1)
         items.append(
@@ -11199,7 +11298,7 @@ def render_events_calendar_section(
         ("auctions", "Аукционы"),
         ("payables", "Кредиторка"),
         ("finance", "Финансы"),
-        ("payroll", "Зарплата"),
+        ("payroll", "ФОТ"),
     ]
     group_options = [
         ("", "Все типы"),
@@ -11357,7 +11456,7 @@ def render_payroll_amount_editor(owner_chat_id: int, payroll_month: date, row, f
     amount_html = format_amount(value) if abs(value) > 0.009 else "—"
     amount_class = "payroll-amount"
     selection_attrs = f'data-payroll-value="{value:.2f}" data-payroll-person="{escape(row.full_name)}" data-payroll-label="{escape(label)}"'
-    if not has_permission(current_user, "payroll", "edit"):
+    if not has_permission(current_user, "finance", "edit"):
         return f'<span class="{amount_class} payroll-selectable js-payroll-selectable" {selection_attrs}>{amount_html}</span>'
     return f"""
     <details class="status-menu">
@@ -11418,7 +11517,7 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
     {f'<div class="{note_class}">{paid_note}</div>' if paid_note else ""}
     </div>
     """
-    if not has_permission(current_user, "payroll", "edit"):
+    if not has_permission(current_user, "finance", "edit"):
         return display
     checked_attr = "checked" if paid_amount > 0.009 else ""
     return f"""
@@ -11450,7 +11549,7 @@ def render_payroll_payment_editor(owner_chat_id: int, payroll_month: date, row, 
 
 
 def render_payroll_note_editor(owner_chat_id: int, payroll_month: date, row, current_user: dict | None) -> str:
-    if not has_permission(current_user, "payroll", "edit"):
+    if not has_permission(current_user, "finance", "edit"):
         return ""
     button_class = "payroll-note-trigger has-note" if row.note.strip() else "payroll-note-trigger"
     button_symbol = "•" if row.note.strip() else "+"
@@ -11476,6 +11575,227 @@ def render_payroll_note_display(row) -> str:
     if not note_text:
         return ""
     return f'<div class="contract-table-subtle payroll-note-display">{escape(note_text)}</div>'
+
+
+def payroll_mode_choice_panel(owner_chat_id: int, selected_month: date, admin_count: int, worker_count: int, active_mode: str = "") -> str:
+    cards = [
+        (
+            "admin",
+            "Административный персонал",
+            "Начисления, авансы, зарплата, премии и ручное закрытие выплат по административной команде.",
+            admin_count,
+        ),
+        (
+            "builders",
+            "Рабочие на объектах",
+            "Сводка по сменам за месяц: объекты, ставки, сумма к выплате и уже выданные деньги.",
+            worker_count,
+        ),
+    ]
+    cards_html = "".join(
+        f"""
+        <a class="card mini-card contract-table-link access-choice-card{' active' if active_mode == mode else ''}" href="/payroll?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}&mode={mode}">
+          <div class="stat-label">ФОТ</div>
+          <div class="access-choice-title">{escape(title)}</div>
+          <div class="contract-table-subtle">{escape(description)}</div>
+          <div class="badge-row"><span class="badge">Сотрудников: {count}</span></div>
+        </a>
+        """
+        for mode, title, description, count in cards
+    )
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">ФОТ</h2>
+          <div class="panel-sub">Два разных учета оплаты труда: административная команда и рабочие смены на объектах.</div>
+        </div>
+        <div class="chip">{escape(format_month_label(selected_month))}</div>
+      </div>
+      <div class="stats access-choice-grid">{cards_html}</div>
+    </section>
+    """
+
+
+def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date, flash_message: str = "", success: bool = False) -> str:
+    next_month = month_add(selected_month, 1)
+    reports = storage.list_mobile_work_reports_for_period(owner_chat_id, selected_month, next_month)
+    employees = storage.list_payroll_employees(owner_chat_id)
+    employee_lookup = {employee.id: employee for employee in employees}
+    builder_ids = {
+        employee.id
+        for employee in employees
+        if (employee.employee_group or "admin") == "builders"
+    }
+    worker_ids = sorted({
+        int(worker["employee_id"])
+        for report in reports
+        for worker in report.workers
+        if int(worker["employee_id"]) in builder_ids
+    })
+    rate_history = storage.list_payroll_employee_rate_history(owner_chat_id, worker_ids)
+    payment_links = storage.list_payroll_money_links(owner_chat_id, selected_month)
+    project_labels = dict(expense_project_options(storage, owner_chat_id, storage.list_expense_entries(owner_chat_id), include_legacy_entries=False))
+    summary: dict[int, dict] = {}
+    total_shifts = 0.0
+    total_amount = 0.0
+    active_projects: set[str] = set()
+    for report in reports:
+        project_label = report.project_label or project_labels.get(report.project_code, report.project_code or "Без объекта")
+        for worker in report.workers:
+            employee_id = int(worker["employee_id"])
+            if employee_id not in builder_ids:
+                continue
+            day_part = float(worker["day_part"])
+            rate = payroll_rate_for_date(rate_history.get(employee_id, []), report.report_date)
+            day_rate = float(rate.get("day_rate") or 0)
+            amount = round(day_part * day_rate, 2)
+            employee = employee_lookup.get(employee_id)
+            bucket = summary.setdefault(
+                employee_id,
+                {
+                    "name": employee.full_name if employee else worker["employee_name"],
+                    "units": 0.0,
+                    "projects": set(),
+                    "rates": {},
+                    "amount": 0.0,
+                    "paid": 0.0,
+                    "payments": [],
+                },
+            )
+            bucket["units"] += day_part
+            bucket["projects"].add(project_label)
+            bucket["amount"] += amount
+            bucket["rates"][day_rate] = bucket["rates"].get(day_rate, 0.0) + day_part
+            total_shifts += day_part
+            total_amount += amount
+            active_projects.add(project_label)
+    for employee_id, links in payment_links.items():
+        if employee_id not in summary:
+            continue
+        paid_amount = round(sum(float(item["amount"]) for item in links), 2)
+        summary[employee_id]["paid"] = paid_amount
+        summary[employee_id]["payments"] = links
+    total_paid = round(sum(float(item["paid"]) for item in summary.values()), 2)
+    total_debt = round(max(total_amount - total_paid, 0.0), 2)
+    admin_count = len(storage.list_payroll_rows(owner_chat_id, selected_month))
+
+    month_options = []
+    for offset in range(-2, 4):
+        month_value = month_add(selected_month, offset)
+        month_options.append(
+            f'<option value="{month_value.strftime("%Y-%m")}"{" selected" if month_value == selected_month else ""}>{escape(format_month_label(month_value))}</option>'
+        )
+    month_form = f"""
+    <form class="action-row" method="get" action="/payroll" style="justify-content:space-between; align-items:end; gap:12px; margin-top:14px;">
+      <input type="hidden" name="owner" value="{owner_chat_id}">
+      <input type="hidden" name="mode" value="builders">
+      <div class="field" style="min-width:240px; margin:0;">
+        <label>Месяц</label>
+        <select name="month">{''.join(month_options)}</select>
+      </div>
+      <button class="secondary-btn" type="submit">Показать месяц</button>
+    </form>
+    """
+
+    def rates_display(item: dict) -> str:
+        rates = sorted(item["rates"].items(), key=lambda pair: pair[0])
+        if not rates:
+            return "—"
+        parts = [
+            f"{format_amount(rate)} × {workforce_units_label(float(units))} см."
+            for rate, units in rates
+            if rate > 0.009
+        ]
+        if not parts:
+            return '<span class="chip danger">Ставка не задана</span>'
+        return "<br>".join(escape(part) for part in parts)
+
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td>
+            <div class="timeline-title">{escape(item["name"])}</div>
+            <div class="contract-table-subtle">В справочнике: Рабочие на объектах</div>
+          </td>
+          <td class="nowrap">{escape(workforce_units_label(float(item["units"])))}</td>
+          <td>{escape(", ".join(sorted(item["projects"])) or "—")}</td>
+          <td class="nowrap">{rates_display(item)}</td>
+          <td class="nowrap"><span class="payroll-amount">{escape(format_amount(float(item["amount"])))}</span></td>
+          <td class="nowrap">
+            <span class="payroll-amount{' is-paid' if float(item["paid"]) > 0.009 else ''}">{escape(format_amount(float(item["paid"]))) if float(item["paid"]) > 0.009 else "—"}</span>
+            {f'<div class="contract-table-subtle">{len(item["payments"])} выплат</div>' if item["payments"] else '<div class="contract-table-subtle">выплат нет</div>'}
+          </td>
+          <td class="nowrap"><span class="payroll-balance{' ok' if max(float(item["amount"]) - float(item["paid"]), 0.0) <= 0.009 else ''}">{escape(format_amount(max(float(item["amount"]) - float(item["paid"]), 0.0)))}</span></td>
+        </tr>
+        """
+        for _employee_id, item in sorted(summary.items(), key=lambda pair: pair[1]["name"].casefold())
+    ) or '<tr><td colspan="7">В выбранном месяце смен рабочих пока нет.</td></tr>'
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    stats = f"""
+    <section class="stats" style="margin-top:22px;">
+      <article class="card stat-card">
+        <div class="stat-label">Смен</div>
+        <div class="stat-value">{escape(workforce_units_label(total_shifts))}</div>
+        <div class="stat-note">Полные и половинные смены за месяц</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Объектов</div>
+        <div class="stat-value">{len(active_projects)}</div>
+        <div class="stat-note">Где работали сотрудники</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">К выплате</div>
+        <div class="stat-value">{format_amount(total_amount)}</div>
+        <div class="stat-note">Смены × ставка на дату смены</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Выплачено / долг</div>
+        <div class="stat-value">{format_amount(total_paid)}</div>
+        <div class="stat-note">Осталось {format_amount(total_debt)}</div>
+      </article>
+    </section>
+    """
+    return f"""
+    {payroll_mode_choice_panel(owner_chat_id, selected_month, admin_count, len(summary), "builders")}
+    {stats}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Рабочие на объектах</h2>
+          <div class="panel-sub">Сводник зарплаты по рабочим за выбранный месяц: смены, объекты, ставки, начислено и уже выдано через кассу/ДДС.</div>
+        </div>
+        <a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}">Открыть смены</a>
+      </div>
+      {month_form}
+      {flash_html}
+      <table class="table contract-table payroll-table" style="margin-top:18px;">
+        <thead>
+          <tr>
+            <th>Работник</th>
+            <th class="nowrap">Смен</th>
+            <th>Объекты</th>
+            <th class="nowrap">Стоимость смены</th>
+            <th class="nowrap">К выплате</th>
+            <th class="nowrap">Получено</th>
+            <th class="nowrap">Остаток</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+        <tfoot>
+          <tr>
+            <th>Итого</th>
+            <th class="nowrap">{escape(workforce_units_label(total_shifts))}</th>
+            <th>{len(active_projects)} объектов</th>
+            <th></th>
+            <th class="nowrap">{escape(format_amount(total_amount))}</th>
+            <th class="nowrap">{escape(format_amount(total_paid))}</th>
+            <th class="nowrap">{escape(format_amount(total_debt))}</th>
+          </tr>
+        </tfoot>
+      </table>
+    </section>
+    """
 
 
 def payable_metrics(entry) -> dict[str, float | str]:
@@ -12069,7 +12389,7 @@ def task_source_label(source_section: str) -> str:
         "manual": "Ручная задача",
         "contracts": "Контракты",
         "auctions": "Аукционы",
-        "payroll": "Зарплата",
+        "payroll": "ФОТ",
     }.get(source_section, "Задача")
 
 
@@ -12311,7 +12631,7 @@ def render_tasks_section(
         ("manual", "Ручные задачи"),
         ("contracts", "Контракты"),
         ("auctions", "Аукционы"),
-        ("payroll", "Зарплата"),
+        ("payroll", "ФОТ"),
     ]
     active_count = sum(1 for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] == "open") + len(visible_auto_tasks)
     archive_count = sum(1 for task in visible_manual_tasks if task["deleted_at"] is None and task["status"] in {"done", "not_done", "archived"}) + len(visible_archived_auto_tasks)
@@ -12335,7 +12655,7 @@ def render_tasks_section(
             "manual": "Ручная задача",
             "contracts": "Контракты",
             "auctions": "Аукционы",
-            "payroll": "Зарплата",
+            "payroll": "ФОТ",
         }.get(task["source_section"], "Задача")
         group_rows.append(
             f"""
@@ -12762,7 +13082,7 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
     """
 
 
-def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date | None = None, flash_message: str = "", success: bool = False) -> str:
+def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date | None = None, flash_message: str = "", success: bool = False, active_payroll_mode: str = "") -> str:
     storage.ensure_payroll_seed(owner_chat_id)
     months = storage.list_payroll_months(owner_chat_id)
     if not months:
@@ -12770,9 +13090,19 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     if selected_month is None or selected_month not in months:
         selected_month = months[0]
     rows = storage.list_payroll_rows(owner_chat_id, selected_month)
+    builder_reports = storage.list_mobile_work_reports_for_period(owner_chat_id, selected_month, month_add(selected_month, 1))
+    builder_count = len({
+        int(worker["employee_id"])
+        for report in builder_reports
+        for worker in report.workers
+    })
+    if active_payroll_mode not in {"admin", "builders"}:
+        return payroll_mode_choice_panel(owner_chat_id, selected_month, len(rows), builder_count)
+    if active_payroll_mode == "builders":
+        return render_payroll_workers_section(storage, owner_chat_id, current_user, selected_month, flash_message, success)
     next_month = month_add(selected_month, 1)
     next_month_exists = next_month in months
-    available_employees = storage.list_payroll_available_employees_for_month(owner_chat_id, selected_month) if has_permission(current_user, "payroll", "edit") else []
+    available_employees = storage.list_payroll_available_employees_for_month(owner_chat_id, selected_month) if has_permission(current_user, "finance", "edit") else []
     total_accrued = sum(row.accrued_amount for row in rows)
     total_paid = sum(payroll_row_metrics(row)["paid_total"] for row in rows)
     total_debt = sum(payroll_row_metrics(row)["debt_amount"] for row in rows)
@@ -12810,7 +13140,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     month_remove_toolbar = ""
     clone_month_button = ""
     month_edit_button = ""
-    if has_permission(current_user, "payroll", "edit"):
+    if has_permission(current_user, "finance", "edit"):
         month_edit_button = """
         <button class="secondary-btn" type="button" id="payroll-month-edit-toggle">Редактировать состав месяца</button>
         """
@@ -12896,7 +13226,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
               <td class="nowrap" style="text-align:center;">
                 <div class="payroll-month-index-cell">
                   <span>{index}</span>
-                  {'<label class="payroll-month-remove-toggle"><input class="js-payroll-month-remove" type="checkbox" value="' + str(row.employee_id) + '"></label>' if has_permission(current_user, "payroll", "edit") else ''}
+                  {'<label class="payroll-month-remove-toggle"><input class="js-payroll-month-remove" type="checkbox" value="' + str(row.employee_id) + '"></label>' if has_permission(current_user, "finance", "edit") else ''}
                 </div>
               </td>
               <td>
@@ -12934,7 +13264,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         for item in payroll_upcoming_events
     ) or '<div class="empty">На ближайшую неделю зарплатных событий нет.</div>'
     selection_toolbar = ""
-    if has_permission(current_user, "payroll", "view"):
+    if has_permission(current_user, "finance", "view"):
         selection_toolbar = """
         <div class="payroll-selection-toolbar">
           <div class="action-row" style="gap:10px;">
@@ -12949,6 +13279,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
         </div>
         """
     return f"""
+    {payroll_mode_choice_panel(owner_chat_id, selected_month, len(rows), builder_count, "admin")}
     {stats}
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
@@ -21050,7 +21381,17 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Укажите ФИО сотрудника")
             if not role_title:
                 raise ValueError("Укажите должность")
-            storage.add_payroll_employee(current_owner, full_name, role_title, employee_group, birth_date)
+            employee_id = storage.add_payroll_employee(current_owner, full_name, role_title, employee_group, birth_date)
+            rate_effective_raw = form.get("rate_effective_from", "").strip()
+            if rate_effective_raw:
+                storage.set_payroll_employee_rate(
+                    current_owner,
+                    employee_id,
+                    parse_date(rate_effective_raw),
+                    parse_amount(form.get("day_rate", "0") or "0"),
+                    parse_amount(form.get("salary_amount", "0") or "0"),
+                    parse_amount(form.get("advance_amount", "0") or "0"),
+                )
             return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={employee_group}#directory-employees")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, "employees", active_employee_group, f"Не удалось добавить сотрудника: {exc}")
@@ -21087,6 +21428,16 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Укажите должность")
             if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, employee_group, is_active, birth_date, terminated_date):
                 raise ValueError("Сотрудник не найден")
+            rate_effective_raw = form.get("rate_effective_from", "").strip()
+            if rate_effective_raw:
+                storage.set_payroll_employee_rate(
+                    current_owner,
+                    employee_id,
+                    parse_date(rate_effective_raw),
+                    parse_amount(form.get("day_rate", "0") or "0"),
+                    parse_amount(form.get("salary_amount", "0") or "0"),
+                    parse_amount(form.get("advance_amount", "0") or "0"),
+                )
             target_employee_group = employee_group if is_active else "terminated"
             return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={target_employee_group}#directory-employees")
         except Exception as exc:
@@ -23172,7 +23523,7 @@ self.addEventListener("notificationclick", (event) => {
             return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&flash={quote_plus(f'Не удалось удалить смену: {exc}')}")
 
     if path == "/payroll/employees/new" and method == "POST":
-        denied = guard("payroll", "edit")
+        denied = guard("finance", "edit")
         if denied:
             return denied
         selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0])
@@ -23188,15 +23539,15 @@ self.addEventListener("notificationclick", (event) => {
             if selected_month is not None:
                 storage.add_payroll_employee_to_month(current_owner, employee_id, selected_month)
             month_param = selected_month.strftime("%Y-%m") if selected_month is not None else ""
-            return redirect(start_response, f"/payroll?owner={current_owner}&month={month_param}")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={month_param}&mode=admin")
         except Exception as exc:
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось добавить сотрудника: {exc}")
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось добавить сотрудника: {exc}", active_payroll_mode="admin")
+            html = layout("ФОТ", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
     if path == "/payroll/months/clone" and method == "POST":
-        denied = guard("payroll", "edit")
+        denied = guard("finance", "edit")
         if denied:
             return denied
         selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
@@ -23208,15 +23559,15 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Не удалось определить новый месяц")
             if not storage.clone_payroll_month(current_owner, source_month, target_month):
                 raise ValueError("Не удалось создать новый месяц. Возможно, он уже существует.")
-            return redirect(start_response, f"/payroll?owner={current_owner}&month={target_month.strftime('%Y-%m')}")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={target_month.strftime('%Y-%m')}&mode=admin")
         except Exception as exc:
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось создать месяц: {exc}")
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось создать месяц: {exc}", active_payroll_mode="admin")
+            html = layout("ФОТ", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
     if path == "/payroll/months/add-employee" and method == "POST":
-        denied = guard("payroll", "edit")
+        denied = guard("finance", "edit")
         if denied:
             return denied
         selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
@@ -23227,15 +23578,15 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите сотрудника")
             if not storage.add_payroll_employee_to_month(current_owner, employee_id, selected_month):
                 raise ValueError("Не удалось добавить сотрудника в месяц")
-            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}&mode=admin")
         except Exception as exc:
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось добавить сотрудника в месяц: {exc}")
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось добавить сотрудника в месяц: {exc}", active_payroll_mode="admin")
+            html = layout("ФОТ", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
     if path.startswith("/payroll/months/remove-employee/") and method == "POST":
-        denied = guard("payroll", "edit")
+        denied = guard("finance", "edit")
         if denied:
             return denied
         selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
@@ -23243,15 +23594,15 @@ self.addEventListener("notificationclick", (event) => {
             employee_id = int(path.split("/")[4])
             if not storage.remove_payroll_employee_from_month(current_owner, employee_id, selected_month):
                 raise ValueError("Не удалось убрать сотрудника из месяца")
-            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}&mode=admin")
         except Exception as exc:
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить состав месяца: {exc}")
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить состав месяца: {exc}", active_payroll_mode="admin")
+            html = layout("ФОТ", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
     if path == "/payroll/months/remove-employees" and method == "POST":
-        denied = guard("payroll", "edit")
+        denied = guard("finance", "edit")
         if denied:
             return denied
         selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0]) or date.today().replace(day=1)
@@ -23262,15 +23613,15 @@ self.addEventListener("notificationclick", (event) => {
             removed_count = storage.remove_payroll_employees_from_month(current_owner, employee_ids, selected_month)
             if removed_count <= 0:
                 raise ValueError("Никого не удалось удалить из месяца")
-            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}&mode=admin")
         except Exception as exc:
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить состав месяца: {exc}")
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить состав месяца: {exc}", active_payroll_mode="admin")
+            html = layout("ФОТ", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
     if path.startswith("/payroll/entries/") and path.endswith("/amount") and method == "POST":
-        denied = guard("payroll", "edit")
+        denied = guard("finance", "edit")
         if denied:
             return denied
         employee_id = int(path.split("/")[3])
@@ -23281,15 +23632,15 @@ self.addEventListener("notificationclick", (event) => {
             amount = parse_amount(form.get("amount", "0"))
             if not storage.upsert_payroll_amount(current_owner, employee_id, selected_month, field_name, amount):
                 raise ValueError("Не удалось обновить сумму")
-            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}&mode=admin")
         except Exception as exc:
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить сумму: {exc}")
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить сумму: {exc}", active_payroll_mode="admin")
+            html = layout("ФОТ", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
     if path.startswith("/payroll/entries/") and path.endswith("/payment") and method == "POST":
-        denied = guard("payroll", "edit")
+        denied = guard("finance", "edit")
         if denied:
             return denied
         employee_id = int(path.split("/")[3])
@@ -23305,15 +23656,15 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Сумма выплаты не может быть отрицательной")
             if not storage.upsert_payroll_payment(current_owner, employee_id, selected_month, payment_kind, planned_amount, paid_amount, paid_date, is_paid):
                 raise ValueError("Не удалось обновить выплату")
-            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}&mode=admin")
         except Exception as exc:
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить выплату: {exc}")
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить выплату: {exc}", active_payroll_mode="admin")
+            html = layout("ФОТ", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
     if path.startswith("/payroll/entries/") and path.endswith("/note") and method == "POST":
-        denied = guard("payroll", "edit")
+        denied = guard("finance", "edit")
         if denied:
             return denied
         employee_id = int(path.split("/")[3])
@@ -23323,10 +23674,10 @@ self.addEventListener("notificationclick", (event) => {
             note = form.get("note", "")
             if not storage.upsert_payroll_note(current_owner, employee_id, selected_month, note):
                 raise ValueError("Не удалось обновить заметку")
-            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}")
+            return redirect(start_response, f"/payroll?owner={current_owner}&month={selected_month.strftime('%Y-%m')}&mode=admin")
         except Exception as exc:
-            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить заметку: {exc}")
-            html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+            body = render_payroll_section(storage, current_owner, current_user, selected_month, f"Не удалось обновить заметку: {exc}", active_payroll_mode="admin")
+            html = layout("ФОТ", body, owners, current_owner, "payroll", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
@@ -24880,12 +25231,13 @@ self.addEventListener("notificationclick", (event) => {
         return [html.encode("utf-8")]
 
     if path == "/payroll":
-        denied = guard("payroll", "view")
+        denied = guard("finance", "view")
         if denied:
             return denied
         selected_month = parse_month_key(parse_qs(environ.get("QUERY_STRING", "")).get("month", [""])[0])
-        body = render_payroll_section(storage, current_owner, current_user, selected_month)
-        html = layout("Зарплата", body, owners, current_owner, "payroll", current_user)
+        active_payroll_mode = query.get("mode", [""])[0].strip()
+        body = render_payroll_section(storage, current_owner, current_user, selected_month, active_payroll_mode=active_payroll_mode)
+        html = layout("ФОТ", body, owners, current_owner, "payroll", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
