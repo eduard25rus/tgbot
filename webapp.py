@@ -11659,6 +11659,7 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
                     "units": 0.0,
                     "projects": set(),
                     "rates": {},
+                    "work_days": [],
                     "amount": 0.0,
                     "paid": 0.0,
                     "payments": [],
@@ -11668,6 +11669,13 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
             bucket["projects"].add(project_label)
             bucket["amount"] += amount
             bucket["rates"][day_rate] = bucket["rates"].get(day_rate, 0.0) + day_part
+            bucket["work_days"].append({
+                "date": report.report_date,
+                "project": project_label,
+                "units": day_part,
+                "rate": day_rate,
+                "amount": amount,
+            })
             total_shifts += day_part
             total_amount += amount
             active_projects.add(project_label)
@@ -11711,23 +11719,145 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
             return '<span class="chip danger">Ставка не задана</span>'
         return "<br>".join(escape(part) for part in parts)
 
+    def payment_method_label(payment: dict) -> str:
+        source_label = expense_payment_source_label(payment.get("payment_source") or "bank")
+        cashbox_match = re.search(r"\[(Касса[^\]]+)\]", payment.get("comment", ""))
+        if cashbox_match:
+            return f"{source_label} · {cashbox_match.group(1).strip()}"
+        return source_label
+
+    def payment_created_label(payment: dict) -> str:
+        created_at = payment.get("created_at")
+        return format_datetime(created_at) if created_at is not None else "Дата создания не указана"
+
+    def payment_comment_text(payment: dict) -> str:
+        return re.sub(r"^\s*\[[^\]]+\]\s*", "", payment.get("comment", "")).strip()
+
+    def render_worker_payment_control(payment: dict) -> str:
+        author = payment.get("created_by_name") or "Автор неизвестен"
+        title = payment.get("title") or "Выплата"
+        created_label = payment_created_label(payment)
+        comment = payment_comment_text(payment)
+        return f"""
+        <details class="status-menu">
+          <summary>
+            <span class="payroll-amount is-paid">{escape(format_amount(float(payment["amount"])))}</span>
+            <div class="contract-table-subtle">{format_date(payment["expense_date"])}</div>
+          </summary>
+          <div class="status-popover compact">
+            <div class="timeline-title">{escape(title)}</div>
+            <div class="contract-table-subtle">Дата оплаты: {format_date(payment["expense_date"])}</div>
+            <div class="contract-table-subtle">Способ: {escape(payment_method_label(payment))}</div>
+            <div class="contract-table-subtle">Внес: {escape(author)}</div>
+            <div class="contract-table-subtle">Создано в ДДС: {escape(created_label)}</div>
+            {f'<div class="contract-table-subtle">Комментарий: {escape(comment)}</div>' if comment else ''}
+          </div>
+        </details>
+        """
+
+    def render_worker_payment_cell(item: dict) -> str:
+        if not item["payments"]:
+            return """
+            <span class="payroll-amount">—</span>
+            <div class="contract-table-subtle">выплат нет</div>
+            """
+        payment_rows = "".join(
+            f"""
+            <tr>
+              <td class="nowrap">
+                {format_date(payment["expense_date"])}
+                <div class="contract-table-subtle">{escape(payment.get("title") or "Выплата")}</div>
+                {f'<div class="contract-table-subtle">{escape(payment_comment_text(payment))}</div>' if payment_comment_text(payment) else ''}
+              </td>
+              <td class="nowrap"><span class="payroll-amount is-paid">{escape(format_amount(float(payment["amount"])))}</span></td>
+              <td>{escape(payment_method_label(payment))}</td>
+              <td>{escape(payment.get("created_by_name") or "Автор неизвестен")}</td>
+              <td class="nowrap">{escape(payment_created_label(payment))}</td>
+            </tr>
+            """
+            for payment in item["payments"]
+        )
+        return f"""
+        <details class="status-menu">
+          <summary>
+            <span class="payroll-amount is-paid">{escape(format_amount(float(item["paid"])))}</span>
+            <div class="contract-table-subtle">{len(item["payments"])} выплат</div>
+          </summary>
+          <div class="status-popover align-right" style="min-width:min(860px, 92vw);">
+            <table class="table contract-table">
+              <thead><tr><th>Дата</th><th>Сумма</th><th>Способ</th><th>Внес</th><th>Создано в ДДС</th></tr></thead>
+              <tbody>{payment_rows}</tbody>
+            </table>
+          </div>
+        </details>
+        """
+
+    def render_worker_card(item: dict) -> str:
+        day_rows = "".join(
+            f"""
+            <tr>
+              <td class="nowrap">{format_date(day_item["date"])}</td>
+              <td>{escape(day_item["project"])}</td>
+              <td class="nowrap">{escape(workforce_units_label(float(day_item["units"])))}</td>
+              <td class="nowrap">{escape(format_amount(float(day_item["rate"])))}</td>
+              <td class="nowrap">{escape(format_amount(float(day_item["amount"])))}</td>
+            </tr>
+            """
+            for day_item in sorted(item["work_days"], key=lambda value: (value["date"], value["project"]))
+        ) or '<tr><td colspan="5">Смен в выбранном месяце нет.</td></tr>'
+        payment_rows = "".join(
+            f"""
+            <tr>
+              <td>{render_worker_payment_control(payment)}</td>
+              <td>{escape(payment.get("title") or "Выплата")}</td>
+              <td>{escape(payment_method_label(payment))}</td>
+            </tr>
+            """
+            for payment in item["payments"]
+        ) or '<tr><td colspan="3">Выплат в выбранном месяце нет.</td></tr>'
+        debt = max(float(item["amount"]) - float(item["paid"]), 0.0)
+        return f"""
+        <details class="status-menu lot-menu">
+          <summary>
+            <span class="directory-title-link">{escape(item["name"])}</span>
+          </summary>
+          <div class="status-popover align-left" style="min-width:min(980px, 92vw);">
+            <div class="timeline-title">{escape(item["name"])}</div>
+            <div class="contract-table-subtle">{escape(item["role_title"] or "Без должности")}</div>
+            <div class="badge-row" style="margin:10px 0 12px;">
+              <span class="badge">Смен: {escape(workforce_units_label(float(item["units"])))}</span>
+              <span class="badge">Начислено: {escape(format_amount(float(item["amount"])))}</span>
+              <span class="badge">Получено: {escape(format_amount(float(item["paid"])))}</span>
+              <span class="badge{' warn' if debt > 0.009 else ''}">Долг: {escape(format_amount(debt))}</span>
+            </div>
+            <div class="contract-table-subtle" style="margin-bottom:8px;">Дни работы</div>
+            <table class="table contract-table">
+              <thead><tr><th>Дата</th><th>Объект</th><th class="nowrap">Смен</th><th class="nowrap">Ставка</th><th class="nowrap">Начислено</th></tr></thead>
+              <tbody>{day_rows}</tbody>
+            </table>
+            <div class="contract-table-subtle" style="margin:14px 0 8px;">Финансовые расчеты</div>
+            <table class="table contract-table">
+              <thead><tr><th>Выплата</th><th>Основание</th><th>Способ</th></tr></thead>
+              <tbody>{payment_rows}</tbody>
+            </table>
+          </div>
+        </details>
+        """
+
     worker_rows = sorted(summary.items(), key=lambda pair: pair[1]["name"].casefold())
     rows_html = "".join(
         f"""
         <tr>
           <td class="nowrap">{index}</td>
           <td>
-            <div class="timeline-title">{escape(item["name"])}</div>
+            <div class="timeline-title">{render_worker_card(item)}</div>
             <div class="contract-table-subtle">{escape(item["role_title"] or "Без должности")}</div>
           </td>
           <td class="nowrap">{escape(workforce_units_label(float(item["units"])))}</td>
           <td>{escape(", ".join(sorted(item["projects"])) or "—")}</td>
           <td class="nowrap">{rates_display(item)}</td>
           <td class="nowrap"><span class="payroll-amount">{escape(format_amount(float(item["amount"])))}</span></td>
-          <td class="nowrap">
-            <span class="payroll-amount{' is-paid' if float(item["paid"]) > 0.009 else ''}">{escape(format_amount(float(item["paid"]))) if float(item["paid"]) > 0.009 else "—"}</span>
-            {f'<div class="contract-table-subtle">{len(item["payments"])} выплат</div>' if item["payments"] else '<div class="contract-table-subtle">выплат нет</div>'}
-          </td>
+          <td class="nowrap">{render_worker_payment_cell(item)}</td>
           <td class="nowrap"><span class="payroll-balance{' ok' if max(float(item["amount"]) - float(item["paid"]), 0.0) <= 0.009 else ''}">{escape(format_amount(max(float(item["amount"]) - float(item["paid"]), 0.0)))}</span></td>
         </tr>
         """

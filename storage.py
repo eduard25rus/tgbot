@@ -5606,7 +5606,10 @@ class Storage:
                     e.amount,
                     e.category_code,
                     e.title,
+                    e.comment,
                     e.payment_source,
+                    e.created_by_name,
+                    e.created_at,
                     'direct' AS link_kind
                 FROM expense_entries e
                 WHERE e.owner_chat_id = ?
@@ -5630,7 +5633,10 @@ class Storage:
                     a.amount,
                     e.category_code,
                     e.title,
+                    e.comment,
                     e.payment_source,
+                    e.created_by_name,
+                    e.created_at,
                     'allocation' AS link_kind
                 FROM expense_worker_allocations a
                 JOIN expense_entries e
@@ -5664,7 +5670,10 @@ class Storage:
                 "amount": float(row["amount"] or 0),
                 "category_code": row["category_code"] or "",
                 "title": row["title"] or "",
+                "comment": row["comment"] or "",
                 "payment_source": row["payment_source"] or "",
+                "created_by_name": row["created_by_name"] or "",
+                "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
                 "link_kind": row["link_kind"] or "",
             })
         return result
