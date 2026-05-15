@@ -3380,6 +3380,17 @@ class Storage:
 
     def update_contract_main_info(self, chat_id: int, contract_id: int, object_name: str, object_address: str, object_customer: str, description: str) -> bool:
         with self.connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT title, object_name
+                FROM contracts
+                WHERE id = ? AND chat_id = ?
+                """,
+                (contract_id, chat_id),
+            ).fetchone()
+            if existing is None:
+                return False
+            old_labels = [existing["object_name"] or "", existing["title"] or ""]
             cursor = conn.execute(
                 """
                 UPDATE contracts
@@ -3396,10 +3407,29 @@ class Storage:
                     chat_id,
                 ),
             )
+            if cursor.rowcount > 0:
+                self._sync_project_references(
+                    conn,
+                    chat_id,
+                    f"contract:{contract_id}",
+                    object_name.strip(),
+                    old_labels=old_labels,
+                )
             return cursor.rowcount > 0
 
     def update_contract_directory_object(self, chat_id: int, contract_id: int, object_name: str, object_address: str, object_customer: str) -> bool:
         with self.connection() as conn:
+            existing = conn.execute(
+                """
+                SELECT title, object_name
+                FROM contracts
+                WHERE id = ? AND chat_id = ?
+                """,
+                (contract_id, chat_id),
+            ).fetchone()
+            if existing is None:
+                return False
+            old_labels = [existing["object_name"] or "", existing["title"] or ""]
             cursor = conn.execute(
                 """
                 UPDATE contracts
@@ -3415,6 +3445,14 @@ class Storage:
                     chat_id,
                 ),
             )
+            if cursor.rowcount > 0:
+                self._sync_project_references(
+                    conn,
+                    chat_id,
+                    f"contract:{contract_id}",
+                    object_name.strip(),
+                    old_labels=old_labels,
+                )
             return cursor.rowcount > 0
 
     def replace_contract_stages(self, chat_id: int, contract_id: int, stage_items: list[dict]) -> bool:
@@ -3739,6 +3777,23 @@ class Storage:
                   AND (object_label = ? OR object_label = ?)
                 """,
                 (cleaned_new_name, chat_id, cleaned_old_name, f"label:{cleaned_old_name}"),
+            )
+            conn.execute(
+                """
+                UPDATE court_cases
+                SET object_label = ?
+                WHERE owner_chat_id = ?
+                  AND (object_label = ? OR object_label = ?)
+                """,
+                (cleaned_new_name, chat_id, cleaned_old_name, f"label:{cleaned_old_name}"),
+            )
+            self._sync_project_references(
+                conn,
+                chat_id,
+                f"object:{int(existing['id'])}",
+                cleaned_new_name,
+                old_labels=[cleaned_old_name, f"label:{cleaned_old_name}"],
+                old_project_codes=[cleaned_old_name, f"label:{cleaned_old_name}"],
             )
             return True
 
@@ -6709,6 +6764,24 @@ class Storage:
             )
             return cursor.rowcount
 
+    def sync_project_references(
+        self,
+        owner_chat_id: int,
+        target_project_code: str,
+        target_project_label: str,
+        old_labels: list[str] | None = None,
+        old_project_codes: list[str] | None = None,
+    ) -> int:
+        with self.connection() as conn:
+            return self._sync_project_references(
+                conn,
+                owner_chat_id,
+                target_project_code,
+                target_project_label,
+                old_labels=old_labels,
+                old_project_codes=old_project_codes,
+            )
+
     def delete_expense_category(self, owner_chat_id: int, category_id: int) -> bool:
         category = self.get_expense_category(owner_chat_id, category_id)
         if category is None:
@@ -7827,6 +7900,55 @@ class Storage:
             file_path=row["file_path"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
         )
+
+    def _sync_project_references(
+        self,
+        conn: sqlite3.Connection,
+        owner_chat_id: int,
+        target_project_code: str,
+        target_project_label: str,
+        old_labels: list[str] | None = None,
+        old_project_codes: list[str] | None = None,
+    ) -> int:
+        cleaned_code = target_project_code.strip()
+        cleaned_label = target_project_label.strip()
+        if not cleaned_code or not cleaned_label:
+            return 0
+        labels = sorted({label.strip() for label in (old_labels or []) if label and label.strip()})
+        codes = sorted({code.strip() for code in (old_project_codes or []) if code and code.strip()})
+        changed_count = 0
+        now = datetime.utcnow().isoformat()
+        mobile_conditions = ["project_code = ?"]
+        mobile_params: list[object] = [cleaned_code]
+        if codes:
+            mobile_conditions.append(f"project_code IN ({','.join('?' for _ in codes)})")
+            mobile_params.extend(codes)
+        if labels:
+            mobile_conditions.append(f"project_label IN ({','.join('?' for _ in labels)})")
+            mobile_params.extend(labels)
+        cursor = conn.execute(
+            f"""
+            UPDATE mobile_work_reports
+            SET project_code = ?, project_label = ?, updated_at = ?
+            WHERE owner_chat_id = ?
+              AND ({' OR '.join(mobile_conditions)})
+            """,
+            [cleaned_code, cleaned_label, now, owner_chat_id, *mobile_params],
+        )
+        changed_count += int(cursor.rowcount or 0)
+        if codes:
+            cursor = conn.execute(
+                f"""
+                UPDATE expense_entries
+                SET project_code = ?, updated_at = ?
+                WHERE owner_chat_id = ?
+                  AND project_code IN ({','.join('?' for _ in codes)})
+                  AND deleted_at IS NULL
+                """,
+                [cleaned_code, now, owner_chat_id, *codes],
+            )
+            changed_count += int(cursor.rowcount or 0)
+        return changed_count
 
     def _upsert_payroll_entry(
         self,

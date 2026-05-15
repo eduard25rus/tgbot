@@ -14106,6 +14106,8 @@ def render_workforce_section(
     project_labels = dict(project_options_list)
     if project_filter and project_filter not in project_labels:
         project_filter = ""
+    def workforce_report_project_label(report) -> str:
+        return project_labels.get(report.project_code) or EXPENSE_PROJECT_META.get(report.project_code) or report.project_label or report.project_code or "Без объекта"
     payroll_employees = storage.list_payroll_employees(owner_chat_id)
     builder_employees = [
         employee for employee in payroll_employees
@@ -14160,7 +14162,7 @@ def render_workforce_section(
     }
     calendar_total_units = sum(float(worker["day_part"]) for report in calendar_reports for worker in report.workers)
     calendar_active_days = {report.report_date for report in calendar_reports}
-    calendar_active_projects = {report.project_code or report.project_label for report in calendar_reports}
+    calendar_active_projects = {workforce_report_project_label(report) for report in calendar_reports}
     unique_people = {
         int(worker["employee_id"])
         for report in reports
@@ -14168,12 +14170,12 @@ def render_workforce_section(
     }
     total_units = sum(float(worker["day_part"]) for report in reports for worker in report.workers)
     active_days = {report.report_date for report in reports}
-    active_projects = {report.project_code or report.project_label for report in reports}
+    active_projects = {workforce_report_project_label(report) for report in reports}
     employee_summary: dict[int, dict] = {}
     project_summary: dict[str, dict] = {}
     for report in reports:
-        project_key = report.project_code or report.project_label or "Без объекта"
-        project_label = report.project_label or project_labels.get(report.project_code, "Без объекта")
+        project_key = report.project_code or workforce_report_project_label(report)
+        project_label = workforce_report_project_label(report)
         project_bucket = project_summary.setdefault(project_key, {"label": project_label, "units": 0.0, "people": set(), "days": set()})
         project_bucket["days"].add(report.report_date)
         for worker in report.workers:
@@ -14280,7 +14282,7 @@ def render_workforce_section(
     daily_stats: dict[date, dict] = {}
     for report in calendar_reports:
         day_bucket = daily_stats.setdefault(report.report_date, {"people": set(), "units": 0.0, "projects": {}})
-        project_label = report.project_label or project_labels.get(report.project_code, "Без объекта")
+        project_label = workforce_report_project_label(report)
         project_bucket = day_bucket["projects"].setdefault(project_label, {"people": set(), "units": 0.0})
         for worker in report.workers:
             employee_id = int(worker["employee_id"])
@@ -14352,7 +14354,7 @@ def render_workforce_section(
             <tr>
               <td class="nowrap">{index}</td>
               <td>
-                <div class="timeline-title">{escape(report.project_label or "Без объекта")}</div>
+                <div class="timeline-title">{escape(workforce_report_project_label(report))}</div>
                 <ol class="workforce-worker-list">{worker_rows}</ol>
                 {f'<div class="contract-table-subtle" style="white-space:pre-line;">{escape(report.comment)}</div>' if report.comment else ''}
               </td>
@@ -14479,10 +14481,25 @@ FINANCE_STATUS_META = {
 
 EXPENSE_PROJECT_META = {
     "library": "Библиотека",
-    "football": "Футбольное поле",
+    "football": "Стадион Артем",
     "khor": "Хор",
     "admin": "Админ",
 }
+EXPENSE_PROJECT_LEGACY_LABELS = {
+    "football": ("Футбольное поле",),
+}
+
+
+def legacy_project_codes_for_label(label: str) -> list[str]:
+    normalized = " ".join(label.casefold().split())
+    if not normalized:
+        return []
+    codes = []
+    for code, current_label in EXPENSE_PROJECT_META.items():
+        labels = [current_label, *EXPENSE_PROJECT_LEGACY_LABELS.get(code, ())]
+        if any(" ".join(item.casefold().split()) == normalized for item in labels):
+            codes.append(code)
+    return codes
 
 EXPENSE_CATEGORY_META = dict(DEFAULT_EXPENSE_CATEGORIES)
 
@@ -14961,6 +14978,7 @@ def render_cashoperations_body(
     entries = storage.list_expense_entries(owner_chat_id)
     today = datetime.now(VLADIVOSTOK_TZ).date()
     project_options_list = expense_project_options(storage, owner_chat_id, entries, include_legacy_entries=False)
+    project_labels = dict(project_options_list)
     category_options_list = [
         (code, label)
         for code, label in expense_category_options(storage, owner_chat_id, entries)
@@ -15309,8 +15327,10 @@ def render_cashoperations_body(
         return str(int(value)) if abs(value - int(value)) < 0.001 else str(value).replace(".", ",")
     def work_day_part_label(value: float) -> str:
         return "половина дня" if float(value) <= 0.5 else "полный день"
+    def work_project_label(report) -> str:
+        return project_labels.get(report.project_code) or EXPENSE_PROJECT_META.get(report.project_code) or report.project_label or report.project_code or "Без объекта"
     def work_project_key(report) -> str:
-        return report.project_code or report.project_label or "Без объекта"
+        return report.project_code or work_project_label(report)
     def work_month_url(month_value: date, stats: bool = False) -> str:
         first_day = month_value.replace(day=1)
         return (
@@ -15393,7 +15413,7 @@ def render_cashoperations_body(
           data-work-report-comment="{escape(report.comment)}"
           data-work-report-workers="{escape(worker_items_json, quote=True)}">
           <div class="cash-mobile-op-main">
-            <span class="cash-mobile-op-title"><strong>{escape(report.project_label or "Без объекта")}</strong><span> · {len(workers)} чел.</span></span>
+            <span class="cash-mobile-op-title"><strong>{escape(work_project_label(report))}</strong><span> · {len(workers)} чел.</span></span>
             <ol class="cash-work-worker-list">{worker_rows}</ol>
             {comment_html}
           </div>
@@ -21799,6 +21819,19 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Укажите название объекта")
             if not storage.update_jurisprudence_object(current_owner, old_name, new_name, customer):
                 raise ValueError("Объект не найден или уже существует")
+            updated_object = next(
+                (item for item in storage.list_jurisprudence_object_records(current_owner) if item.name == new_name),
+                None,
+            )
+            legacy_project_codes = legacy_project_codes_for_label(old_name)
+            if updated_object is not None and legacy_project_codes:
+                storage.sync_project_references(
+                    current_owner,
+                    f"object:{updated_object.id}",
+                    new_name,
+                    old_labels=[old_name, f"label:{old_name}"],
+                    old_project_codes=legacy_project_codes,
+                )
             return redirect(start_response, f"/directories?owner={current_owner}&mode=objects")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, "objects", "admin", f"Не удалось обновить объект: {exc}")
@@ -22020,8 +22053,22 @@ self.addEventListener("notificationclick", (event) => {
             object_customer = form.get("object_customer", "").strip()
             if not object_name:
                 raise ValueError("Укажите название объекта")
+            existing_contract = next(
+                (contract for contract in storage.list_contracts(current_owner) if contract.id == contract_id),
+                None,
+            )
+            old_object_name = (existing_contract.object_name or existing_contract.title).strip() if existing_contract else ""
             if not storage.update_contract_directory_object(current_owner, contract_id, object_name, object_address, object_customer):
                 raise ValueError("Контракт не найден")
+            legacy_project_codes = legacy_project_codes_for_label(old_object_name)
+            if legacy_project_codes:
+                storage.sync_project_references(
+                    current_owner,
+                    f"contract:{contract_id}",
+                    object_name,
+                    old_labels=[old_object_name],
+                    old_project_codes=legacy_project_codes,
+                )
             return redirect(start_response, f"/directories?owner={current_owner}&mode=objects")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, "objects", "admin", f"Не удалось обновить объект контракта: {exc}")
