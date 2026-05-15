@@ -18001,17 +18001,39 @@ def render_expenses_section(
         return is_cash_income_display(entry) and (entry.payment_source or "bank") == "bank"
     def is_cashbox_transfer_display(entry) -> bool:
         return is_cash_transfer_category(entry.category_code, category_labels)
+    def is_cashbox_internal_transfer(entry) -> bool:
+        title = entry.title or ""
+        comment = entry.comment or ""
+        source_match = re.search(r"\[Источник:\s*([^\]]+)\]", comment)
+        return (
+            (entry.operation_type or "") == "transfer"
+            or title.startswith("Перевод между кассами")
+            or is_cashbox_transfer_display(entry)
+            or (
+                is_cash_income_display(entry)
+                and bool(re.search(r"\[Связанный расход:\s*\d+\]", comment))
+                and source_match is not None
+                and source_match.group(1).strip().casefold().startswith("касса ")
+            )
+        )
     def is_income_display(entry) -> bool:
-        return (entry.operation_type or "expense") == "income" or is_cash_income_display(entry)
+        return not is_cashbox_internal_transfer(entry) and (
+            (entry.operation_type or "expense") == "income" or is_cash_income_display(entry)
+        )
     def dds_income_total(row_entries) -> float:
         return sum(entry.amount for entry in row_entries if is_income_display(entry))
     def dds_expense_total(row_entries) -> float:
         return sum(
             entry.amount for entry in row_entries
-            if ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry))
-            or is_bank_cash_transfer(entry)
+            if not is_cashbox_internal_transfer(entry)
+            and (
+                ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry))
+                or is_bank_cash_transfer(entry)
+            )
         )
     def dds_signed_amount(entry) -> float:
+        if is_cashbox_internal_transfer(entry):
+            return 0
         income_amount = entry.amount if is_income_display(entry) else 0
         expense_amount = entry.amount if (
             ((entry.operation_type or "expense") != "income" and not is_cash_income_display(entry))
