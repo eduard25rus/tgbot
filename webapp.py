@@ -11655,6 +11655,7 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
                 employee_id,
                 {
                     "name": employee.full_name if employee else worker["employee_name"],
+                    "role_title": employee.role_title if employee else "",
                     "units": 0.0,
                     "projects": set(),
                     "rates": {},
@@ -11710,12 +11711,14 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
             return '<span class="chip danger">Ставка не задана</span>'
         return "<br>".join(escape(part) for part in parts)
 
+    worker_rows = sorted(summary.items(), key=lambda pair: pair[1]["name"].casefold())
     rows_html = "".join(
         f"""
         <tr>
+          <td class="nowrap">{index}</td>
           <td>
             <div class="timeline-title">{escape(item["name"])}</div>
-            <div class="contract-table-subtle">В справочнике: Рабочие на объектах</div>
+            <div class="contract-table-subtle">{escape(item["role_title"] or "Без должности")}</div>
           </td>
           <td class="nowrap">{escape(workforce_units_label(float(item["units"])))}</td>
           <td>{escape(", ".join(sorted(item["projects"])) or "—")}</td>
@@ -11728,8 +11731,8 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
           <td class="nowrap"><span class="payroll-balance{' ok' if max(float(item["amount"]) - float(item["paid"]), 0.0) <= 0.009 else ''}">{escape(format_amount(max(float(item["amount"]) - float(item["paid"]), 0.0)))}</span></td>
         </tr>
         """
-        for _employee_id, item in sorted(summary.items(), key=lambda pair: pair[1]["name"].casefold())
-    ) or '<tr><td colspan="7">В выбранном месяце смен рабочих пока нет.</td></tr>'
+        for index, (_employee_id, item) in enumerate(worker_rows, start=1)
+    ) or '<tr><td colspan="8">В выбранном месяце смен рабочих пока нет.</td></tr>'
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     stats = f"""
     <section class="stats" style="margin-top:22px;">
@@ -11776,6 +11779,7 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
       <table class="table contract-table payroll-table" style="margin-top:18px;">
         <thead>
           <tr>
+            <th class="nowrap">№</th>
             <th>Работник</th>
             <th class="nowrap">Смен</th>
             <th>Объекты</th>
@@ -11788,6 +11792,7 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
         <tbody>{rows_html}</tbody>
         <tfoot>
           <tr>
+            <th></th>
             <th>Итого</th>
             <th class="nowrap">{escape(workforce_units_label(total_shifts))}</th>
             <th>{len(active_projects)} объектов</th>
