@@ -18197,44 +18197,12 @@ def render_expenses_section(
         </div>
         """
 
-    if selected_day is not None:
-        bank_entries = [entry for entry in filtered_entries if (entry.payment_source or "bank") == "bank"]
-        cash_income_entries = [
-            entry
-            for entry in bank_entries
-            if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
-        ]
-        cash_entries = [entry for entry in filtered_entries if (entry.payment_source or "bank") == "cash"]
-        bank_income_total = sum(entry.amount for entry in bank_entries if (entry.operation_type or "expense") == "income")
-        bank_expense_total = sum(entry.amount for entry in bank_entries if (entry.operation_type or "expense") != "income")
-        bank_total = bank_income_total - bank_expense_total
-        cash_income_total = sum(entry.amount for entry in cash_income_entries)
-        cash_expense_total = dds_expense_total(cash_entries)
-        cash_total = cash_income_total - cash_expense_total
-        registry_tables_html = f"""
-        <div style="margin-top:18px;">
-          <div class="panel-head" style="margin-bottom:10px;">
-            <div>
-              <h3 class="panel-title">Расчетный счет</h3>
-              <div class="panel-sub">Движения за {escape(format_date(selected_day))}. Приход: {escape(format_amount(bank_income_total))}. Расход: {escape(format_amount(bank_expense_total))}.</div>
-            </div>
-            <span class="chip">{escape(format_amount(bank_total))}</span>
-          </div>
-          {render_expenses_table(bank_entries, "По расчетному счету за выбранный день движений нет.", False)}
-        </div>
-        <div style="margin-top:22px;">
-          <div class="panel-head" style="margin-bottom:10px;">
-            <div>
-              <h3 class="panel-title">Касса</h3>
-              <div class="panel-sub">Приходы из вывода в кассу и наличные расходы за {escape(format_date(selected_day))}. Приход: {escape(format_amount(cash_income_total))}. Расход: {escape(format_amount(cash_expense_total))}.</div>
-            </div>
-            <span class="chip">{escape(format_amount(cash_total))}</span>
-          </div>
-          {render_cash_table(cash_income_entries, cash_entries, "По кассе за выбранный день движений нет.")}
-        </div>
-        """
-    else:
-        registry_tables_html = render_expenses_table(filtered_entries, "Пока нет операций ДДС в этом срезе.", False, True)
+    registry_empty_text = (
+        f"За {format_date(selected_day)} операций ДДС нет."
+        if selected_day is not None
+        else "Пока нет операций ДДС в этом срезе."
+    )
+    registry_tables_html = render_expenses_table(filtered_entries, registry_empty_text, False, True)
     dds_actions_html = ""
     if has_permission(current_user, "expenses", "edit") and active_tab != "archive":
         dds_actions_html = f"""
