@@ -7435,10 +7435,14 @@ def layout(
     .directory-edit-form .submit-btn {{
       font-weight: 500;
     }}
+    body.has-directory-employee-popover {{
+      overflow: hidden;
+    }}
     .directory-employee-popover {{
       width: min(720px, calc(100vw - 24px));
       max-height: calc(100vh - 24px);
       overflow-y: auto;
+      overscroll-behavior: contain;
       align-content: start;
       padding: 14px;
     }}
@@ -7448,6 +7452,9 @@ def layout(
     }}
     .directory-employee-form > .submit-btn {{
       grid-column: 1 / -1;
+      position: sticky;
+      bottom: 0;
+      z-index: 1;
     }}
     .employee-rate-list {{
       display: grid;
@@ -7483,16 +7490,6 @@ def layout(
     }}
     .employee-rate-delete:hover {{
       background: rgba(179, 60, 60, 0.12);
-    }}
-    .employee-rate-delete input {{
-      position: absolute;
-      opacity: 0;
-      pointer-events: none;
-    }}
-    .employee-rate-delete input:checked + span {{
-      color: #fff;
-      background: var(--danger);
-      border-color: var(--danger);
     }}
     .employee-rate-delete span {{
       width: 100%;
@@ -8216,6 +8213,11 @@ function fitOpenStatusPopovers() {{
   document.querySelectorAll(".status-menu[open]").forEach((menu) => fitStatusMenuPopover(menu));
 }}
 
+function updateDirectoryEmployeePopoverLock() {{
+  const hasOpenEmployeePopover = Boolean(document.querySelector(".status-menu[open] .directory-employee-popover"));
+  document.body.classList.toggle("has-directory-employee-popover", hasOpenEmployeePopover);
+}}
+
 document.addEventListener("toggle", (event) => {{
   const menu = event.target.matches && event.target.matches(".status-menu") ? event.target : null;
   if (!menu) {{
@@ -8224,9 +8226,13 @@ document.addEventListener("toggle", (event) => {{
   const popover = statusMenuPopover(menu);
   if (!menu.open) {{
     resetFloatingPopover(popover);
+    updateDirectoryEmployeePopoverLock();
     return;
   }}
-  window.requestAnimationFrame(() => fitStatusMenuPopover(menu));
+  window.requestAnimationFrame(() => {{
+    fitStatusMenuPopover(menu);
+    updateDirectoryEmployeePopoverLock();
+  }});
 }}, true);
 
 window.addEventListener("resize", () => window.requestAnimationFrame(fitOpenStatusPopovers), {{ passive: true }});
@@ -8801,14 +8807,23 @@ document.addEventListener("click", (event) => {{
     window.requestAnimationFrame(() => fitStatusMenuPopover(addRateButton.closest(".status-menu")));
     return;
   }}
-  const removeNewRateButton = event.target.closest("[data-rate-remove-new]");
-  if (removeNewRateButton) {{
+  const removeRateButton = event.target.closest("[data-rate-remove-new], [data-rate-delete-existing]");
+  if (removeRateButton) {{
     event.preventDefault();
-    const row = removeNewRateButton.closest(".employee-rate-row");
+    const form = removeRateButton.closest("form");
+    const deleteName = removeRateButton.dataset.rateDeleteName || "";
+    if (form && deleteName && !form.querySelector(`input[name="${{deleteName}}"]`)) {{
+      const marker = document.createElement("input");
+      marker.type = "hidden";
+      marker.name = deleteName;
+      marker.value = "1";
+      form.appendChild(marker);
+    }}
+    const row = removeRateButton.closest(".employee-rate-row");
     if (row) {{
       row.remove();
     }}
-    window.requestAnimationFrame(() => fitStatusMenuPopover(removeNewRateButton.closest(".status-menu")));
+    window.requestAnimationFrame(() => fitStatusMenuPopover(removeRateButton.closest(".status-menu")));
   }}
 }});
 
@@ -10225,10 +10240,7 @@ def render_directories_section(
                 effective_value = rate["effective_from"].isoformat()
             delete_control = (
                 f"""
-                <label class="employee-rate-delete" title="Удалить ставку">
-                  <input type="checkbox" name="rate_delete_{int(rate["id"])}" value="1">
-                  <span>×</span>
-                </label>
+                <button class="employee-rate-delete" type="button" data-rate-delete-existing data-rate-delete-name="rate_delete_{int(rate["id"])}" title="Удалить ставку"><span>×</span></button>
                 """
                 if is_existing and rate else
                 '<button class="employee-rate-delete" type="button" data-rate-remove-new title="Удалить ставку"><span>×</span></button>'
@@ -11019,12 +11031,20 @@ def payroll_rate_history_note(rate_history: list[dict], employee_group: str) -> 
 
 
 def save_employee_rate_form(storage: Storage, owner_chat_id: int, employee_id: int, form: dict[str, str]) -> None:
-    existing_rate_ids = sorted({
-        int(match.group(1))
-        for key in form
-        for match in [re.match(r"rate_existing_(\d+)_effective_from$", key)]
-        if match
-    })
+    existing_rate_ids = sorted(
+        {
+            int(match.group(1))
+            for key in form
+            for match in [re.match(r"rate_existing_(\d+)_effective_from$", key)]
+            if match
+        }
+        | {
+            int(match.group(1))
+            for key in form
+            for match in [re.match(r"rate_delete_(\d+)$", key)]
+            if match
+        }
+    )
     for rate_id in existing_rate_ids:
         if form.get(f"rate_delete_{rate_id}") == "1":
             storage.delete_payroll_employee_rate(owner_chat_id, employee_id, rate_id)
@@ -11889,7 +11909,7 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
         summary[employee_id]["paid"] = paid_amount
         summary[employee_id]["payments"] = links
     total_paid = round(sum(float(item["paid"]) for item in summary.values()), 2)
-    total_debt = round(max(total_amount - total_paid, 0.0), 2)
+    total_debt = round(total_amount - total_paid, 2)
 
     month_options = []
     for offset in range(-2, 4):
@@ -11973,14 +11993,15 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
         </details>
         """
 
-    worker_rows = sorted(summary.items(), key=lambda pair: pair[1]["name"].casefold())
-    rows_html = "".join(
-        f"""
+    def render_worker_row(index: int, employee_id: int, item: dict) -> str:
+        balance = round(float(item["amount"]) - float(item["paid"]), 2)
+        balance_class = " ok" if abs(balance) <= 0.009 else " danger" if balance < -0.009 else ""
+        return f"""
         <tr>
           <td class="nowrap">{index}</td>
           <td>
             <div class="timeline-title">
-              <a class="directory-title-link" href="/payroll/workers/{_employee_id}?owner={owner_chat_id}&start_month={selected_month.strftime('%Y-%m')}&end_month={selected_month.strftime('%Y-%m')}">{escape(item["name"])}</a>
+              <a class="directory-title-link" href="/payroll/workers/{employee_id}?owner={owner_chat_id}&start_month={selected_month.strftime('%Y-%m')}&end_month={selected_month.strftime('%Y-%m')}">{escape(item["name"])}</a>
             </div>
             <div class="contract-table-subtle">{escape(item["role_title"] or "Без должности")}</div>
           </td>
@@ -11989,10 +12010,14 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
           <td class="nowrap">{rates_display(item)}</td>
           <td class="nowrap"><span class="payroll-amount">{escape(format_amount(float(item["amount"])))}</span></td>
           <td class="nowrap">{render_worker_payment_cell(item)}</td>
-          <td class="nowrap"><span class="payroll-balance{' ok' if max(float(item["amount"]) - float(item["paid"]), 0.0) <= 0.009 else ''}">{escape(format_amount(max(float(item["amount"]) - float(item["paid"]), 0.0)))}</span></td>
+          <td class="nowrap"><span class="payroll-balance{balance_class}">{escape(format_amount(balance))}</span></td>
         </tr>
         """
-        for index, (_employee_id, item) in enumerate(worker_rows, start=1)
+
+    worker_rows = sorted(summary.items(), key=lambda pair: pair[1]["name"].casefold())
+    rows_html = "".join(
+        render_worker_row(index, employee_id, item)
+        for index, (employee_id, item) in enumerate(worker_rows, start=1)
     ) or '<tr><td colspan="8">В выбранном месяце смен рабочих пока нет.</td></tr>'
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     stats = f"""
@@ -12134,7 +12159,7 @@ def render_payroll_worker_detail_page(
         month_cursor = month_add(month_cursor, 1)
     payments.sort(key=lambda item: (item["expense_date"], item["expense_id"]), reverse=True)
     total_paid = round(sum(float(item["amount"] or 0) for item in payments), 2)
-    total_debt = round(max(total_amount - total_paid, 0.0), 2)
+    total_debt = round(total_amount - total_paid, 2)
 
     def payment_method_label(payment: dict) -> str:
         source_label = expense_payment_source_label(payment.get("payment_source") or "bank")
@@ -12214,7 +12239,7 @@ def render_payroll_worker_detail_page(
           <td class="nowrap">{escape(workforce_units_label(float(values["shifts"])))}</td>
           <td class="nowrap">{escape(format_amount(float(values["amount"])))}</td>
           <td class="nowrap">{escape(format_amount(float(values["paid"])))}</td>
-          <td class="nowrap">{escape(format_amount(max(float(values["amount"]) - float(values["paid"]), 0.0)))}</td>
+          <td class="nowrap">{escape(format_amount(round(float(values["amount"]) - float(values["paid"]), 2)))}</td>
         </tr>
         """
         for month, values in sorted(monthly_summary.items())
