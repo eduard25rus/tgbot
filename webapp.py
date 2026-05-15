@@ -383,6 +383,7 @@ LEGAL_LETTER_META = {
 LEGAL_CHANNEL_META = {
     "mail": "Почта",
     "eis": "ЕИС",
+    "courier": "Нарочно",
 }
 COURT_SIDE_META = {
     "plaintiff": ("Истец", "chip ok"),
@@ -2695,6 +2696,7 @@ def render_legal_letter_editor(
             <select name="source_channel" required>
               <option value="mail"{" selected" if (letter.source_channel or "mail") == "mail" else ""}>Почта</option>
               <option value="eis"{" selected" if letter.source_channel == "eis" else ""}>ЕИС</option>
+              <option value="courier"{" selected" if letter.source_channel == "courier" else ""}>Нарочно</option>
             </select>
           </div>
           <div class="field">
@@ -2761,6 +2763,7 @@ def render_jurisprudence_letter_editor(storage: Storage, owner_chat_id: int, let
             <select name="source_channel" required>
               <option value="mail"{" selected" if (letter.source_channel or "mail") == "mail" else ""}>Почта</option>
               <option value="eis"{" selected" if letter.source_channel == "eis" else ""}>ЕИС</option>
+              <option value="courier"{" selected" if letter.source_channel == "courier" else ""}>Нарочно</option>
             </select>
           </div>
           <div class="field">
@@ -9393,6 +9396,7 @@ def render_jurisprudence_letters_section(
                   <select name="source_channel" required>
                     <option value="mail">Почта</option>
                     <option value="eis">ЕИС</option>
+                    <option value="courier">Нарочно</option>
                   </select>
                 </div>
                 <div class="field">
@@ -10495,6 +10499,7 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
                       <select name="source_channel" required>
                         <option value="mail">Почта</option>
                         <option value="eis">ЕИС</option>
+                        <option value="courier">Нарочно</option>
                       </select>
                     </div>
                     <div class="field">
