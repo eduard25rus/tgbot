@@ -5126,8 +5126,8 @@ def layout(
       text-decoration: none;
       color: var(--ink);
       display: grid;
-      gap: 6px;
-      min-height: 84px;
+      gap: 4px;
+      min-height: 112px;
       scroll-snap-align: start;
     }}
     .expenses-day-card.is-selected {{
@@ -5149,6 +5149,21 @@ def layout(
       font-weight: 600;
       color: var(--ink);
       line-height: 1.25;
+    }}
+    .expenses-day-card-bottom.income {{
+      color: #2f7d4f;
+    }}
+    .expenses-day-card-bottom.expense {{
+      color: #9f3434;
+    }}
+    .expenses-day-card-bottom.is-empty {{
+      color: var(--ink);
+    }}
+    .expenses-day-card-meta {{
+      font-size: 12px;
+      line-height: 1.22;
+      color: var(--muted);
+      font-weight: 600;
     }}
     .dds-filter-panel {{
       margin-top: 14px;
@@ -18003,13 +18018,20 @@ def render_expenses_section(
             or is_bank_cash_transfer(entry)
         ) else 0
         return income_amount - expense_amount
-    def dds_day_card_label(day: date) -> str:
+    def dds_day_card_html(day: date) -> str:
         day_entries = [entry for entry in source_entries if entry.expense_date == day]
         if not day_entries:
-            return "Движений нет"
-        balance = sum(dds_signed_amount(entry) for entry in day_entries)
+            return '<div class="expenses-day-card-bottom is-empty">Движений нет</div>'
+        income_total = dds_income_total(day_entries)
+        expense_total = dds_expense_total(day_entries)
+        balance = income_total - expense_total
         prefix = "+" if balance > 0.009 else ""
-        return f"{prefix}{format_amount(balance)}"
+        balance_class = " income" if balance > 0.009 else " expense" if balance < -0.009 else ""
+        return f"""
+          <div class="expenses-day-card-bottom{balance_class}">{escape(prefix + format_amount(balance))}</div>
+          <div class="expenses-day-card-meta">Приход: {escape(format_amount(income_total))}</div>
+          <div class="expenses-day-card-meta">Расход: {escape(format_amount(expense_total))}</div>
+        """
     today = datetime.now(VLADIVOSTOK_TZ).date()
     latest_bank_balance = storage.latest_bank_account_balance(owner_chat_id)
     cashbox_balances = {
@@ -18078,7 +18100,7 @@ def render_expenses_section(
         f"""
         <a class="expenses-day-card{' is-selected' if active_selected_day == day else ''}" href="{build_expenses_href(day=day, include_dates=False)}" data-expenses-day-card="1">
           <div class="expenses-day-card-top">{escape(format_short_russian_day(day))}</div>
-          <div class="expenses-day-card-bottom">{escape(dds_day_card_label(day))}</div>
+          {dds_day_card_html(day)}
         </a>
         """
         for day in day_window
