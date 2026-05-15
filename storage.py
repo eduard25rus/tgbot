@@ -377,6 +377,7 @@ class ExpenseEntry:
     category_code: str
     payroll_employee_id: Optional[int]
     payroll_employee_name: str
+    payroll_period: str
     receipt_file_name: str
     receipt_file_path: str
     title: str
@@ -1000,6 +1001,7 @@ class Storage:
                     category_code TEXT NOT NULL DEFAULT 'other',
                     payroll_employee_id INTEGER,
                     payroll_employee_name TEXT NOT NULL DEFAULT '',
+                    payroll_period TEXT NOT NULL DEFAULT '',
                     receipt_file_name TEXT NOT NULL DEFAULT '',
                     receipt_file_path TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL DEFAULT '',
@@ -1444,6 +1446,7 @@ class Storage:
                 ("category_code", "TEXT NOT NULL DEFAULT 'other'"),
                 ("payroll_employee_id", "INTEGER"),
                 ("payroll_employee_name", "TEXT NOT NULL DEFAULT ''"),
+                ("payroll_period", "TEXT NOT NULL DEFAULT ''"),
                 ("receipt_file_name", "TEXT NOT NULL DEFAULT ''"),
                 ("receipt_file_path", "TEXT NOT NULL DEFAULT ''"),
                 ("title", "TEXT NOT NULL DEFAULT ''"),
@@ -5630,17 +5633,14 @@ class Storage:
             return True
 
     def list_payroll_money_links(self, owner_chat_id: int, payroll_month: date) -> dict[int, list[dict]]:
-        period_start = payroll_month.replace(day=1)
-        if period_start.month == 12:
-            period_end = date(period_start.year + 1, 1, 1)
-        else:
-            period_end = date(period_start.year, period_start.month + 1, 1)
+        payroll_period = payroll_month.replace(day=1).strftime("%Y-%m")
         with self.connection() as conn:
             rows = conn.execute(
                 """
                 SELECT
                     e.id AS expense_id,
                     e.expense_date,
+                    e.payroll_period,
                     e.payroll_employee_id AS employee_id,
                     e.payroll_employee_name AS employee_name,
                     e.amount,
@@ -5655,8 +5655,7 @@ class Storage:
                 WHERE e.owner_chat_id = ?
                   AND e.deleted_at IS NULL
                   AND COALESCE(NULLIF(e.operation_type, ''), 'expense') = 'expense'
-                  AND e.expense_date >= ?
-                  AND e.expense_date < ?
+                  AND COALESCE(e.payroll_period, '') = ?
                   AND e.payroll_employee_id IS NOT NULL
                   AND NOT EXISTS (
                     SELECT 1
@@ -5668,6 +5667,7 @@ class Storage:
                 SELECT
                     e.id AS expense_id,
                     e.expense_date,
+                    e.payroll_period,
                     a.employee_id,
                     a.employee_name,
                     a.amount,
@@ -5685,17 +5685,14 @@ class Storage:
                 WHERE a.owner_chat_id = ?
                   AND e.deleted_at IS NULL
                   AND COALESCE(NULLIF(e.operation_type, ''), 'expense') = 'expense'
-                  AND e.expense_date >= ?
-                  AND e.expense_date < ?
+                  AND COALESCE(e.payroll_period, '') = ?
                 ORDER BY expense_date DESC, expense_id DESC
                 """,
                 (
                     owner_chat_id,
-                    period_start.strftime(DATE_FMT),
-                    period_end.strftime(DATE_FMT),
+                    payroll_period,
                     owner_chat_id,
-                    period_start.strftime(DATE_FMT),
-                    period_end.strftime(DATE_FMT),
+                    payroll_period,
                 ),
             ).fetchall()
         result: dict[int, list[dict]] = {}
@@ -5706,6 +5703,7 @@ class Storage:
             result.setdefault(employee_id, []).append({
                 "expense_id": int(row["expense_id"]),
                 "expense_date": date.fromisoformat(row["expense_date"]),
+                "payroll_period": row["payroll_period"] or "",
                 "employee_name": row["employee_name"] or "",
                 "amount": float(row["amount"] or 0),
                 "category_code": row["category_code"] or "",
@@ -6611,7 +6609,7 @@ class Storage:
                 """
                 SELECT
                     id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
-                    payroll_employee_id, payroll_employee_name, receipt_file_name, receipt_file_path,
+                    payroll_employee_id, payroll_employee_name, payroll_period, receipt_file_name, receipt_file_path,
                     payment_source, operation_type, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
@@ -6734,7 +6732,7 @@ class Storage:
                 """
                 SELECT
                     id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
-                    payroll_employee_id, payroll_employee_name, receipt_file_name, receipt_file_path,
+                    payroll_employee_id, payroll_employee_name, payroll_period, receipt_file_name, receipt_file_path,
                     payment_source, operation_type, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
@@ -7044,6 +7042,7 @@ class Storage:
         raw_import_text: str = "",
         payroll_employee_id: int | None = None,
         payroll_employee_name: str = "",
+        payroll_period: str = "",
         client_request_key: str = "",
         operation_type: str = "expense",
     ) -> int:
@@ -7068,12 +7067,12 @@ class Storage:
                 """
                 INSERT INTO expense_entries (
                     owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
-                    payroll_employee_id, payroll_employee_name, payment_source, operation_type, needs_adjustment,
+                    payroll_employee_id, payroll_employee_name, payroll_period, payment_source, operation_type, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
                     import_counterparty_account, raw_import_text, client_request_key
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -7085,6 +7084,7 @@ class Storage:
                     comment.strip(),
                     payroll_employee_id,
                     payroll_employee_name.strip(),
+                    payroll_period.strip(),
                     payment_source.strip() or "bank",
                     operation_type.strip() or "expense",
                     1 if needs_adjustment else 0,
@@ -7242,6 +7242,7 @@ class Storage:
         needs_adjustment: bool,
         payroll_employee_id: int | None = None,
         payroll_employee_name: str = "",
+        payroll_period: str = "",
         operation_type: str = "expense",
     ) -> bool:
         with self.connection() as conn:
@@ -7257,6 +7258,7 @@ class Storage:
                     comment = ?,
                     payroll_employee_id = ?,
                     payroll_employee_name = ?,
+                    payroll_period = ?,
                     payment_source = ?,
                     operation_type = ?,
                     needs_adjustment = ?,
@@ -7272,6 +7274,7 @@ class Storage:
                     comment.strip(),
                     payroll_employee_id,
                     payroll_employee_name.strip(),
+                    payroll_period.strip(),
                     payment_source.strip() or "bank",
                     operation_type.strip() or "expense",
                     1 if needs_adjustment else 0,
@@ -7719,6 +7722,7 @@ class Storage:
             category_code=row["category_code"] or "other",
             payroll_employee_id=int(row["payroll_employee_id"]) if "payroll_employee_id" in row.keys() and row["payroll_employee_id"] is not None else None,
             payroll_employee_name=row["payroll_employee_name"] if "payroll_employee_name" in row.keys() else "",
+            payroll_period=row["payroll_period"] if "payroll_period" in row.keys() else "",
             receipt_file_name=row["receipt_file_name"] if "receipt_file_name" in row.keys() else "",
             receipt_file_path=row["receipt_file_path"] if "receipt_file_path" in row.keys() else "",
             title=row["title"] or "",

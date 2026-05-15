@@ -572,6 +572,14 @@ def parse_date(raw: str) -> date:
     raise ValueError("Нужен формат даты DD-MM-YYYY")
 
 
+def parse_month(raw: str) -> date:
+    raw = raw.strip()
+    try:
+        return datetime.strptime(raw, "%Y-%m").date().replace(day=1)
+    except ValueError as exc:
+        raise ValueError("Нужен формат месяца YYYY-MM") from exc
+
+
 def local_date_to_utc_naive(value: date) -> datetime:
     local_now = datetime.now(VLADIVOSTOK_TZ)
     local_dt = datetime.combine(value, local_now.time().replace(tzinfo=None, microsecond=0))
@@ -12117,6 +12125,7 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
       </div>
     </section>
     {stats}
+    {render_payroll_without_period_warning(storage, owner_chat_id)}
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
@@ -12218,7 +12227,7 @@ def render_payroll_worker_detail_page(
         month_payments = storage.list_payroll_money_links(owner_chat_id, month_cursor).get(employee_id, [])
         for payment in month_payments:
             payments.append(payment)
-            month_key = payment["expense_date"].replace(day=1)
+            month_key = parse_month(payment["payroll_period"]) if payment.get("payroll_period") else payment["expense_date"].replace(day=1)
             month_bucket = monthly_summary.setdefault(month_key, {"shifts": 0.0, "amount": 0.0, "paid": 0.0})
             month_bucket["paid"] += float(payment["amount"] or 0)
         month_cursor = month_add(month_cursor, 1)
@@ -13666,6 +13675,45 @@ def render_task_detail(storage: Storage, owner_chat_id: int, current_user: dict 
     """
 
 
+def render_payroll_without_period_warning(storage: Storage, owner_chat_id: int) -> str:
+    expense_entries = storage.list_expense_entries(owner_chat_id)
+    category_labels = dict(expense_category_options(storage, owner_chat_id, expense_entries))
+    payroll_without_period = [
+        entry for entry in expense_entries
+        if entry.deleted_at is None
+        and (entry.operation_type or "expense") == "expense"
+        and (entry.category_code == "salary" or is_labor_force_category(entry.category_code, category_labels))
+        and not (entry.payroll_period or "").strip()
+    ]
+    if not payroll_without_period:
+        return ""
+    total = sum(entry.amount for entry in payroll_without_period)
+    preview = "".join(
+        f"""
+        <div class="timeline-item">
+          <div class="timeline-date">{format_date(entry.expense_date)}</div>
+          <div>
+            <div class="timeline-title">{escape(entry.title or category_labels.get(entry.category_code, "Выплата"))}</div>
+            <div class="contract-meta">{escape(format_amount(entry.amount))}{' · ' + escape(entry.payroll_employee_name) if entry.payroll_employee_name else ''}</div>
+          </div>
+        </div>
+        """
+        for entry in payroll_without_period[:5]
+    )
+    return f"""
+    <section class="card panel alert-card" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Есть выплаты без указания месяца</h2>
+          <div class="panel-sub">Эти суммы пока не попали в расчеты ФОТ по месяцам. Откройте расход и укажите период выплаты.</div>
+        </div>
+        <span class="status-badge warning">{len(payroll_without_period)} · {escape(format_amount(total))}</span>
+      </div>
+      <div class="timeline" style="margin-top:14px;">{preview}</div>
+    </section>
+    """
+
+
 def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date | None = None, flash_message: str = "", success: bool = False, active_payroll_mode: str = "") -> str:
     storage.ensure_payroll_seed(owner_chat_id)
     months = storage.list_payroll_months(owner_chat_id)
@@ -13694,6 +13742,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     total_debt = sum(payroll_row_metrics(row)["debt_amount"] for row in rows)
     closed_count = sum(1 for row in rows if payroll_row_metrics(row)["status_label"] == "Закрыто")
     payroll_upcoming_events = build_payroll_upcoming_events(selected_month, rows)
+    payroll_without_period_html = render_payroll_without_period_warning(storage, owner_chat_id)
     month_tabs = "".join(
         f'<a class="tab-btn{" active" if month == selected_month else ""}" href="/payroll?owner={owner_chat_id}&month={month.strftime("%Y-%m")}">{escape(format_month_label(month))}</a>'
         for month in months
@@ -13867,6 +13916,7 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     return f"""
     {payroll_mode_choice_panel(owner_chat_id, selected_month, len(rows), builder_count, "admin")}
     {stats}
+    {payroll_without_period_html}
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
@@ -14844,6 +14894,10 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <label>Источник оплаты</label>
             <select name="payment_source">{expense_payment_source_options(entry.payment_source or "bank")}</select>
           </div>
+          <div class="field">
+            <label>Период ФОТ</label>
+            <input type="month" name="payroll_period" value="{escape(entry.payroll_period or '')}">
+          </div>
           <div class="field span-2">
             <label>Наименование траты</label>
             <input type="text" name="title" value="{escape(entry.title)}" required>
@@ -15112,6 +15166,7 @@ def render_cashoperations_body(
               data-expense-project="{escape(entry.project_code)}"
               data-expense-transfer-target="{escape(transfer_target_code)}"
               data-expense-employee="{escape(str(entry.payroll_employee_id or ''))}"
+              data-expense-payroll-period="{escape(getattr(entry, 'payroll_period', '') or '')}"
               data-expense-worker-allocations="{escape(worker_allocations_json, quote=True)}"
               data-expense-title="{escape(entry.title)}"
               data-expense-date="{entry.expense_date.isoformat()}"
@@ -15529,6 +15584,9 @@ def render_cashoperations_body(
               <button class="secondary" type="button" data-cash-worker-add{" disabled" if not builder_employees else ""}>Добавить рабочего</button>
               <div class="cash-mobile-sub" data-cash-worker-total>Распределено: 0 ₽</div>
             </section>
+            <label class="is-hidden" data-cash-payroll-period-wrap>Период
+              <input type="month" name="payroll_period" value="{today.strftime('%Y-%m')}" data-cash-payroll-period>
+            </label>
             <label data-cash-title-wrap>Наименование
               <input type="text" name="title" placeholder="Например, материалы / доставка" required>
             </label>
@@ -16535,6 +16593,8 @@ def render_cashoperations_body(
         const commentInput = document.querySelector("[data-cash-comment]");
         const employeeSelect = document.querySelector("[data-cash-employee]");
         const employeeWrap = document.querySelector("[data-cash-employee-wrap]");
+        const payrollPeriodWrap = document.querySelector("[data-cash-payroll-period-wrap]");
+        const payrollPeriodInput = document.querySelector("[data-cash-payroll-period]");
         const transferCategoryCodes = new Set({json.dumps(transfer_category_codes, ensure_ascii=False)});
         const laborForceCategoryCodes = new Set({json.dumps(labor_force_category_codes, ensure_ascii=False)});
         const workerWrap = document.querySelector("[data-cash-worker-wrap]");
@@ -16790,6 +16850,12 @@ def render_cashoperations_body(
             employeeSelect.required = isSalary;
           }}
           employeeWrap && employeeWrap.classList.toggle("is-hidden", !isSalary);
+          if (payrollPeriodInput) {{
+            payrollPeriodInput.disabled = !(isSalary || isLaborForce);
+            payrollPeriodInput.required = isSalary || isLaborForce;
+            if ((isSalary || isLaborForce) && !payrollPeriodInput.value) payrollPeriodInput.value = "{today.strftime('%Y-%m')}";
+          }}
+          payrollPeriodWrap && payrollPeriodWrap.classList.toggle("is-hidden", !(isSalary || isLaborForce));
           if (workerRows) {{
             ensureLaborWorkerRow();
             workerRows.querySelectorAll("[data-cash-worker], [data-cash-worker-amount]").forEach((input) => {{
@@ -16975,6 +17041,7 @@ def render_cashoperations_body(
           if (expenseIdInput) expenseIdInput.value = "";
           if (requestKeyInput) requestKeyInput.value = randomKey();
           if (expenseForm.elements.expense_date) expenseForm.elements.expense_date.value = "{today.isoformat()}";
+          if (payrollPeriodInput) payrollPeriodInput.value = "{today.strftime('%Y-%m')}";
           if (expenseHeading) expenseHeading.textContent = "Добавить расход";
           if (expenseSubmit) expenseSubmit.textContent = "Сохранить расход";
           if (expenseCancel) expenseCancel.hidden = false;
@@ -17022,6 +17089,7 @@ def render_cashoperations_body(
           if (projectSelect) projectSelect.value = button.dataset.expenseProject || "admin";
           if (transferSelect) transferSelect.value = button.dataset.expenseTransferTarget || transferSelect.value;
           if (employeeSelect) employeeSelect.value = button.dataset.expenseEmployee || "";
+          if (payrollPeriodInput) payrollPeriodInput.value = button.dataset.expensePayrollPeriod || "{today.strftime('%Y-%m')}";
           if (workerRows) {{
             workerRows.innerHTML = "";
             let allocations = [];
@@ -19213,6 +19281,10 @@ def render_expenses_section(
                     {expense_payment_source_options("cash")}
                   </select>
                 </div>
+                <div class="field">
+                  <label>Период ФОТ</label>
+                  <input type="month" name="payroll_period">
+                </div>
                 <div class="field span-2">
                   <label>Комментарий</label>
                   <textarea name="comment" placeholder="Коротко фиксируем, на что именно ушли деньги"></textarea>
@@ -20474,6 +20546,7 @@ self.addEventListener("notificationclick", (event) => {
             category_code = form.get("category_code", "").strip()
             payroll_employee_id = None
             payroll_employee_name = ""
+            payroll_period = ""
             title = form.get("title", "").strip()
             comment = form.get("comment", "").strip()
             entries = storage.list_expense_entries(current_owner)
@@ -20507,6 +20580,11 @@ self.addEventListener("notificationclick", (event) => {
             category_codes = {code for code, _label in category_options_list}
             is_transfer_category = is_cash_transfer_category(category_code, category_labels)
             is_labor_category = is_labor_force_category(category_code, category_labels)
+            if category_code == "salary" or is_labor_category:
+                payroll_period_raw = form.get("payroll_period", "").strip()
+                if not payroll_period_raw:
+                    raise ValueError("Укажите период выплаты")
+                payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m")
             if category_code in {"admin", "salary"} or is_transfer_category or is_labor_category:
                 project_code = "admin"
             if project_code not in project_codes:
@@ -20603,6 +20681,7 @@ self.addEventListener("notificationclick", (event) => {
                         "cash",
                         False,
                         operation_type="transfer",
+                        payroll_period="",
                     )
                     storage.set_expense_worker_allocations(current_owner, source_entry_id, [])
                 else:
@@ -20646,6 +20725,7 @@ self.addEventListener("notificationclick", (event) => {
                         "bank",
                         False,
                         operation_type="income",
+                        payroll_period="",
                     )
                 else:
                     storage.add_expense_entry(
@@ -20691,6 +20771,7 @@ self.addEventListener("notificationclick", (event) => {
                     False,
                     payroll_employee_id=payroll_employee_id,
                     payroll_employee_name=payroll_employee_name,
+                    payroll_period=payroll_period,
                 )
                 storage.set_expense_worker_allocations(current_owner, expense_id, labor_allocations)
                 upload = next((item for item in files.get("receipt_file", []) if item.data), None)
@@ -20714,6 +20795,7 @@ self.addEventListener("notificationclick", (event) => {
                 actor_name,
                 payroll_employee_id=payroll_employee_id,
                 payroll_employee_name=payroll_employee_name,
+                payroll_period=payroll_period,
                 client_request_key=form.get("request_key", ""),
             )
             storage.set_expense_worker_allocations(current_owner, saved_expense_id, labor_allocations)
@@ -25667,6 +25749,8 @@ self.addEventListener("notificationclick", (event) => {
             amount = parse_amount(form.get("amount", "").strip())
             comment = form.get("comment", "").strip()
             payment_source = form.get("payment_source", "cash").strip() or "cash"
+            payroll_period_raw = form.get("payroll_period", "").strip()
+            payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if payroll_period_raw else ""
             needs_adjustment = form.get("needs_adjustment", "").strip() == "1"
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
@@ -25682,7 +25766,7 @@ self.addEventListener("notificationclick", (event) => {
             if not title:
                 raise ValueError("Укажите наименование траты")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
-            storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name)
+            storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_period=payroll_period)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
@@ -25717,6 +25801,8 @@ self.addEventListener("notificationclick", (event) => {
             comment = form.get("comment", "").strip()
             payment_source = form.get("payment_source", "bank").strip() or "bank"
             operation_type = form.get("operation_type", "expense").strip() or "expense"
+            payroll_period_raw = form.get("payroll_period", "").strip()
+            payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if payroll_period_raw else ""
             needs_adjustment = form.get("needs_adjustment", "").strip() == "1"
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
@@ -25733,7 +25819,7 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите тип операции")
             if not title:
                 raise ValueError("Укажите наименование траты")
-            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, operation_type=operation_type)
+            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, payroll_period=payroll_period, operation_type=operation_type)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
