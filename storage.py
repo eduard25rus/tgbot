@@ -5217,6 +5217,46 @@ class Storage:
             )
             return True
 
+    def update_payroll_employee_rate(
+        self,
+        owner_chat_id: int,
+        employee_id: int,
+        rate_id: int,
+        effective_from: date,
+        day_rate: float = 0.0,
+        salary_amount: float = 0.0,
+        advance_amount: float = 0.0,
+    ) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE payroll_employee_rates
+                SET effective_from = ?, day_rate = ?, salary_amount = ?, advance_amount = ?
+                WHERE id = ? AND owner_chat_id = ? AND employee_id = ?
+                """,
+                (
+                    effective_from.strftime(DATE_FMT),
+                    round(float(day_rate or 0), 2),
+                    round(float(salary_amount or 0), 2),
+                    round(float(advance_amount or 0), 2),
+                    rate_id,
+                    owner_chat_id,
+                    employee_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def delete_payroll_employee_rate(self, owner_chat_id: int, employee_id: int, rate_id: int) -> bool:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM payroll_employee_rates
+                WHERE id = ? AND owner_chat_id = ? AND employee_id = ?
+                """,
+                (rate_id, owner_chat_id, employee_id),
+            )
+            return cursor.rowcount > 0
+
     def list_payroll_employee_rate_history(self, owner_chat_id: int, employee_ids: list[int] | None = None) -> dict[int, list[dict]]:
         cleaned_ids = sorted({int(employee_id) for employee_id in (employee_ids or []) if int(employee_id) > 0})
         params: list[object] = [owner_chat_id]

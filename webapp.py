@@ -7435,6 +7435,91 @@ def layout(
     .directory-edit-form .submit-btn {{
       font-weight: 500;
     }}
+    .directory-employee-popover {{
+      width: min(720px, calc(100vw - 24px));
+      max-height: calc(100vh - 24px);
+      overflow-y: auto;
+      align-content: start;
+      padding: 14px;
+    }}
+    .directory-employee-form {{
+      gap: 12px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }}
+    .directory-employee-form > .submit-btn {{
+      grid-column: 1 / -1;
+    }}
+    .employee-rate-list {{
+      display: grid;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(247, 249, 251, 0.72);
+    }}
+    .employee-rate-row {{
+      display: grid;
+      grid-template-columns: minmax(140px, 0.9fr) minmax(150px, 1fr) minmax(150px, 1fr) 36px;
+      gap: 8px;
+      align-items: end;
+    }}
+    .employee-rate-row.builders {{
+      grid-template-columns: minmax(140px, 0.9fr) minmax(160px, 1fr) 36px;
+    }}
+    .employee-rate-delete {{
+      width: 36px;
+      height: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(179, 60, 60, 0.24);
+      border-radius: 12px;
+      color: var(--danger);
+      background: rgba(179, 60, 60, 0.06);
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+      user-select: none;
+    }}
+    .employee-rate-delete:hover {{
+      background: rgba(179, 60, 60, 0.12);
+    }}
+    .employee-rate-delete input {{
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }}
+    .employee-rate-delete input:checked + span {{
+      color: #fff;
+      background: var(--danger);
+      border-color: var(--danger);
+    }}
+    .employee-rate-delete span {{
+      width: 100%;
+      height: 100%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: inherit;
+    }}
+    .employee-rate-add {{
+      justify-self: start;
+    }}
+    @media (max-width: 760px) {{
+      .directory-employee-form {{
+        grid-template-columns: 1fr;
+      }}
+      .employee-rate-row,
+      .employee-rate-row.builders {{
+        grid-template-columns: 1fr 36px;
+      }}
+      .employee-rate-row .field {{
+        grid-column: 1 / -1;
+      }}
+      .employee-rate-delete {{
+        grid-column: 2;
+      }}
+    }}
     .directory-card-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -8698,6 +8783,33 @@ document.addEventListener("input", (event) => {{
     return;
   }}
   buildContractStageFields(form, stageCountInput.value);
+}});
+
+document.addEventListener("click", (event) => {{
+  const addRateButton = event.target.closest("[data-rate-add]");
+  if (addRateButton) {{
+    event.preventDefault();
+    const form = addRateButton.closest("form");
+    const list = form ? form.querySelector("[data-rate-list]") : null;
+    const template = form ? form.querySelector("template[data-rate-template]") : null;
+    if (!list || !template) {{
+      return;
+    }}
+    const nextIndex = Number(list.dataset.nextIndex || "0");
+    list.insertAdjacentHTML("beforeend", template.innerHTML.replaceAll("__index__", String(nextIndex)));
+    list.dataset.nextIndex = String(nextIndex + 1);
+    window.requestAnimationFrame(() => fitStatusMenuPopover(addRateButton.closest(".status-menu")));
+    return;
+  }}
+  const removeNewRateButton = event.target.closest("[data-rate-remove-new]");
+  if (removeNewRateButton) {{
+    event.preventDefault();
+    const row = removeNewRateButton.closest(".employee-rate-row");
+    if (row) {{
+      row.remove();
+    }}
+    window.requestAnimationFrame(() => fitStatusMenuPopover(removeNewRateButton.closest(".status-menu")));
+  }}
 }});
 
 document.addEventListener("blur", (event) => {{
@@ -10105,33 +10217,73 @@ def render_directories_section(
     today_iso = datetime.now(VLADIVOSTOK_TZ).date().isoformat()
 
     def employee_compensation_fields(employee_group: str, rate_history: list[dict]) -> str:
-        latest_rate = payroll_latest_rate(rate_history)
-        effective_value = today_iso
-        if latest_rate.get("effective_from") is not None:
-            effective_value = latest_rate["effective_from"].isoformat()
-        if employee_group == "builders":
+        row_group = "builders" if employee_group == "builders" else "admin"
+
+        def rate_row(prefix: str, rate: dict | None, *, is_existing: bool) -> str:
+            effective_value = today_iso
+            if rate and rate.get("effective_from") is not None:
+                effective_value = rate["effective_from"].isoformat()
+            delete_control = (
+                f"""
+                <label class="employee-rate-delete" title="Удалить ставку">
+                  <input type="checkbox" name="rate_delete_{int(rate["id"])}" value="1">
+                  <span>×</span>
+                </label>
+                """
+                if is_existing and rate else
+                '<button class="employee-rate-delete" type="button" data-rate-remove-new title="Удалить ставку"><span>×</span></button>'
+            )
+            if row_group == "builders":
+                return f"""
+                <div class="employee-rate-row builders">
+                  <div class="field">
+                    <label>Действует с</label>
+                    <input type="date" name="{prefix}_effective_from" value="{effective_value}">
+                  </div>
+                  <div class="field">
+                    <label>Ставка за смену</label>
+                    <input type="text" name="{prefix}_day_rate" value="{escape(format_amount_input(float((rate or {}).get("day_rate") or 0)))}" data-money-input="1" placeholder="3500">
+                  </div>
+                  {delete_control}
+                </div>
+                """
             return f"""
-            <div class="field">
-              <label>Ставка действует с</label>
-              <input type="date" name="rate_effective_from" value="{effective_value}">
-            </div>
-            <div class="field">
-              <label>Ставка за смену</label>
-              <input type="text" name="day_rate" value="{escape(format_amount_input(float(latest_rate.get("day_rate") or 0)))}" data-money-input="1" placeholder="3500">
+            <div class="employee-rate-row">
+              <div class="field">
+                <label>Действует с</label>
+                <input type="date" name="{prefix}_effective_from" value="{effective_value}">
+              </div>
+              <div class="field">
+                <label>Зарплата</label>
+                <input type="text" name="{prefix}_salary_amount" value="{escape(format_amount_input(float((rate or {}).get("salary_amount") or 0)))}" data-money-input="1" placeholder="150000">
+              </div>
+              <div class="field">
+                <label>Аванс</label>
+                <input type="text" name="{prefix}_advance_amount" value="{escape(format_amount_input(float((rate or {}).get("advance_amount") or 0)))}" data-money-input="1" placeholder="50000">
+              </div>
+              {delete_control}
             </div>
             """
+
+        sorted_rates = sorted(rate_history, key=lambda rate: (rate["effective_from"], rate.get("id", 0)), reverse=True)
+        rate_rows = "".join(
+            rate_row(f"rate_existing_{int(rate['id'])}", rate, is_existing=True)
+            for rate in sorted_rates
+        )
+        if not rate_rows:
+            rate_rows = rate_row("rate_new_0", None, is_existing=False)
+            next_index = 1
+        else:
+            next_index = 0
+        template_row = rate_row("rate_new___index__", None, is_existing=False)
         return f"""
-        <div class="field">
-          <label>Ставка действует с</label>
-          <input type="date" name="rate_effective_from" value="{effective_value}">
-        </div>
-        <div class="field">
-          <label>Зарплата</label>
-          <input type="text" name="salary_amount" value="{escape(format_amount_input(float(latest_rate.get("salary_amount") or 0)))}" data-money-input="1" placeholder="150000">
-        </div>
-        <div class="field">
-          <label>Аванс</label>
-          <input type="text" name="advance_amount" value="{escape(format_amount_input(float(latest_rate.get("advance_amount") or 0)))}" data-money-input="1" placeholder="50000">
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Ставки</label>
+          <div class="employee-rate-list" data-rate-list data-next-index="{next_index}">
+            {rate_rows}
+          </div>
+          <button class="secondary-btn mini employee-rate-add" type="button" data-rate-add style="margin-top:10px;">Добавить ставку</button>
+          <template data-rate-template>{template_row}</template>
         </div>
         """
 
@@ -10203,8 +10355,8 @@ def render_directories_section(
               {f'''
               <details class="status-menu directory-edit-menu">
                 <summary><span class="directory-title-link">{escape(employee.full_name)}</span></summary>
-                <div class="status-popover" style="min-width:520px;">
-                  <form class="form-grid directory-edit-form" method="post" action="/directories/employees/{employee.id}/update?owner={owner_chat_id}&employee_group={active_employee_group}">
+                <div class="status-popover directory-employee-popover">
+                  <form class="form-grid directory-edit-form directory-employee-form" method="post" action="/directories/employees/{employee.id}/update?owner={owner_chat_id}&employee_group={active_employee_group}">
                     <div class="field">
                       <label>ФИО</label>
                       <input type="text" name="full_name" value="{escape(employee.full_name)}" required>
@@ -10259,8 +10411,8 @@ def render_directories_section(
         add_employee_block = f"""
         <details class="status-menu">
           <summary><span class="secondary-btn">Добавить сотрудника</span></summary>
-          <div class="status-popover align-right" style="min-width:520px;">
-            <form class="form-grid" method="post" action="/directories/employees/new?owner={owner_chat_id}&employee_group={active_employee_group}">
+          <div class="status-popover align-right directory-employee-popover">
+            <form class="form-grid directory-employee-form" method="post" action="/directories/employees/new?owner={owner_chat_id}&employee_group={active_employee_group}">
               <div class="field">
                 <label>ФИО</label>
                 <input type="text" name="full_name" placeholder="Имя сотрудника" required>
@@ -10864,6 +11016,57 @@ def payroll_rate_history_note(rate_history: list[dict], employee_group: str) -> 
         f"{format_date(item['effective_from'])}: ЗП {format_amount(item['salary_amount'])}, аванс {format_amount(item['advance_amount'])}"
         for item in latest_items
     )
+
+
+def save_employee_rate_form(storage: Storage, owner_chat_id: int, employee_id: int, form: dict[str, str]) -> None:
+    existing_rate_ids = sorted({
+        int(match.group(1))
+        for key in form
+        for match in [re.match(r"rate_existing_(\d+)_effective_from$", key)]
+        if match
+    })
+    for rate_id in existing_rate_ids:
+        if form.get(f"rate_delete_{rate_id}") == "1":
+            storage.delete_payroll_employee_rate(owner_chat_id, employee_id, rate_id)
+    for rate_id in existing_rate_ids:
+        if form.get(f"rate_delete_{rate_id}") == "1":
+            continue
+        effective_raw = form.get(f"rate_existing_{rate_id}_effective_from", "").strip()
+        if not effective_raw:
+            raise ValueError("Укажите дату действия ставки")
+        storage.update_payroll_employee_rate(
+            owner_chat_id,
+            employee_id,
+            rate_id,
+            parse_date(effective_raw),
+            parse_amount(form.get(f"rate_existing_{rate_id}_day_rate", "0") or "0"),
+            parse_amount(form.get(f"rate_existing_{rate_id}_salary_amount", "0") or "0"),
+            parse_amount(form.get(f"rate_existing_{rate_id}_advance_amount", "0") or "0"),
+        )
+
+    new_rate_tokens = sorted({
+        match.group(1)
+        for key in form
+        for match in [re.match(r"rate_new_([^_]+)_effective_from$", key)]
+        if match
+    })
+    for token in new_rate_tokens:
+        effective_raw = form.get(f"rate_new_{token}_effective_from", "").strip()
+        day_raw = form.get(f"rate_new_{token}_day_rate", "").strip()
+        salary_raw = form.get(f"rate_new_{token}_salary_amount", "").strip()
+        advance_raw = form.get(f"rate_new_{token}_advance_amount", "").strip()
+        if not any([effective_raw, day_raw, salary_raw, advance_raw]):
+            continue
+        if not effective_raw:
+            raise ValueError("Укажите дату действия новой ставки")
+        storage.set_payroll_employee_rate(
+            owner_chat_id,
+            employee_id,
+            parse_date(effective_raw),
+            parse_amount(day_raw or "0"),
+            parse_amount(salary_raw or "0"),
+            parse_amount(advance_raw or "0"),
+        )
 
 
 def payroll_deadline_for_kind(payroll_month: date, payment_kind: str) -> date:
@@ -11733,28 +11936,6 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
     def payment_comment_text(payment: dict) -> str:
         return re.sub(r"^\s*\[[^\]]+\]\s*", "", payment.get("comment", "")).strip()
 
-    def render_worker_payment_control(payment: dict) -> str:
-        author = payment.get("created_by_name") or "Автор неизвестен"
-        title = payment.get("title") or "Выплата"
-        created_label = payment_created_label(payment)
-        comment = payment_comment_text(payment)
-        return f"""
-        <details class="status-menu">
-          <summary>
-            <span class="payroll-amount is-paid">{escape(format_amount(float(payment["amount"])))}</span>
-            <div class="contract-table-subtle">{format_date(payment["expense_date"])}</div>
-          </summary>
-          <div class="status-popover compact">
-            <div class="timeline-title">{escape(title)}</div>
-            <div class="contract-table-subtle">Дата оплаты: {format_date(payment["expense_date"])}</div>
-            <div class="contract-table-subtle">Способ: {escape(payment_method_label(payment))}</div>
-            <div class="contract-table-subtle">Внес: {escape(author)}</div>
-            <div class="contract-table-subtle">Создано в ДДС: {escape(created_label)}</div>
-            {f'<div class="contract-table-subtle">Комментарий: {escape(comment)}</div>' if comment else ''}
-          </div>
-        </details>
-        """
-
     def render_worker_payment_cell(item: dict) -> str:
         if not item["payments"]:
             return """
@@ -11792,65 +11973,15 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
         </details>
         """
 
-    def render_worker_card(item: dict) -> str:
-        day_rows = "".join(
-            f"""
-            <tr>
-              <td class="nowrap">{format_date(day_item["date"])}</td>
-              <td>{escape(day_item["project"])}</td>
-              <td class="nowrap">{escape(workforce_units_label(float(day_item["units"])))}</td>
-              <td class="nowrap">{escape(format_amount(float(day_item["rate"])))}</td>
-              <td class="nowrap">{escape(format_amount(float(day_item["amount"])))}</td>
-            </tr>
-            """
-            for day_item in sorted(item["work_days"], key=lambda value: (value["date"], value["project"]))
-        ) or '<tr><td colspan="5">Смен в выбранном месяце нет.</td></tr>'
-        payment_rows = "".join(
-            f"""
-            <tr>
-              <td>{render_worker_payment_control(payment)}</td>
-              <td>{escape(payment.get("title") or "Выплата")}</td>
-              <td>{escape(payment_method_label(payment))}</td>
-            </tr>
-            """
-            for payment in item["payments"]
-        ) or '<tr><td colspan="3">Выплат в выбранном месяце нет.</td></tr>'
-        debt = max(float(item["amount"]) - float(item["paid"]), 0.0)
-        return f"""
-        <details class="status-menu lot-menu">
-          <summary>
-            <span class="directory-title-link">{escape(item["name"])}</span>
-          </summary>
-          <div class="status-popover align-left" style="min-width:min(980px, 92vw);">
-            <div class="timeline-title">{escape(item["name"])}</div>
-            <div class="contract-table-subtle">{escape(item["role_title"] or "Без должности")}</div>
-            <div class="badge-row" style="margin:10px 0 12px;">
-              <span class="badge">Смен: {escape(workforce_units_label(float(item["units"])))}</span>
-              <span class="badge">Начислено: {escape(format_amount(float(item["amount"])))}</span>
-              <span class="badge">Получено: {escape(format_amount(float(item["paid"])))}</span>
-              <span class="badge{' warn' if debt > 0.009 else ''}">Долг: {escape(format_amount(debt))}</span>
-            </div>
-            <div class="contract-table-subtle" style="margin-bottom:8px;">Дни работы</div>
-            <table class="table contract-table">
-              <thead><tr><th>Дата</th><th>Объект</th><th class="nowrap">Смен</th><th class="nowrap">Ставка</th><th class="nowrap">Начислено</th></tr></thead>
-              <tbody>{day_rows}</tbody>
-            </table>
-            <div class="contract-table-subtle" style="margin:14px 0 8px;">Финансовые расчеты</div>
-            <table class="table contract-table">
-              <thead><tr><th>Выплата</th><th>Основание</th><th>Способ</th></tr></thead>
-              <tbody>{payment_rows}</tbody>
-            </table>
-          </div>
-        </details>
-        """
-
     worker_rows = sorted(summary.items(), key=lambda pair: pair[1]["name"].casefold())
     rows_html = "".join(
         f"""
         <tr>
           <td class="nowrap">{index}</td>
           <td>
-            <div class="timeline-title">{render_worker_card(item)}</div>
+            <div class="timeline-title">
+              <a class="directory-title-link" href="/payroll/workers/{_employee_id}?owner={owner_chat_id}&start_month={selected_month.strftime('%Y-%m')}&end_month={selected_month.strftime('%Y-%m')}">{escape(item["name"])}</a>
+            </div>
             <div class="contract-table-subtle">{escape(item["role_title"] or "Без должности")}</div>
           </td>
           <td class="nowrap">{escape(workforce_units_label(float(item["units"])))}</td>
@@ -11932,6 +12063,230 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
             <th class="nowrap">{escape(format_amount(total_debt))}</th>
           </tr>
         </tfoot>
+      </table>
+    </section>
+    """
+
+
+def render_payroll_worker_detail_page(
+    storage: Storage,
+    owner_chat_id: int,
+    employee_id: int,
+    start_month: date,
+    end_month: date,
+    current_user: dict | None,
+) -> str:
+    if end_month < start_month:
+        start_month, end_month = end_month, start_month
+    period_end = month_add(end_month, 1)
+    employees = storage.list_payroll_employees(owner_chat_id)
+    employee = next((item for item in employees if item.id == employee_id), None)
+    if employee is None:
+        return """
+        <section class="card panel">
+          <div class="panel-head">
+            <a class="secondary-btn" href="/payroll?mode=builders">← К рабочим ФОТ</a>
+          </div>
+          <div class="empty">Сотрудник не найден.</div>
+        </section>
+        """.replace("/payroll?mode=builders", f"/payroll?owner={owner_chat_id}&mode=builders")
+    reports = storage.list_mobile_work_reports_for_period(owner_chat_id, start_month, period_end)
+    rate_history = storage.list_payroll_employee_rate_history(owner_chat_id, [employee_id]).get(employee_id, [])
+    project_labels = dict(expense_project_options(storage, owner_chat_id, storage.list_expense_entries(owner_chat_id), include_legacy_entries=False))
+    work_days: list[dict] = []
+    total_shifts = 0.0
+    total_amount = 0.0
+    active_projects: set[str] = set()
+    monthly_summary: dict[date, dict] = {}
+    for report in reports:
+        project_label = report.project_label or project_labels.get(report.project_code, report.project_code or "Без объекта")
+        for worker in report.workers:
+            if int(worker["employee_id"]) != employee_id:
+                continue
+            day_part = float(worker["day_part"])
+            rate = payroll_rate_for_date(rate_history, report.report_date)
+            day_rate = float(rate.get("day_rate") or 0)
+            amount = round(day_part * day_rate, 2)
+            month_key = report.report_date.replace(day=1)
+            month_bucket = monthly_summary.setdefault(month_key, {"shifts": 0.0, "amount": 0.0, "paid": 0.0})
+            month_bucket["shifts"] += day_part
+            month_bucket["amount"] += amount
+            work_days.append({
+                "date": report.report_date,
+                "project": project_label,
+                "units": day_part,
+                "rate": day_rate,
+                "amount": amount,
+            })
+            total_shifts += day_part
+            total_amount += amount
+            active_projects.add(project_label)
+
+    payments: list[dict] = []
+    month_cursor = start_month
+    while month_cursor <= end_month:
+        month_payments = storage.list_payroll_money_links(owner_chat_id, month_cursor).get(employee_id, [])
+        for payment in month_payments:
+            payments.append(payment)
+            month_key = payment["expense_date"].replace(day=1)
+            month_bucket = monthly_summary.setdefault(month_key, {"shifts": 0.0, "amount": 0.0, "paid": 0.0})
+            month_bucket["paid"] += float(payment["amount"] or 0)
+        month_cursor = month_add(month_cursor, 1)
+    payments.sort(key=lambda item: (item["expense_date"], item["expense_id"]), reverse=True)
+    total_paid = round(sum(float(item["amount"] or 0) for item in payments), 2)
+    total_debt = round(max(total_amount - total_paid, 0.0), 2)
+
+    def payment_method_label(payment: dict) -> str:
+        source_label = expense_payment_source_label(payment.get("payment_source") or "bank")
+        cashbox_match = re.search(r"\[(Касса[^\]]+)\]", payment.get("comment", ""))
+        if cashbox_match:
+            return f"{source_label} · {cashbox_match.group(1).strip()}"
+        return source_label
+
+    def payment_created_label(payment: dict) -> str:
+        created_at = payment.get("created_at")
+        return format_datetime(created_at) if created_at is not None else "Дата создания не указана"
+
+    def payment_comment_text(payment: dict) -> str:
+        return re.sub(r"^\s*\[[^\]]+\]\s*", "", payment.get("comment", "")).strip()
+
+    def render_payment_control(payment: dict) -> str:
+        comment = payment_comment_text(payment)
+        return f"""
+        <details class="status-menu">
+          <summary>
+            <span class="payroll-amount is-paid">{escape(format_amount(float(payment["amount"])))}</span>
+          </summary>
+          <div class="status-popover compact">
+            <div class="timeline-title">{escape(payment.get("title") or "Выплата")}</div>
+            <div class="contract-table-subtle">Дата оплаты: {format_date(payment["expense_date"])}</div>
+            <div class="contract-table-subtle">Способ: {escape(payment_method_label(payment))}</div>
+            <div class="contract-table-subtle">Внес: {escape(payment.get("created_by_name") or "Автор неизвестен")}</div>
+            <div class="contract-table-subtle">Создано в ДДС: {escape(payment_created_label(payment))}</div>
+            {f'<div class="contract-table-subtle">Комментарий: {escape(comment)}</div>' if comment else ''}
+          </div>
+        </details>
+        """
+
+    period_label = format_month_label(start_month) if start_month == end_month else f"{format_month_label(start_month)} — {format_month_label(end_month)}"
+    filter_form = f"""
+    <form class="action-row" method="get" action="/payroll/workers/{employee_id}" style="justify-content:space-between; align-items:end; gap:12px; margin-top:14px;">
+      <input type="hidden" name="owner" value="{owner_chat_id}">
+      <div class="field" style="min-width:210px; margin:0;">
+        <label>С месяца</label>
+        <input type="month" name="start_month" value="{start_month.strftime('%Y-%m')}">
+      </div>
+      <div class="field" style="min-width:210px; margin:0;">
+        <label>По месяц</label>
+        <input type="month" name="end_month" value="{end_month.strftime('%Y-%m')}">
+      </div>
+      <button class="secondary-btn" type="submit">Показать период</button>
+    </form>
+    """
+    day_rows = "".join(
+        f"""
+        <tr>
+          <td class="nowrap">{format_date(item["date"])}</td>
+          <td>{escape(item["project"])}</td>
+          <td class="nowrap">{escape(workforce_units_label(float(item["units"])))}</td>
+          <td class="nowrap">{escape(format_amount(float(item["rate"])))}</td>
+          <td class="nowrap">{escape(format_amount(float(item["amount"])))}</td>
+        </tr>
+        """
+        for item in sorted(work_days, key=lambda value: (value["date"], value["project"]))
+    ) or '<tr><td colspan="5">За выбранный период смен нет.</td></tr>'
+    payment_rows = "".join(
+        f"""
+        <tr>
+          <td class="nowrap">{format_date(payment["expense_date"])}</td>
+          <td>{render_payment_control(payment)}</td>
+          <td>{escape(payment.get("title") or "Выплата")}</td>
+          <td>{escape(payment_method_label(payment))}</td>
+          <td>{escape(payment.get("created_by_name") or "Автор неизвестен")}</td>
+        </tr>
+        """
+        for payment in payments
+    ) or '<tr><td colspan="5">За выбранный период выплат нет.</td></tr>'
+    month_rows = "".join(
+        f"""
+        <tr>
+          <td>{escape(format_month_label(month))}</td>
+          <td class="nowrap">{escape(workforce_units_label(float(values["shifts"])))}</td>
+          <td class="nowrap">{escape(format_amount(float(values["amount"])))}</td>
+          <td class="nowrap">{escape(format_amount(float(values["paid"])))}</td>
+          <td class="nowrap">{escape(format_amount(max(float(values["amount"]) - float(values["paid"]), 0.0)))}</td>
+        </tr>
+        """
+        for month, values in sorted(monthly_summary.items())
+    ) or '<tr><td colspan="5">Движений за период нет.</td></tr>'
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <a class="secondary-btn" href="/payroll?owner={owner_chat_id}&mode=builders&month={end_month.strftime('%Y-%m')}">← К рабочим ФОТ</a>
+        <div class="chip">{escape(period_label)}</div>
+      </div>
+      <div style="margin-top:16px;">
+        <h1 class="panel-title">{escape(employee.full_name)}</h1>
+        <div class="panel-sub">{escape(employee.role_title or "Без должности")} · Рабочие на объектах</div>
+      </div>
+      {filter_form}
+    </section>
+    <section class="stats" style="margin-top:22px;">
+      <article class="card stat-card">
+        <div class="stat-label">Смен</div>
+        <div class="stat-value">{escape(workforce_units_label(total_shifts))}</div>
+        <div class="stat-note">За выбранный период</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Объектов</div>
+        <div class="stat-value">{len(active_projects)}</div>
+        <div class="stat-note">Где работал сотрудник</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Начислено</div>
+        <div class="stat-value">{format_amount(total_amount)}</div>
+        <div class="stat-note">Смены × ставка на дату</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Получено / долг</div>
+        <div class="stat-value">{format_amount(total_paid)}</div>
+        <div class="stat-note">Осталось {format_amount(total_debt)}</div>
+      </article>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Дни работы</h2>
+          <div class="panel-sub">Когда, на каком объекте, сколько смен и сколько начислено по ставке на эту дату.</div>
+        </div>
+      </div>
+      <table class="table contract-table">
+        <thead><tr><th>Дата</th><th>Объект</th><th class="nowrap">Смен</th><th class="nowrap">Ставка</th><th class="nowrap">Начислено</th></tr></thead>
+        <tbody>{day_rows}</tbody>
+      </table>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Финансовые расчеты</h2>
+          <div class="panel-sub">Все выплаты сотруднику из ДДС за выбранный период. Сумма открывает детали платежа.</div>
+        </div>
+      </div>
+      <table class="table contract-table">
+        <thead><tr><th>Дата</th><th>Сумма</th><th>Основание</th><th>Способ</th><th>Внес</th></tr></thead>
+        <tbody>{payment_rows}</tbody>
+      </table>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Свод по месяцам</h2>
+          <div class="panel-sub">Начислено, выплачено и остаток по каждому месяцу периода.</div>
+        </div>
+      </div>
+      <table class="table contract-table">
+        <thead><tr><th>Месяц</th><th class="nowrap">Смен</th><th class="nowrap">Начислено</th><th class="nowrap">Выплачено</th><th class="nowrap">Остаток</th></tr></thead>
+        <tbody>{month_rows}</tbody>
       </table>
     </section>
     """
@@ -21523,16 +21878,7 @@ self.addEventListener("notificationclick", (event) => {
             if not role_title:
                 raise ValueError("Укажите должность")
             employee_id = storage.add_payroll_employee(current_owner, full_name, role_title, employee_group, birth_date)
-            rate_effective_raw = form.get("rate_effective_from", "").strip()
-            if rate_effective_raw:
-                storage.set_payroll_employee_rate(
-                    current_owner,
-                    employee_id,
-                    parse_date(rate_effective_raw),
-                    parse_amount(form.get("day_rate", "0") or "0"),
-                    parse_amount(form.get("salary_amount", "0") or "0"),
-                    parse_amount(form.get("advance_amount", "0") or "0"),
-                )
+            save_employee_rate_form(storage, current_owner, employee_id, form)
             return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={employee_group}#directory-employees")
         except Exception as exc:
             body = render_directories_section(storage, current_owner, current_user, "employees", active_employee_group, f"Не удалось добавить сотрудника: {exc}")
@@ -21569,16 +21915,7 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Укажите должность")
             if not storage.update_payroll_employee(current_owner, employee_id, full_name, role_title, employee_group, is_active, birth_date, terminated_date):
                 raise ValueError("Сотрудник не найден")
-            rate_effective_raw = form.get("rate_effective_from", "").strip()
-            if rate_effective_raw:
-                storage.set_payroll_employee_rate(
-                    current_owner,
-                    employee_id,
-                    parse_date(rate_effective_raw),
-                    parse_amount(form.get("day_rate", "0") or "0"),
-                    parse_amount(form.get("salary_amount", "0") or "0"),
-                    parse_amount(form.get("advance_amount", "0") or "0"),
-                )
+            save_employee_rate_form(storage, current_owner, employee_id, form)
             target_employee_group = employee_group if is_active else "terminated"
             return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={target_employee_group}#directory-employees")
         except Exception as exc:
@@ -25368,6 +25705,22 @@ self.addEventListener("notificationclick", (event) => {
             return denied
         body = render_payables_section(storage, current_owner, current_user, current_payables_tab, counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
         html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path.startswith("/payroll/workers/"):
+        denied = guard("finance", "view")
+        if denied:
+            return denied
+        try:
+            employee_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            employee_id = -1
+        current_month = datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+        start_month = parse_month_key(query.get("start_month", [""])[0]) or parse_month_key(query.get("month", [""])[0]) or current_month
+        end_month = parse_month_key(query.get("end_month", [""])[0]) or start_month
+        body = render_payroll_worker_detail_page(storage, current_owner, employee_id, start_month, end_month, current_user)
+        html = layout("Карточка рабочего", body, owners, current_owner, "payroll", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
