@@ -7449,23 +7449,20 @@ def layout(
       height: 100%;
     }}
     .directory-employee-popover {{
-      width: calc(100vw - 24px);
-      height: calc(100vh - 24px);
-      max-height: calc(100vh - 24px);
+      width: min(860px, calc(100vw - 32px));
+      max-height: calc(100vh - 48px);
       overflow-y: auto;
       overscroll-behavior: contain;
       align-content: start;
       padding: 18px;
     }}
     .directory-employee-popover.is-viewport-fitted {{
-      top: 12px !important;
-      left: 12px !important;
+      top: 24px !important;
       right: auto !important;
       bottom: auto !important;
-      width: calc(100vw - 24px) !important;
-      height: calc(100vh - 24px) !important;
-      max-width: calc(100vw - 24px) !important;
-      max-height: calc(100vh - 24px) !important;
+      width: min(860px, calc(100vw - 32px)) !important;
+      max-width: calc(100vw - 32px) !important;
+      max-height: calc(100vh - 48px) !important;
     }}
     .directory-employee-form {{
       gap: 12px;
@@ -8207,16 +8204,15 @@ function fitStatusMenuPopover(menu) {{
   popover.style.maxHeight = `${{Math.max(180, window.innerHeight - viewportPad * 2)}}px`;
 
   if (popover.classList.contains("directory-employee-popover")) {{
-    const modalWidth = window.innerWidth - viewportPad * 2;
-    const modalHeight = window.innerHeight - viewportPad * 2;
-    popover.style.left = `${{viewportPad}}px`;
-    popover.style.top = `${{viewportPad}}px`;
+    const modalWidth = Math.min(860, window.innerWidth - 32);
+    const modalHeight = window.innerHeight - 48;
+    popover.style.left = `${{Math.max(16, (window.innerWidth - modalWidth) / 2)}}px`;
+    popover.style.top = "24px";
     popover.style.right = "auto";
     popover.style.bottom = "auto";
     popover.style.width = `${{modalWidth}}px`;
     popover.style.minWidth = `${{modalWidth}}px`;
     popover.style.maxWidth = `${{modalWidth}}px`;
-    popover.style.height = `${{modalHeight}}px`;
     popover.style.maxHeight = `${{modalHeight}}px`;
     popover.style.visibility = "";
     return;
