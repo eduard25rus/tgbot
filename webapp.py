@@ -11678,7 +11678,6 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
         summary[employee_id]["payments"] = links
     total_paid = round(sum(float(item["paid"]) for item in summary.values()), 2)
     total_debt = round(max(total_amount - total_paid, 0.0), 2)
-    admin_count = len(storage.list_payroll_rows(owner_chat_id, selected_month))
 
     month_options = []
     for offset in range(-2, 4):
@@ -11757,7 +11756,12 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
     </section>
     """
     return f"""
-    {payroll_mode_choice_panel(owner_chat_id, selected_month, admin_count, len(summary), "builders")}
+    <section class="card panel">
+      <div class="panel-head">
+        <a class="secondary-btn" href="/payroll?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}">← К выбору ФОТ</a>
+        <div class="chip">{escape(format_month_label(selected_month))}</div>
+      </div>
+    </section>
     {stats}
     <section class="card panel" style="margin-top:22px;">
       <div class="panel-head">
@@ -13086,8 +13090,10 @@ def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: d
     storage.ensure_payroll_seed(owner_chat_id)
     months = storage.list_payroll_months(owner_chat_id)
     if not months:
-        months = [date.today().replace(day=1)]
-    if selected_month is None or selected_month not in months:
+        months = [datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)]
+    if selected_month is None:
+        selected_month = datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+    if active_payroll_mode == "admin" and selected_month not in months:
         selected_month = months[0]
     rows = storage.list_payroll_rows(owner_chat_id, selected_month)
     builder_reports = storage.list_mobile_work_reports_for_period(owner_chat_id, selected_month, month_add(selected_month, 1))
