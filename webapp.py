@@ -10547,6 +10547,15 @@ def render_directories_section(
                 """
                 for row in conflict_details["expenses"]
             ) or '<tr><td colspan="4">Расходов нет.</td></tr>'
+            legacy_cutoff_month = datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+            legacy_payroll_rows = [
+                row for row in conflict_details["payroll"]
+                if row["payroll_month"] < legacy_cutoff_month
+            ]
+            current_payroll_rows = [
+                row for row in conflict_details["payroll"]
+                if row["payroll_month"] >= legacy_cutoff_month
+            ]
             reassign_form = (
                 f"""
                 <form class="form-grid" method="post" action="/directories/employees/{conflict_employee.id}/reassign?owner={owner_chat_id}&employee_group={active_employee_group}">
@@ -10565,6 +10574,20 @@ def render_directories_section(
                 """
                 if target_options else '<div class="empty">Нет другого сотрудника, на которого можно перенести связи.</div>'
             )
+            legacy_delete_form = ""
+            if legacy_payroll_rows and not current_payroll_rows and not conflict_details["work_reports"] and not conflict_details["expenses"]:
+                legacy_delete_form = f"""
+                <form class="form-grid" method="post" action="/directories/employees/{conflict_employee.id}/delete-legacy-payroll?owner={owner_chat_id}&employee_group={active_employee_group}" onsubmit="return confirm('Удалить сотрудника и его старые строки ФОТ до {escape(format_month_label(legacy_cutoff_month))}? Это не тронет ДДС и кассы.');">
+                  <input type="hidden" name="cutoff_month" value="{legacy_cutoff_month.strftime("%Y-%m")}">
+                  <div>
+                    <div class="stat-label">Старый справочный ФОТ</div>
+                    <div class="contract-table-subtle">На сотруднике только старые строки до {escape(format_month_label(legacy_cutoff_month))}: {len(legacy_payroll_rows)}. Их можно удалить вместе с дублем, если эти месяцы не ведем как текущий долг.</div>
+                  </div>
+                  <div class="action-row" style="align-items:flex-end;">
+                    <button class="secondary-btn danger" type="submit">Удалить дубль и старые строки</button>
+                  </div>
+                </form>
+                """
             employee_conflict_html = f"""
             <section class="card mini-card directory-conflict-panel" id="employee-delete-conflict">
               <div>
@@ -10573,6 +10596,7 @@ def render_directories_section(
                 <div class="contract-table-subtle">Проверьте связанные строки ниже. Можно перейти в исходный раздел и поправить вручную или сразу перевязать все связи на другого сотрудника.</div>
               </div>
               {reassign_form}
+              {legacy_delete_form}
               <div class="grid-2" style="margin-top:16px;">
                 <div>
                   <h3 class="section-title">Зарплатные строки</h3>
@@ -22774,6 +22798,40 @@ self.addEventListener("notificationclick", (event) => {
                 "employees",
                 active_employee_group,
                 f"Не удалось перевязать сотрудника: {exc}",
+                False,
+                employee_id,
+            )
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
+    if path.startswith("/directories/employees/") and path.endswith("/delete-legacy-payroll") and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        try:
+            employee_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            employee_id = -1
+        active_employee_group = query.get("employee_group", ["admin"])[0]
+        form = read_post_data(environ)
+        try:
+            cutoff_raw = form.get("cutoff_month", "").strip()
+            cutoff_month = parse_month(cutoff_raw) if cutoff_raw else datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+            deleted = storage.delete_payroll_employee_with_legacy_payroll(current_owner, employee_id, cutoff_month)
+            flash = (
+                f"Дубль сотрудника удален. Старых строк ФОТ удалено: {deleted.get('payroll', 0)}, "
+                f"ставок: {deleted.get('rates', 0)}. ДДС и кассы не изменялись."
+            )
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={active_employee_group}&ok=1&flash={quote_plus(flash)}#directory-employees")
+        except Exception as exc:
+            body = render_directories_section(
+                storage,
+                current_owner,
+                current_user,
+                "employees",
+                active_employee_group,
+                f"Не удалось удалить старые строки сотрудника: {exc}",
                 False,
                 employee_id,
             )
