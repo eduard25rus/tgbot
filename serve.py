@@ -6,7 +6,9 @@ import threading
 import time
 from datetime import datetime
 from datetime import timedelta
+from socketserver import ThreadingMixIn
 from zoneinfo import ZoneInfo
+from wsgiref.simple_server import WSGIServer
 from wsgiref.simple_server import make_server
 
 from telegram import Update
@@ -23,6 +25,10 @@ logging.basicConfig(
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+class ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+    daemon_threads = True
 
 
 def resolve_web_bind() -> tuple[str, int]:
@@ -131,7 +137,7 @@ def start_bank_mail_import_thread() -> None:
 
 def main() -> None:
     host, port = resolve_web_bind()
-    server = make_server(host, port, web_app)
+    server = make_server(host, port, web_app, server_class=ThreadingWSGIServer)
     LOGGER.info("CRM web is listening on http://%s:%s", host, port)
 
     web_thread = threading.Thread(target=server.serve_forever, name="crm-web-server", daemon=True)
