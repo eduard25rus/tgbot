@@ -5412,6 +5412,264 @@ class Storage:
             "expenses": int(direct_expenses_count or 0) + int(allocated_expenses_count or 0),
         }
 
+    def payroll_employee_usage_details(self, owner_chat_id: int, employee_id: int) -> dict:
+        with self.connection() as conn:
+            employee_row = conn.execute(
+                """
+                SELECT id, owner_chat_id, full_name, role_title, employee_group, is_active, birth_date, terminated_date, created_at
+                FROM payroll_employees
+                WHERE id = ? AND owner_chat_id = ?
+                """,
+                (employee_id, owner_chat_id),
+            ).fetchone()
+            if employee_row is None:
+                return {"employee": None, "payroll": [], "work_reports": [], "expenses": []}
+            payroll_rows = conn.execute(
+                """
+                SELECT id, payroll_month, accrued_amount, advance_card_amount, advance_cash_amount,
+                       salary_amount, bonus_amount, note, updated_at
+                FROM payroll_entries
+                WHERE owner_chat_id = ? AND employee_id = ?
+                ORDER BY payroll_month DESC, id DESC
+                """,
+                (owner_chat_id, employee_id),
+            ).fetchall()
+            work_report_rows = conn.execute(
+                """
+                SELECT w.id AS worker_id, w.report_id, w.employee_name, w.day_part,
+                       r.report_date, r.project_code, r.project_label, r.comment
+                FROM mobile_work_report_workers w
+                JOIN mobile_work_reports r ON r.id = w.report_id
+                WHERE r.owner_chat_id = ? AND w.employee_id = ? AND r.deleted_at IS NULL
+                ORDER BY r.report_date DESC, r.id DESC, w.id DESC
+                """,
+                (owner_chat_id, employee_id),
+            ).fetchall()
+            expense_rows = conn.execute(
+                """
+                SELECT e.id AS expense_id, e.expense_date, e.payroll_period, e.title, e.amount,
+                       e.category_code, e.project_code, e.payment_source, e.created_by_name,
+                       'direct' AS link_kind
+                FROM expense_entries e
+                WHERE e.owner_chat_id = ?
+                  AND e.payroll_employee_id = ?
+                  AND e.deleted_at IS NULL
+                UNION ALL
+                SELECT e.id AS expense_id, e.expense_date, e.payroll_period, e.title, a.amount,
+                       e.category_code, e.project_code, e.payment_source, e.created_by_name,
+                       'allocation' AS link_kind
+                FROM expense_worker_allocations a
+                JOIN expense_entries e
+                  ON e.id = a.expense_entry_id
+                 AND e.owner_chat_id = a.owner_chat_id
+                WHERE a.owner_chat_id = ?
+                  AND a.employee_id = ?
+                  AND e.deleted_at IS NULL
+                ORDER BY expense_date DESC, expense_id DESC
+                """,
+                (owner_chat_id, employee_id, owner_chat_id, employee_id),
+            ).fetchall()
+        return {
+            "employee": self._payroll_employee_from_row(employee_row),
+            "payroll": [
+                {
+                    "id": int(row["id"]),
+                    "payroll_month": date.fromisoformat(row["payroll_month"]),
+                    "accrued_amount": float(row["accrued_amount"] or 0),
+                    "advance_card_amount": float(row["advance_card_amount"] or 0),
+                    "advance_cash_amount": float(row["advance_cash_amount"] or 0),
+                    "salary_amount": float(row["salary_amount"] or 0),
+                    "bonus_amount": float(row["bonus_amount"] or 0),
+                    "note": row["note"] or "",
+                    "updated_at": datetime.fromisoformat(row["updated_at"]),
+                }
+                for row in payroll_rows
+            ],
+            "work_reports": [
+                {
+                    "worker_id": int(row["worker_id"]),
+                    "report_id": int(row["report_id"]),
+                    "employee_name": row["employee_name"] or "",
+                    "day_part": float(row["day_part"] or 0),
+                    "report_date": date.fromisoformat(row["report_date"]),
+                    "project_code": row["project_code"] or "",
+                    "project_label": row["project_label"] or "",
+                    "comment": row["comment"] or "",
+                }
+                for row in work_report_rows
+            ],
+            "expenses": [
+                {
+                    "expense_id": int(row["expense_id"]),
+                    "expense_date": date.fromisoformat(row["expense_date"]),
+                    "payroll_period": row["payroll_period"] or "",
+                    "title": row["title"] or "",
+                    "amount": float(row["amount"] or 0),
+                    "category_code": row["category_code"] or "",
+                    "project_code": row["project_code"] or "",
+                    "payment_source": row["payment_source"] or "",
+                    "created_by_name": row["created_by_name"] or "",
+                    "link_kind": row["link_kind"] or "direct",
+                }
+                for row in expense_rows
+            ],
+        }
+
+    def reassign_payroll_employee_links(self, owner_chat_id: int, source_employee_id: int, target_employee_id: int) -> dict[str, int]:
+        if source_employee_id == target_employee_id:
+            return {"payroll": 0, "rates": 0, "work_reports": 0, "direct_expenses": 0, "expense_allocations": 0}
+        now = datetime.utcnow().isoformat()
+        with self.connection() as conn:
+            source = conn.execute(
+                "SELECT id, full_name FROM payroll_employees WHERE id = ? AND owner_chat_id = ?",
+                (source_employee_id, owner_chat_id),
+            ).fetchone()
+            target = conn.execute(
+                "SELECT id, full_name FROM payroll_employees WHERE id = ? AND owner_chat_id = ?",
+                (target_employee_id, owner_chat_id),
+            ).fetchone()
+            if source is None or target is None:
+                raise ValueError("Сотрудник для переноса не найден")
+            duplicate_months = conn.execute(
+                """
+                SELECT p.payroll_month
+                FROM payroll_entries p
+                JOIN payroll_entries target
+                  ON target.owner_chat_id = p.owner_chat_id
+                 AND target.employee_id = ?
+                 AND target.payroll_month = p.payroll_month
+                WHERE p.owner_chat_id = ? AND p.employee_id = ?
+                ORDER BY p.payroll_month DESC
+                """,
+                (target_employee_id, owner_chat_id, source_employee_id),
+            ).fetchall()
+            if duplicate_months:
+                months = ", ".join(row["payroll_month"][:7] for row in duplicate_months[:6])
+                raise ValueError(f"У целевого сотрудника уже есть зарплатные строки за эти месяцы: {months}")
+            duplicate_reports = conn.execute(
+                """
+                SELECT r.report_date, r.project_label, r.project_code
+                FROM mobile_work_report_workers source
+                JOIN mobile_work_report_workers target ON target.report_id = source.report_id
+                JOIN mobile_work_reports r ON r.id = source.report_id
+                WHERE r.owner_chat_id = ?
+                  AND r.deleted_at IS NULL
+                  AND source.employee_id = ?
+                  AND target.employee_id = ?
+                ORDER BY r.report_date DESC, r.id DESC
+                """,
+                (owner_chat_id, source_employee_id, target_employee_id),
+            ).fetchall()
+            if duplicate_reports:
+                report_labels = ", ".join(
+                    f"{row['report_date']} {row['project_label'] or row['project_code'] or ''}".strip()
+                    for row in duplicate_reports[:4]
+                )
+                raise ValueError(f"В этих сменах уже есть целевой сотрудник: {report_labels}")
+            duplicate_allocations = conn.execute(
+                """
+                SELECT e.expense_date, e.title
+                FROM expense_worker_allocations source
+                JOIN expense_worker_allocations target
+                  ON target.owner_chat_id = source.owner_chat_id
+                 AND target.expense_entry_id = source.expense_entry_id
+                JOIN expense_entries e
+                  ON e.id = source.expense_entry_id
+                 AND e.owner_chat_id = source.owner_chat_id
+                WHERE source.owner_chat_id = ?
+                  AND source.employee_id = ?
+                  AND target.employee_id = ?
+                  AND e.deleted_at IS NULL
+                ORDER BY e.expense_date DESC, e.id DESC
+                """,
+                (owner_chat_id, source_employee_id, target_employee_id),
+            ).fetchall()
+            if duplicate_allocations:
+                expense_labels = ", ".join(
+                    f"{row['expense_date']} {row['title'] or 'расход'}"
+                    for row in duplicate_allocations[:4]
+                )
+                raise ValueError(f"В этих расходах целевой сотрудник уже указан в разбивке: {expense_labels}")
+
+            old_rates = conn.execute(
+                """
+                SELECT effective_from, day_rate, salary_amount, advance_amount
+                FROM payroll_employee_rates
+                WHERE owner_chat_id = ? AND employee_id = ?
+                ORDER BY effective_from ASC, id ASC
+                """,
+                (owner_chat_id, source_employee_id),
+            ).fetchall()
+            rates_changed = 0
+            for row in old_rates:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO payroll_employee_rates (
+                        owner_chat_id, employee_id, effective_from,
+                        day_rate, salary_amount, advance_amount, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        owner_chat_id,
+                        target_employee_id,
+                        row["effective_from"],
+                        float(row["day_rate"] or 0),
+                        float(row["salary_amount"] or 0),
+                        float(row["advance_amount"] or 0),
+                        now,
+                    ),
+                )
+                rates_changed += cursor.rowcount
+            conn.execute(
+                "DELETE FROM payroll_employee_rates WHERE owner_chat_id = ? AND employee_id = ?",
+                (owner_chat_id, source_employee_id),
+            )
+            payroll_cursor = conn.execute(
+                """
+                UPDATE payroll_entries
+                SET employee_id = ?, updated_at = ?
+                WHERE owner_chat_id = ? AND employee_id = ?
+                """,
+                (target_employee_id, now, owner_chat_id, source_employee_id),
+            )
+            work_cursor = conn.execute(
+                """
+                UPDATE mobile_work_report_workers
+                SET employee_id = ?, employee_name = ?
+                WHERE employee_id = ?
+                  AND report_id IN (
+                    SELECT id FROM mobile_work_reports WHERE owner_chat_id = ? AND deleted_at IS NULL
+                  )
+                """,
+                (target_employee_id, target["full_name"], source_employee_id, owner_chat_id),
+            )
+            direct_expense_cursor = conn.execute(
+                """
+                UPDATE expense_entries
+                SET payroll_employee_id = ?, payroll_employee_name = ?, updated_at = ?
+                WHERE owner_chat_id = ?
+                  AND payroll_employee_id = ?
+                  AND deleted_at IS NULL
+                """,
+                (target_employee_id, target["full_name"], now, owner_chat_id, source_employee_id),
+            )
+            allocation_cursor = conn.execute(
+                """
+                UPDATE expense_worker_allocations
+                SET employee_id = ?, employee_name = ?
+                WHERE owner_chat_id = ? AND employee_id = ?
+                """,
+                (target_employee_id, target["full_name"], owner_chat_id, source_employee_id),
+            )
+        return {
+            "payroll": int(payroll_cursor.rowcount or 0),
+            "rates": int(rates_changed or 0),
+            "work_reports": int(work_cursor.rowcount or 0),
+            "direct_expenses": int(direct_expense_cursor.rowcount or 0),
+            "expense_allocations": int(allocation_cursor.rowcount or 0),
+        }
+
     def delete_payroll_employee(self, owner_chat_id: int, employee_id: int) -> bool:
         usage = self.payroll_employee_usage_counts(owner_chat_id, employee_id)
         if not usage.get("exists") or usage.get("payroll") or usage.get("work_reports") or usage.get("expenses"):

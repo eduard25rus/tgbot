@@ -9954,6 +9954,7 @@ def render_directories_section(
     active_employee_group: str = "admin",
     flash_message: str = "",
     success: bool = False,
+    employee_conflict_id: int | None = None,
 ) -> str:
     active_directory_mode = active_directory_mode if active_directory_mode in {"objects", "expense-categories", "employees"} else ""
     employee_groups = {
@@ -10499,6 +10500,104 @@ def render_directories_section(
         """
         for index, employee in enumerate(visible_employees, start=1)
     ) or f'<tr><td colspan="{employee_group_empty_colspan}">Сотрудников в этом разделе пока нет.</td></tr>'
+    employee_conflict_html = ""
+    if employee_conflict_id is not None:
+        conflict_details = storage.payroll_employee_usage_details(owner_chat_id, employee_conflict_id)
+        conflict_employee = conflict_details.get("employee")
+        if conflict_employee is not None:
+            target_options = "".join(
+                f'<option value="{employee.id}">{escape(employee.full_name)} · {escape(employee.role_title or "Без должности")}</option>'
+                for employee in employees
+                if employee.id != conflict_employee.id
+            )
+            payroll_rows = "".join(
+                f"""
+                <tr>
+                  <td class="nowrap"><a class="contract-table-link" href="/payroll?owner={owner_chat_id}&mode={escape(conflict_employee.employee_group or "admin")}&month={row["payroll_month"].strftime("%Y-%m")}">{escape(format_month_label(row["payroll_month"]))}</a></td>
+                  <td class="nowrap">{escape(format_amount(float(row["accrued_amount"])))}</td>
+                  <td class="nowrap">{escape(format_amount(float(row["salary_amount"])))}</td>
+                  <td class="nowrap">{escape(format_amount(float(row["bonus_amount"])))}</td>
+                  <td>{escape(row["note"] or "—")}</td>
+                </tr>
+                """
+                for row in conflict_details["payroll"]
+            ) or '<tr><td colspan="5">Зарплатных строк нет.</td></tr>'
+            work_report_rows = "".join(
+                f"""
+                <tr>
+                  <td class="nowrap"><a class="contract-table-link" href="/workforce?owner={owner_chat_id}&month={row["report_date"].strftime("%Y-%m")}">{format_date(row["report_date"])}</a></td>
+                  <td>{escape(row["project_label"] or row["project_code"] or "Без объекта")}</td>
+                  <td class="nowrap">{escape(workforce_units_label(float(row["day_part"])))}</td>
+                  <td>{escape(row["comment"] or "—")}</td>
+                </tr>
+                """
+                for row in conflict_details["work_reports"]
+            ) or '<tr><td colspan="4">Смен нет.</td></tr>'
+            expense_rows = "".join(
+                f"""
+                <tr>
+                  <td class="nowrap"><a class="contract-table-link" href="/expenses?owner={owner_chat_id}&day={row["expense_date"].isoformat()}">{format_date(row["expense_date"])}</a></td>
+                  <td>
+                    <div class="timeline-title">{escape(row["title"] or "Расход")}</div>
+                    <div class="contract-table-subtle">{escape("Разбивка по рабочим" if row["link_kind"] == "allocation" else "Прямая привязка к сотруднику")}</div>
+                  </td>
+                  <td class="nowrap">{escape(format_amount(float(row["amount"])))}</td>
+                  <td>{escape(row["payroll_period"] or "—")}</td>
+                </tr>
+                """
+                for row in conflict_details["expenses"]
+            ) or '<tr><td colspan="4">Расходов нет.</td></tr>'
+            reassign_form = (
+                f"""
+                <form class="form-grid" method="post" action="/directories/employees/{conflict_employee.id}/reassign?owner={owner_chat_id}&employee_group={active_employee_group}">
+                  <div class="field">
+                    <label>Перевязать все связи на сотрудника</label>
+                    <select name="target_employee_id" required>
+                      <option value="">Выберите сотрудника</option>
+                      {target_options}
+                    </select>
+                  </div>
+                  <div class="action-row" style="align-items:flex-end;">
+                    <button class="submit-btn" type="submit">Перевязать связи</button>
+                    <span class="contract-table-subtle">После переноса этого сотрудника можно будет удалить.</span>
+                  </div>
+                </form>
+                """
+                if target_options else '<div class="empty">Нет другого сотрудника, на которого можно перенести связи.</div>'
+            )
+            employee_conflict_html = f"""
+            <section class="card mini-card directory-conflict-panel" id="employee-delete-conflict">
+              <div>
+                <div class="stat-label">Удаление остановлено</div>
+                <div class="directory-card-title">Сотрудник «{escape(conflict_employee.full_name)}» используется в CRM</div>
+                <div class="contract-table-subtle">Проверьте связанные строки ниже. Можно перейти в исходный раздел и поправить вручную или сразу перевязать все связи на другого сотрудника.</div>
+              </div>
+              {reassign_form}
+              <div class="grid-2" style="margin-top:16px;">
+                <div>
+                  <h3 class="section-title">Зарплатные строки</h3>
+                  <table class="table contract-table">
+                    <thead><tr><th>Месяц</th><th class="nowrap">Начислено</th><th class="nowrap">Зарплата</th><th class="nowrap">Премия</th><th>Заметка</th></tr></thead>
+                    <tbody>{payroll_rows}</tbody>
+                  </table>
+                </div>
+                <div>
+                  <h3 class="section-title">Смены</h3>
+                  <table class="table contract-table">
+                    <thead><tr><th>Дата</th><th>Объект</th><th class="nowrap">Смен</th><th>Комментарий</th></tr></thead>
+                    <tbody>{work_report_rows}</tbody>
+                  </table>
+                </div>
+              </div>
+              <div style="margin-top:16px;">
+                <h3 class="section-title">Расходы ДДС</h3>
+                <table class="table contract-table">
+                  <thead><tr><th>Дата</th><th>Платеж</th><th class="nowrap">Сумма</th><th>Период ФОТ</th></tr></thead>
+                  <tbody>{expense_rows}</tbody>
+                </table>
+              </div>
+            </section>
+            """
     add_employee_block = ""
     if can_edit:
         add_employee_block = f"""
@@ -10572,6 +10671,7 @@ def render_directories_section(
         <div class="action-row access-detail-actions">{back_link}{add_employee_block}</div>
       </div>
       {flash_html}
+      {employee_conflict_html}
       <div class="tab-row" style="justify-content:flex-start; margin: 6px 0 18px;">
         {employee_group_tabs}
       </div>
@@ -22634,6 +22734,53 @@ self.addEventListener("notificationclick", (event) => {
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
+    if path.startswith("/directories/employees/") and path.endswith("/reassign") and method == "POST":
+        denied = guard("directories", "edit")
+        if denied:
+            return denied
+        try:
+            employee_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            employee_id = -1
+        active_employee_group = query.get("employee_group", ["admin"])[0]
+        form = read_post_data(environ)
+        try:
+            target_employee_id = int(form.get("target_employee_id", "0"))
+            if target_employee_id <= 0:
+                raise ValueError("Выберите сотрудника, на которого нужно перенести связи")
+            changed = storage.reassign_payroll_employee_links(current_owner, employee_id, target_employee_id)
+            changed_total = (
+                changed.get("payroll", 0)
+                + changed.get("work_reports", 0)
+                + changed.get("direct_expenses", 0)
+                + changed.get("expense_allocations", 0)
+            )
+            flash = (
+                "Связи перенесены: "
+                f"зарплатных строк {changed.get('payroll', 0)}, "
+                f"ставок {changed.get('rates', 0)}, "
+                f"смен {changed.get('work_reports', 0)}, "
+                f"расходов {changed.get('direct_expenses', 0) + changed.get('expense_allocations', 0)}. "
+                "Теперь можно повторить удаление сотрудника."
+            )
+            if changed_total <= 0 and changed.get("rates", 0) <= 0:
+                flash = "Связей для переноса не найдено. Можно повторить удаление сотрудника."
+            return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={active_employee_group}&ok=1&flash={quote_plus(flash)}#directory-employees")
+        except Exception as exc:
+            body = render_directories_section(
+                storage,
+                current_owner,
+                current_user,
+                "employees",
+                active_employee_group,
+                f"Не удалось перевязать сотрудника: {exc}",
+                False,
+                employee_id,
+            )
+            html = layout("Справочники", body, owners, current_owner, "directories", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+
     if path.startswith("/directories/employees/") and path.endswith("/delete") and method == "POST":
         denied = guard("directories", "edit")
         if denied:
@@ -22643,11 +22790,13 @@ self.addEventListener("notificationclick", (event) => {
         except (ValueError, IndexError):
             employee_id = -1
         active_employee_group = query.get("employee_group", ["admin"])[0]
+        employee_conflict_id = None
         try:
             usage = storage.payroll_employee_usage_counts(current_owner, employee_id)
             if not usage.get("exists"):
                 raise ValueError("Сотрудник не найден")
             if usage.get("payroll") or usage.get("work_reports") or usage.get("expenses"):
+                employee_conflict_id = employee_id
                 parts = []
                 if usage.get("payroll"):
                     parts.append(f"зарплатных строк: {usage['payroll']}")
@@ -22660,7 +22809,16 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Сотрудник не найден")
             return redirect(start_response, f"/directories?owner={current_owner}&mode=employees&employee_group={active_employee_group}#directory-employees")
         except Exception as exc:
-            body = render_directories_section(storage, current_owner, current_user, "employees", active_employee_group, f"Не удалось удалить сотрудника: {exc}")
+            body = render_directories_section(
+                storage,
+                current_owner,
+                current_user,
+                "employees",
+                active_employee_group,
+                f"Не удалось удалить сотрудника: {exc}",
+                False,
+                employee_conflict_id,
+            )
             html = layout("Справочники", body, owners, current_owner, "directories", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
