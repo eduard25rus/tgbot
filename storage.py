@@ -38,6 +38,7 @@ class Contract:
     object_name: str
     object_address: str
     object_customer: str
+    object_color: str
     contract_number: str
     eis_url: str
     nmck_amount: float
@@ -125,6 +126,7 @@ class JurisprudenceObject:
     owner_chat_id: int
     name: str
     customer: str
+    color: str
     created_by_user_id: Optional[int]
     created_by_name: str
     created_at: datetime
@@ -527,6 +529,7 @@ class Storage:
                     object_name TEXT NOT NULL DEFAULT '',
                     object_address TEXT NOT NULL DEFAULT '',
                     object_customer TEXT NOT NULL DEFAULT '',
+                    object_color TEXT NOT NULL DEFAULT '',
                     contract_number TEXT NOT NULL DEFAULT '',
                     eis_url TEXT NOT NULL DEFAULT '',
                     nmck_amount REAL NOT NULL DEFAULT 0,
@@ -622,6 +625,7 @@ class Storage:
                     owner_chat_id INTEGER NOT NULL,
                     name TEXT NOT NULL DEFAULT '',
                     customer TEXT NOT NULL DEFAULT '',
+                    color TEXT NOT NULL DEFAULT '',
                     created_by_user_id INTEGER,
                     created_by_name TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -1393,6 +1397,8 @@ class Storage:
                     WHERE COALESCE(object_customer, '') = ''
                     """
                 )
+            if "object_color" not in contract_columns:
+                conn.execute("ALTER TABLE contracts ADD COLUMN object_color TEXT NOT NULL DEFAULT ''")
             payroll_alters = [
                 ("advance_card_paid_amount", "REAL NOT NULL DEFAULT 0"),
                 ("advance_card_paid_date", "TEXT"),
@@ -1634,6 +1640,8 @@ class Storage:
                 conn.execute("ALTER TABLE legal_letters ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'mail'")
             if "customer" not in jurisprudence_object_columns:
                 conn.execute("ALTER TABLE jurisprudence_objects ADD COLUMN customer TEXT NOT NULL DEFAULT ''")
+            if "color" not in jurisprudence_object_columns:
+                conn.execute("ALTER TABLE jurisprudence_objects ADD COLUMN color TEXT NOT NULL DEFAULT ''")
             court_case_alters = [
                 ("object_label", "TEXT NOT NULL DEFAULT ''"),
                 ("case_number", "TEXT NOT NULL DEFAULT ''"),
@@ -3417,7 +3425,7 @@ class Storage:
                 )
             return cursor.rowcount > 0
 
-    def update_contract_directory_object(self, chat_id: int, contract_id: int, object_name: str, object_address: str, object_customer: str) -> bool:
+    def update_contract_directory_object(self, chat_id: int, contract_id: int, object_name: str, object_address: str, object_customer: str, object_color: str = "") -> bool:
         with self.connection() as conn:
             existing = conn.execute(
                 """
@@ -3433,7 +3441,7 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE contracts
-                SET title = ?, object_name = ?, object_address = ?, object_customer = ?
+                SET title = ?, object_name = ?, object_address = ?, object_customer = ?, object_color = ?
                 WHERE id = ? AND chat_id = ?
                 """,
                 (
@@ -3441,6 +3449,7 @@ class Storage:
                     object_name.strip(),
                     object_address.strip(),
                     object_customer.strip(),
+                    object_color.strip(),
                     contract_id,
                     chat_id,
                 ),
@@ -3675,7 +3684,7 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, name, customer, created_by_user_id, created_by_name, created_at
+                SELECT id, owner_chat_id, name, customer, color, created_by_user_id, created_by_name, created_at
                 FROM jurisprudence_objects
                 WHERE owner_chat_id = ?
                 ORDER BY LOWER(name) ASC, id ASC
@@ -3691,9 +3700,11 @@ class Storage:
         customer: str = "",
         created_by_user_id: int | None = None,
         created_by_name: str = "",
+        color: str = "",
     ) -> int | None:
         cleaned_name = name.strip()
         cleaned_customer = customer.strip()
+        cleaned_color = color.strip()
         if not cleaned_name:
             return None
         with self.connection() as conn:
@@ -3706,27 +3717,29 @@ class Storage:
                 (chat_id, cleaned_name),
             ).fetchone()
             if existing is not None:
-                if cleaned_customer:
+                if cleaned_customer or cleaned_color:
                     conn.execute(
                         """
                         UPDATE jurisprudence_objects
-                        SET customer = ?
-                        WHERE id = ? AND owner_chat_id = ? AND COALESCE(customer, '') = ''
+                        SET customer = CASE WHEN ? != '' AND COALESCE(customer, '') = '' THEN ? ELSE customer END,
+                            color = CASE WHEN ? != '' THEN ? ELSE color END
+                        WHERE id = ? AND owner_chat_id = ?
                         """,
-                        (cleaned_customer, int(existing["id"]), chat_id),
+                        (cleaned_customer, cleaned_customer, cleaned_color, cleaned_color, int(existing["id"]), chat_id),
                     )
                 return int(existing["id"])
             cursor = conn.execute(
                 """
                 INSERT INTO jurisprudence_objects (
-                    owner_chat_id, name, customer, created_by_user_id, created_by_name, created_at
+                    owner_chat_id, name, customer, color, created_by_user_id, created_by_name, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
                     cleaned_name,
                     cleaned_customer,
+                    cleaned_color,
                     created_by_user_id,
                     created_by_name.strip(),
                     datetime.utcnow().isoformat(),
@@ -3734,10 +3747,11 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
-    def update_jurisprudence_object(self, chat_id: int, old_name: str, new_name: str, customer: str = "") -> bool:
+    def update_jurisprudence_object(self, chat_id: int, old_name: str, new_name: str, customer: str = "", color: str | None = None) -> bool:
         cleaned_old_name = old_name.strip()
         cleaned_new_name = new_name.strip()
         cleaned_customer = customer.strip()
+        cleaned_color = color.strip() if color is not None else None
         if not cleaned_old_name or not cleaned_new_name:
             return False
         with self.connection() as conn:
@@ -3764,10 +3778,10 @@ class Storage:
             conn.execute(
                 """
                 UPDATE jurisprudence_objects
-                SET name = ?, customer = ?
+                SET name = ?, customer = ?, color = CASE WHEN ? IS NULL THEN color ELSE ? END
                 WHERE id = ? AND owner_chat_id = ?
                 """,
-                (cleaned_new_name, cleaned_customer, int(existing["id"]), chat_id),
+                (cleaned_new_name, cleaned_customer, cleaned_color, cleaned_color or "", int(existing["id"]), chat_id),
             )
             conn.execute(
                 """
@@ -4595,6 +4609,7 @@ class Storage:
                 "object_name" if "object_name" in contract_columns else "title AS object_name",
                 "object_address" if "object_address" in contract_columns else "'' AS object_address",
                 "object_customer" if "object_customer" in contract_columns else "'' AS object_customer",
+                "object_color" if "object_color" in contract_columns else "'' AS object_color",
                 "contract_number" if "contract_number" in contract_columns else "'' AS contract_number",
                 "eis_url" if "eis_url" in contract_columns else "'' AS eis_url",
                 "nmck_amount" if "nmck_amount" in contract_columns else "0 AS nmck_amount",
@@ -4628,6 +4643,7 @@ class Storage:
                 "object_name" if "object_name" in contract_columns else "title AS object_name",
                 "object_address" if "object_address" in contract_columns else "'' AS object_address",
                 "object_customer" if "object_customer" in contract_columns else "'' AS object_customer",
+                "object_color" if "object_color" in contract_columns else "'' AS object_color",
                 "contract_number" if "contract_number" in contract_columns else "'' AS contract_number",
                 "eis_url" if "eis_url" in contract_columns else "'' AS eis_url",
                 "nmck_amount" if "nmck_amount" in contract_columns else "0 AS nmck_amount",
@@ -4833,6 +4849,7 @@ class Storage:
             object_name=row["object_name"] or row["title"] or "",
             object_address=row["object_address"] or "",
             object_customer=row["object_customer"] or "",
+            object_color=row["object_color"] or "",
             contract_number=row["contract_number"] or "",
             eis_url=row["eis_url"] or "",
             nmck_amount=float(row["nmck_amount"]) if row["nmck_amount"] is not None else 0.0,
@@ -4912,6 +4929,7 @@ class Storage:
             owner_chat_id=int(row["owner_chat_id"]),
             name=row["name"] or "",
             customer=row["customer"] or "",
+            color=row["color"] or "",
             created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
             created_by_name=row["created_by_name"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),

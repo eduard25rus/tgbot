@@ -10091,6 +10091,10 @@ def render_directories_section(
                 <label>Заказчик</label>
                 <input type="text" name="object_customer" value="{escape(contract.object_customer)}" placeholder="Например, МБУ ДО СШ">
               </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Цвет плашки в ДДС</label>
+                <input type="color" name="object_color" value="{escape(normalize_object_color(contract.object_color) or '#e8eef2')}">
+              </div>
               <button class="submit-btn" type="submit">Сохранить объект</button>
             </form>
             """,
@@ -10112,6 +10116,10 @@ def render_directories_section(
               <div class="field" style="grid-column: 1 / -1;">
                 <label>Заказчик</label>
                 <input type="text" name="customer" value="{escape(object_item.customer)}" placeholder="Например, МБУ ДО СШ">
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Цвет плашки в ДДС</label>
+                <input type="color" name="color" value="{escape(normalize_object_color(object_item.color) or '#e8eef2')}">
               </div>
               <button class="submit-btn" type="submit">Сохранить объект</button>
             </form>
@@ -10136,6 +10144,10 @@ def render_directories_section(
               <div class="field" style="grid-column: 1 / -1;">
                 <label>Заказчик</label>
                 <input type="text" name="customer" placeholder="Например, МБУ ДО СШ">
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Цвет плашки в ДДС</label>
+                <input type="color" name="color" value="#e8eef2">
               </div>
               <button class="submit-btn" type="submit">Сохранить объект</button>
             </form>
@@ -15123,6 +15135,28 @@ def expense_category_options(storage: Storage, owner_chat_id: int, entries: Iter
     return options
 
 
+def expense_project_color_map(storage: Storage, owner_chat_id: int) -> dict[str, str]:
+    colors: dict[str, str] = {}
+    for contract in storage.list_contracts(owner_chat_id):
+        color = normalize_object_color(contract.object_color)
+        if not color:
+            continue
+        label = (contract.object_name.strip() or contract.title.strip()).strip()
+        codes = {f"contract:{contract.id}"}
+        if label:
+            codes.update({label, f"label:{label}"})
+        for code in codes:
+            colors[code] = color
+    for object_item in storage.list_jurisprudence_object_records(owner_chat_id):
+        color = normalize_object_color(object_item.color)
+        if not color:
+            continue
+        codes = {f"object:{object_item.id}", object_item.name, f"label:{object_item.name}"}
+        for code in codes:
+            colors[code] = color
+    return colors
+
+
 def expense_project_label(code: str, project_labels: dict[str, str] | None = None) -> str:
     if project_labels and code in project_labels:
         return project_labels[code]
@@ -15153,6 +15187,25 @@ def is_labor_force_category(code: str, category_labels: dict[str, str] | None = 
         return True
     label = category_labels.get(code, "") if category_labels else ""
     return _normalized_cash_category_text(label) in LABOR_FORCE_CATEGORY_LABELS
+
+
+def normalize_object_color(value: str) -> str:
+    cleaned = (value or "").strip()
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", cleaned):
+        return cleaned.lower()
+    return ""
+
+
+def chip_style_for_color(color: str) -> str:
+    color = normalize_object_color(color)
+    if not color:
+        return ""
+    red = int(color[1:3], 16)
+    green = int(color[3:5], 16)
+    blue = int(color[5:7], 16)
+    luminance = (0.299 * red + 0.587 * green + 0.114 * blue)
+    text_color = "#111827" if luminance > 170 else "#ffffff"
+    return f' style="background:{color}; border-color:{color}; color:{text_color};"'
 
 
 def labor_force_category_codes(storage: Storage, owner_chat_id: int) -> list[str]:
@@ -19386,6 +19439,7 @@ def render_expenses_section(
     category_options_list = expense_category_options(storage, owner_chat_id, entries)
     project_labels = dict(project_options_list)
     category_labels = dict(category_options_list)
+    project_colors = expense_project_color_map(storage, owner_chat_id)
     if project_filter and project_filter not in project_labels:
         project_filter = ""
     if category_filter and category_filter not in category_labels:
@@ -19612,7 +19666,8 @@ def render_expenses_section(
         def project_chip(entry) -> str:
             if is_cash_income_display(entry):
                 return ""
-            return f'<span class="chip">{escape(expense_project_label(entry.project_code, project_labels))}</span>'
+            color_style = chip_style_for_color(project_colors.get(entry.project_code, ""))
+            return f'<span class="chip"{color_style}>{escape(expense_project_label(entry.project_code, project_labels))}</span>'
         def render_single_entry(entry) -> str:
             amount_is_income = row_is_income_display(entry)
             return f"""
@@ -22224,6 +22279,7 @@ self.addEventListener("notificationclick", (event) => {
         try:
             name = form.get("name", "").strip()
             customer = form.get("customer", "").strip()
+            color = normalize_object_color(form.get("color", ""))
             if not name:
                 raise ValueError("Укажите название объекта")
             created = storage.add_jurisprudence_object(
@@ -22232,6 +22288,7 @@ self.addEventListener("notificationclick", (event) => {
                 customer,
                 current_user.get("id") if current_user else None,
                 current_user.get("full_name", "").strip() if current_user else "",
+                color,
             )
             if created is None:
                 raise ValueError("Не удалось сохранить объект")
@@ -22251,9 +22308,10 @@ self.addEventListener("notificationclick", (event) => {
             old_name = form.get("old_name", "").strip()
             new_name = form.get("new_name", "").strip()
             customer = form.get("customer", "").strip()
+            color = normalize_object_color(form.get("color", ""))
             if not old_name or not new_name:
                 raise ValueError("Укажите название объекта")
-            if not storage.update_jurisprudence_object(current_owner, old_name, new_name, customer):
+            if not storage.update_jurisprudence_object(current_owner, old_name, new_name, customer, color):
                 raise ValueError("Объект не найден или уже существует")
             updated_object = next(
                 (item for item in storage.list_jurisprudence_object_records(current_owner) if item.name == new_name),
@@ -22487,6 +22545,7 @@ self.addEventListener("notificationclick", (event) => {
             object_name = form.get("object_name", "").strip()
             object_address = form.get("object_address", "").strip()
             object_customer = form.get("object_customer", "").strip()
+            object_color = normalize_object_color(form.get("object_color", ""))
             if not object_name:
                 raise ValueError("Укажите название объекта")
             existing_contract = next(
@@ -22494,7 +22553,7 @@ self.addEventListener("notificationclick", (event) => {
                 None,
             )
             old_object_name = (existing_contract.object_name or existing_contract.title).strip() if existing_contract else ""
-            if not storage.update_contract_directory_object(current_owner, contract_id, object_name, object_address, object_customer):
+            if not storage.update_contract_directory_object(current_owner, contract_id, object_name, object_address, object_customer, object_color):
                 raise ValueError("Контракт не найден")
             legacy_project_codes = legacy_project_codes_for_label(old_object_name)
             if legacy_project_codes:
