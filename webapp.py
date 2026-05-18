@@ -11874,7 +11874,7 @@ def payroll_mode_choice_panel(owner_chat_id: int, selected_month: date, admin_co
         (
             "admin",
             "Административный персонал",
-            "Начисления, авансы, зарплата, премии и ручное закрытие выплат по административной команде.",
+            "Сводка по месячной зарплате: ставки из справочника, начислено, выплаты из ДДС и остаток.",
             admin_count,
         ),
         (
@@ -12163,6 +12163,229 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
     """
 
 
+def render_payroll_admin_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date, flash_message: str = "", success: bool = False) -> str:
+    month_end = month_add(selected_month, 1) - timedelta(days=1)
+    employees = storage.list_payroll_employees(owner_chat_id)
+    payment_links = storage.list_payroll_money_links(owner_chat_id, selected_month)
+    admin_employees = [
+        employee for employee in employees
+        if (employee.employee_group or "admin") == "admin"
+        and (
+            employee.is_active
+            or employee.id in payment_links
+            or (employee.terminated_date is not None and employee.terminated_date >= selected_month)
+        )
+    ]
+    employee_ids = [employee.id for employee in admin_employees]
+    rate_history = storage.list_payroll_employee_rate_history(owner_chat_id, employee_ids)
+    summary: dict[int, dict] = {}
+    total_amount = 0.0
+    total_paid = 0.0
+    total_advance = 0.0
+    for employee in admin_employees:
+        rate = payroll_rate_for_date(rate_history.get(employee.id, []), month_end)
+        salary_amount = round(float(rate.get("salary_amount") or 0), 2)
+        advance_amount = round(float(rate.get("advance_amount") or 0), 2)
+        payments = payment_links.get(employee.id, [])
+        paid_amount = round(sum(float(item["amount"]) for item in payments), 2)
+        summary[employee.id] = {
+            "name": employee.full_name,
+            "role_title": employee.role_title,
+            "salary_amount": salary_amount,
+            "advance_amount": advance_amount,
+            "effective_from": rate.get("effective_from"),
+            "amount": salary_amount,
+            "paid": paid_amount,
+            "payments": payments,
+        }
+        total_amount += salary_amount
+        total_paid += paid_amount
+        total_advance += advance_amount
+    total_amount = round(total_amount, 2)
+    total_paid = round(total_paid, 2)
+    total_advance = round(total_advance, 2)
+    total_debt = round(total_amount - total_paid, 2)
+
+    month_options = []
+    for offset in range(-2, 4):
+        month_value = month_add(selected_month, offset)
+        month_options.append(
+            f'<option value="{month_value.strftime("%Y-%m")}"{" selected" if month_value == selected_month else ""}>{escape(format_month_label(month_value))}</option>'
+        )
+    month_form = f"""
+    <form class="action-row" method="get" action="/payroll" style="justify-content:space-between; align-items:end; gap:12px; margin-top:14px;">
+      <input type="hidden" name="owner" value="{owner_chat_id}">
+      <input type="hidden" name="mode" value="admin">
+      <div class="field" style="min-width:240px; margin:0;">
+        <label>Месяц</label>
+        <select name="month">{''.join(month_options)}</select>
+      </div>
+      <button class="secondary-btn" type="submit">Показать месяц</button>
+    </form>
+    """
+
+    def payment_method_label(payment: dict) -> str:
+        source_label = expense_payment_source_label(payment.get("payment_source") or "bank")
+        cashbox_match = re.search(r"\[(Касса[^\]]+)\]", payment.get("comment", ""))
+        if cashbox_match:
+            return f"{source_label} · {cashbox_match.group(1).strip()}"
+        return source_label
+
+    def payment_created_label(payment: dict) -> str:
+        created_at = payment.get("created_at")
+        return format_datetime(created_at) if created_at is not None else "Дата создания не указана"
+
+    def payment_comment_text(payment: dict) -> str:
+        return re.sub(r"^\s*\[[^\]]+\]\s*", "", payment.get("comment", "")).strip()
+
+    def render_admin_payment_cell(item: dict) -> str:
+        if not item["payments"]:
+            return """
+            <span class="payroll-amount">—</span>
+            <div class="contract-table-subtle">выплат нет</div>
+            """
+        payment_rows = "".join(
+            f"""
+            <tr>
+              <td class="nowrap">
+                {format_date(payment["expense_date"])}
+                <div class="contract-table-subtle">{escape(payment.get("title") or "Выплата")}</div>
+                {f'<div class="contract-table-subtle">{escape(payment_comment_text(payment))}</div>' if payment_comment_text(payment) else ''}
+              </td>
+              <td class="nowrap"><span class="payroll-amount is-paid">{escape(format_amount(float(payment["amount"])))}</span></td>
+              <td>{escape(payment_method_label(payment))}</td>
+              <td>{escape(payment.get("created_by_name") or "Автор неизвестен")}</td>
+              <td class="nowrap">{escape(payment_created_label(payment))}</td>
+            </tr>
+            """
+            for payment in item["payments"]
+        )
+        return f"""
+        <details class="status-menu">
+          <summary>
+            <span class="payroll-amount is-paid">{escape(format_amount(float(item["paid"])))}</span>
+            <div class="contract-table-subtle">{len(item["payments"])} выплат</div>
+          </summary>
+          <div class="status-popover align-right" style="min-width:min(860px, 92vw);">
+            <table class="table contract-table">
+              <thead><tr><th>Дата</th><th>Сумма</th><th>Способ</th><th>Внес</th><th>Создано в ДДС</th></tr></thead>
+              <tbody>{payment_rows}</tbody>
+            </table>
+          </div>
+        </details>
+        """
+
+    def render_admin_rate_cell(item: dict) -> str:
+        if float(item["salary_amount"]) <= 0.009:
+            return '<span class="chip danger">Ставка не задана</span>'
+        effective = item.get("effective_from")
+        effective_html = f'<div class="contract-table-subtle">Действует с {format_date(effective)}</div>' if effective else ""
+        advance_html = (
+            f'<div class="contract-table-subtle">аванс {escape(format_amount(float(item["advance_amount"])))}</div>'
+            if float(item["advance_amount"]) > 0.009
+            else '<div class="contract-table-subtle">аванс не задан</div>'
+        )
+        return f"""
+        <span class="payroll-amount">{escape(format_amount(float(item["salary_amount"])))}</span>
+        <div class="contract-table-subtle">зарплата</div>
+        {advance_html}
+        {effective_html}
+        """
+
+    def render_admin_row(index: int, employee_id: int, item: dict) -> str:
+        balance = round(float(item["amount"]) - float(item["paid"]), 2)
+        balance_class = " ok" if abs(balance) <= 0.009 else " danger" if balance < -0.009 else ""
+        return f"""
+        <tr>
+          <td class="nowrap">{index}</td>
+          <td>
+            <div class="timeline-title">
+              <a class="directory-title-link" href="/payroll/admin/{employee_id}?owner={owner_chat_id}&start_month={selected_month.strftime('%Y-%m')}&end_month={selected_month.strftime('%Y-%m')}">{escape(item["name"])}</a>
+            </div>
+            <div class="contract-table-subtle">{escape(item["role_title"] or "Без должности")}</div>
+          </td>
+          <td class="nowrap">{render_admin_rate_cell(item)}</td>
+          <td class="nowrap"><span class="payroll-amount">{escape(format_amount(float(item["amount"])))}</span></td>
+          <td class="nowrap">{render_admin_payment_cell(item)}</td>
+          <td class="nowrap"><span class="payroll-balance{balance_class}">{escape(format_amount(balance))}</span></td>
+        </tr>
+        """
+
+    employee_rows = sorted(summary.items(), key=lambda pair: pair[1]["name"].casefold())
+    rows_html = "".join(
+        render_admin_row(index, employee_id, item)
+        for index, (employee_id, item) in enumerate(employee_rows, start=1)
+    ) or '<tr><td colspan="6">В справочнике пока нет активного административного персонала.</td></tr>'
+    flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
+    stats = f"""
+    <section class="stats" style="margin-top:22px;">
+      <article class="card stat-card">
+        <div class="stat-label">Сотрудников</div>
+        <div class="stat-value">{len(employee_rows)}</div>
+        <div class="stat-note">Административный персонал в расчете</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Начислено</div>
+        <div class="stat-value">{format_amount(total_amount)}</div>
+        <div class="stat-note">Зарплата по ставке на месяц</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Выплачено / остаток</div>
+        <div class="stat-value">{format_amount(total_paid)}</div>
+        <div class="stat-note">Осталось {format_amount(total_debt)}</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Аванс план</div>
+        <div class="stat-value">{format_amount(total_advance)}</div>
+        <div class="stat-note">Справочно из ставок сотрудников</div>
+      </article>
+    </section>
+    """
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <a class="secondary-btn" href="/payroll?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}">← К выбору ФОТ</a>
+        <div class="chip">{escape(format_month_label(selected_month))}</div>
+      </div>
+    </section>
+    {stats}
+    {render_payroll_without_period_warning(storage, owner_chat_id)}
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Административный персонал</h2>
+          <div class="panel-sub">Сводник зарплаты за выбранный месяц: ставка из справочника, начислено, выплаты из ДДС и текущий остаток.</div>
+        </div>
+      </div>
+      {month_form}
+      {flash_html}
+      <table class="table contract-table payroll-table" style="margin-top:18px;">
+        <thead>
+          <tr>
+            <th class="nowrap">№</th>
+            <th>Сотрудник</th>
+            <th class="nowrap">Ставка</th>
+            <th class="nowrap">К выплате</th>
+            <th class="nowrap">Получено</th>
+            <th class="nowrap">Остаток</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+        <tfoot>
+          <tr>
+            <th></th>
+            <th>Итого</th>
+            <th class="nowrap">аванс {escape(format_amount(total_advance))}</th>
+            <th class="nowrap">{escape(format_amount(total_amount))}</th>
+            <th class="nowrap">{escape(format_amount(total_paid))}</th>
+            <th class="nowrap">{escape(format_amount(total_debt))}</th>
+          </tr>
+        </tfoot>
+      </table>
+    </section>
+    """
+
+
 def render_payroll_worker_detail_page(
     storage: Storage,
     owner_chat_id: int,
@@ -12382,6 +12605,208 @@ def render_payroll_worker_detail_page(
       <table class="table contract-table">
         <thead><tr><th>Месяц</th><th class="nowrap">Смен</th><th class="nowrap">Начислено</th><th class="nowrap">Выплачено</th><th class="nowrap">Остаток</th></tr></thead>
         <tbody>{month_rows}</tbody>
+      </table>
+    </section>
+    """
+
+
+def render_payroll_admin_detail_page(
+    storage: Storage,
+    owner_chat_id: int,
+    employee_id: int,
+    start_month: date,
+    end_month: date,
+    current_user: dict | None,
+) -> str:
+    if end_month < start_month:
+        start_month, end_month = end_month, start_month
+    employees = storage.list_payroll_employees(owner_chat_id)
+    employee = next((item for item in employees if item.id == employee_id), None)
+    if employee is None:
+        return f"""
+        <section class="card panel">
+          <div class="panel-head">
+            <a class="secondary-btn" href="/payroll?owner={owner_chat_id}&mode=admin">← К административному ФОТ</a>
+          </div>
+          <div class="empty">Сотрудник не найден.</div>
+        </section>
+        """
+    rate_history = storage.list_payroll_employee_rate_history(owner_chat_id, [employee_id]).get(employee_id, [])
+    monthly_summary: dict[date, dict] = {}
+    payments: list[dict] = []
+    month_cursor = start_month
+    while month_cursor <= end_month:
+        month_end = month_add(month_cursor, 1) - timedelta(days=1)
+        rate = payroll_rate_for_date(rate_history, month_end)
+        salary_amount = round(float(rate.get("salary_amount") or 0), 2)
+        advance_amount = round(float(rate.get("advance_amount") or 0), 2)
+        month_payments = storage.list_payroll_money_links(owner_chat_id, month_cursor).get(employee_id, [])
+        paid_amount = round(sum(float(payment["amount"] or 0) for payment in month_payments), 2)
+        monthly_summary[month_cursor] = {
+            "salary_amount": salary_amount,
+            "advance_amount": advance_amount,
+            "effective_from": rate.get("effective_from"),
+            "paid": paid_amount,
+            "payments": month_payments,
+        }
+        payments.extend(month_payments)
+        month_cursor = month_add(month_cursor, 1)
+    payments.sort(key=lambda item: (item["expense_date"], item["expense_id"]), reverse=True)
+    total_amount = round(sum(float(values["salary_amount"]) for values in monthly_summary.values()), 2)
+    total_advance = round(sum(float(values["advance_amount"]) for values in monthly_summary.values()), 2)
+    total_paid = round(sum(float(item["amount"] or 0) for item in payments), 2)
+    total_debt = round(total_amount - total_paid, 2)
+
+    def payment_method_label(payment: dict) -> str:
+        source_label = expense_payment_source_label(payment.get("payment_source") or "bank")
+        cashbox_match = re.search(r"\[(Касса[^\]]+)\]", payment.get("comment", ""))
+        if cashbox_match:
+            return f"{source_label} · {cashbox_match.group(1).strip()}"
+        return source_label
+
+    def payment_created_label(payment: dict) -> str:
+        created_at = payment.get("created_at")
+        return format_datetime(created_at) if created_at is not None else "Дата создания не указана"
+
+    def payment_comment_text(payment: dict) -> str:
+        return re.sub(r"^\s*\[[^\]]+\]\s*", "", payment.get("comment", "")).strip()
+
+    def render_payment_control(payment: dict) -> str:
+        comment = payment_comment_text(payment)
+        return f"""
+        <details class="status-menu">
+          <summary>
+            <span class="payroll-amount is-paid">{escape(format_amount(float(payment["amount"])))}</span>
+          </summary>
+          <div class="status-popover compact">
+            <div class="timeline-title">{escape(payment.get("title") or "Выплата")}</div>
+            <div class="contract-table-subtle">Дата оплаты: {format_date(payment["expense_date"])}</div>
+            <div class="contract-table-subtle">Способ: {escape(payment_method_label(payment))}</div>
+            <div class="contract-table-subtle">Внес: {escape(payment.get("created_by_name") or "Автор неизвестен")}</div>
+            <div class="contract-table-subtle">Создано в ДДС: {escape(payment_created_label(payment))}</div>
+            {f'<div class="contract-table-subtle">Комментарий: {escape(comment)}</div>' if comment else ''}
+          </div>
+        </details>
+        """
+
+    period_label = format_month_label(start_month) if start_month == end_month else f"{format_month_label(start_month)} — {format_month_label(end_month)}"
+    filter_form = f"""
+    <form class="action-row" method="get" action="/payroll/admin/{employee_id}" style="justify-content:space-between; align-items:end; gap:12px; margin-top:14px;">
+      <input type="hidden" name="owner" value="{owner_chat_id}">
+      <div class="field" style="min-width:210px; margin:0;">
+        <label>С месяца</label>
+        <input type="month" name="start_month" value="{start_month.strftime('%Y-%m')}">
+      </div>
+      <div class="field" style="min-width:210px; margin:0;">
+        <label>По месяц</label>
+        <input type="month" name="end_month" value="{end_month.strftime('%Y-%m')}">
+      </div>
+      <button class="secondary-btn" type="submit">Показать период</button>
+    </form>
+    """
+    month_rows = "".join(
+        f"""
+        <tr>
+          <td>{escape(format_month_label(month))}</td>
+          <td class="nowrap">{escape(format_amount(float(values["salary_amount"])))}</td>
+          <td class="nowrap">{escape(format_amount(float(values["advance_amount"])))}</td>
+          <td class="nowrap">{format_date(values["effective_from"]) if values.get("effective_from") else "—"}</td>
+          <td class="nowrap">{escape(format_amount(float(values["paid"])))}</td>
+          <td class="nowrap">{escape(format_amount(round(float(values["salary_amount"]) - float(values["paid"]), 2)))}</td>
+        </tr>
+        """
+        for month, values in sorted(monthly_summary.items())
+    ) or '<tr><td colspan="6">Движений за период нет.</td></tr>'
+    payment_rows = "".join(
+        f"""
+        <tr>
+          <td class="nowrap">{format_date(payment["expense_date"])}</td>
+          <td>{render_payment_control(payment)}</td>
+          <td>{escape(payment.get("title") or "Выплата")}</td>
+          <td>{escape(payment_method_label(payment))}</td>
+          <td>{escape(payment.get("created_by_name") or "Автор неизвестен")}</td>
+        </tr>
+        """
+        for payment in payments
+    ) or '<tr><td colspan="5">За выбранный период выплат нет.</td></tr>'
+    rate_rows = "".join(
+        f"""
+        <tr>
+          <td class="nowrap">{format_date(rate["effective_from"])}</td>
+          <td class="nowrap">{escape(format_amount(float(rate["salary_amount"])))}</td>
+          <td class="nowrap">{escape(format_amount(float(rate["advance_amount"])))}</td>
+        </tr>
+        """
+        for rate in sorted(rate_history, key=lambda item: (item["effective_from"], item.get("id", 0)), reverse=True)
+    ) or '<tr><td colspan="3">История ставок пока не задана.</td></tr>'
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <a class="secondary-btn" href="/payroll?owner={owner_chat_id}&mode=admin&month={end_month.strftime('%Y-%m')}">← К административному ФОТ</a>
+        <div class="chip">{escape(period_label)}</div>
+      </div>
+      <div style="margin-top:16px;">
+        <h1 class="panel-title">{escape(employee.full_name)}</h1>
+        <div class="panel-sub">{escape(employee.role_title or "Без должности")} · Административный персонал</div>
+      </div>
+      {filter_form}
+    </section>
+    <section class="stats" style="margin-top:22px;">
+      <article class="card stat-card">
+        <div class="stat-label">Начислено</div>
+        <div class="stat-value">{format_amount(total_amount)}</div>
+        <div class="stat-note">Зарплата по месяцам периода</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Аванс план</div>
+        <div class="stat-value">{format_amount(total_advance)}</div>
+        <div class="stat-note">Справочно из ставок</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Получено</div>
+        <div class="stat-value">{format_amount(total_paid)}</div>
+        <div class="stat-note">Выплаты из ДДС за период</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Остаток</div>
+        <div class="stat-value">{format_amount(total_debt)}</div>
+        <div class="stat-note">Может быть отрицательным при переплате</div>
+      </article>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Свод по месяцам</h2>
+          <div class="panel-sub">Зарплата, плановый аванс, выплаты и остаток по каждому месяцу выбранного периода.</div>
+        </div>
+      </div>
+      <table class="table contract-table">
+        <thead><tr><th>Месяц</th><th class="nowrap">Зарплата</th><th class="nowrap">Аванс</th><th class="nowrap">Ставка с</th><th class="nowrap">Выплачено</th><th class="nowrap">Остаток</th></tr></thead>
+        <tbody>{month_rows}</tbody>
+      </table>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Финансовые расчеты</h2>
+          <div class="panel-sub">Все выплаты сотруднику из ДДС за выбранный период. Сумма открывает детали платежа.</div>
+        </div>
+      </div>
+      <table class="table contract-table">
+        <thead><tr><th>Дата</th><th>Сумма</th><th>Основание</th><th>Способ</th><th>Внес</th></tr></thead>
+        <tbody>{payment_rows}</tbody>
+      </table>
+    </section>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">История ставок</h2>
+          <div class="panel-sub">Справочник зарплаты и аванса сотрудника с датами начала действия.</div>
+        </div>
+      </div>
+      <table class="table contract-table">
+        <thead><tr><th class="nowrap">Действует с</th><th class="nowrap">Зарплата</th><th class="nowrap">Аванс</th></tr></thead>
+        <tbody>{rate_rows}</tbody>
       </table>
     </section>
     """
@@ -13712,24 +14137,35 @@ def render_payroll_without_period_warning(storage: Storage, owner_chat_id: int) 
 
 def render_payroll_section(storage: Storage, owner_chat_id: int, current_user: dict | None, selected_month: date | None = None, flash_message: str = "", success: bool = False, active_payroll_mode: str = "") -> str:
     storage.ensure_payroll_seed(owner_chat_id)
-    months = storage.list_payroll_months(owner_chat_id)
-    if not months:
-        months = [datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)]
     if selected_month is None:
         selected_month = datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
-    if active_payroll_mode == "admin" and selected_month not in months:
-        selected_month = months[0]
-    rows = storage.list_payroll_rows(owner_chat_id, selected_month)
+    employees = storage.list_payroll_employees(owner_chat_id)
+    admin_count = len([
+        employee for employee in employees
+        if employee.is_active and (employee.employee_group or "admin") == "admin"
+    ])
+    builder_ids = {
+        employee.id
+        for employee in employees
+        if (employee.employee_group or "admin") == "builders"
+    }
     builder_reports = storage.list_mobile_work_reports_for_period(owner_chat_id, selected_month, month_add(selected_month, 1))
     builder_count = len({
         int(worker["employee_id"])
         for report in builder_reports
         for worker in report.workers
+        if int(worker["employee_id"]) in builder_ids
     })
     if active_payroll_mode not in {"admin", "builders"}:
-        return payroll_mode_choice_panel(owner_chat_id, selected_month, len(rows), builder_count)
+        return payroll_mode_choice_panel(owner_chat_id, selected_month, admin_count, builder_count)
     if active_payroll_mode == "builders":
         return render_payroll_workers_section(storage, owner_chat_id, current_user, selected_month, flash_message, success)
+    if active_payroll_mode == "admin":
+        return render_payroll_admin_section(storage, owner_chat_id, current_user, selected_month, flash_message, success)
+    months = storage.list_payroll_months(owner_chat_id)
+    if not months:
+        months = [datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)]
+    rows = storage.list_payroll_rows(owner_chat_id, selected_month)
     next_month = month_add(selected_month, 1)
     next_month_exists = next_month in months
     available_employees = storage.list_payroll_available_employees_for_month(owner_chat_id, selected_month) if has_permission(current_user, "finance", "edit") else []
@@ -25924,6 +26360,22 @@ self.addEventListener("notificationclick", (event) => {
             return denied
         body = render_payables_section(storage, current_owner, current_user, current_payables_tab, counterparty_filter=current_payables_counterparty, sort_key=current_payables_sort, sort_order=current_payables_order)
         html = layout("Кредиторка", body, owners, current_owner, "payables", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path.startswith("/payroll/admin/"):
+        denied = guard("finance", "view")
+        if denied:
+            return denied
+        try:
+            employee_id = int(path.split("/")[3])
+        except (ValueError, IndexError):
+            employee_id = -1
+        current_month = datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+        start_month = parse_month_key(query.get("start_month", [""])[0]) or parse_month_key(query.get("month", [""])[0]) or current_month
+        end_month = parse_month_key(query.get("end_month", [""])[0]) or start_month
+        body = render_payroll_admin_detail_page(storage, current_owner, employee_id, start_month, end_month, current_user)
+        html = layout("Карточка сотрудника ФОТ", body, owners, current_owner, "payroll", current_user)
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
