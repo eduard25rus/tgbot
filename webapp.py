@@ -7568,6 +7568,9 @@ def layout(
     .payroll-period-field.is-hidden {{
       display: none;
     }}
+    .transfer-target-field.is-hidden {{
+      display: none;
+    }}
     .action-row {{
       display: flex;
       gap: 10px;
@@ -10113,16 +10116,27 @@ function syncDdsExpenseForm(form) {{
     return;
   }}
   let payrollCategoryCodes = [];
+  let transferCategoryCodes = [];
   try {{
     payrollCategoryCodes = JSON.parse(form.dataset.payrollCategoryCodes || "[]");
   }} catch (error) {{
     payrollCategoryCodes = [];
   }}
+  try {{
+    transferCategoryCodes = JSON.parse(form.dataset.transferCategoryCodes || "[]");
+  }} catch (error) {{
+    transferCategoryCodes = [];
+  }}
   const payrollSet = new Set(payrollCategoryCodes);
+  const transferSet = new Set(transferCategoryCodes);
   const categorySelect = form.querySelector("[data-dds-category-select]");
   const periodField = form.querySelector("[data-dds-payroll-period-field]");
   const periodInput = periodField ? periodField.querySelector('input[name="payroll_period"]') : null;
+  const sourceSelect = form.querySelector('select[name="payment_source"]');
+  const targetField = form.querySelector("[data-dds-transfer-target-field]");
+  const targetSelect = targetField ? targetField.querySelector('select[name="target_cashbox"]') : null;
   const needsPeriod = Boolean(categorySelect && payrollSet.has(categorySelect.value));
+  const isTransfer = Boolean(categorySelect && transferSet.has(categorySelect.value));
   if (periodField) {{
     periodField.classList.toggle("is-hidden", !needsPeriod);
   }}
@@ -10132,6 +10146,24 @@ function syncDdsExpenseForm(form) {{
       periodInput.value = "";
     }}
   }}
+  if (targetField) {{
+    targetField.classList.toggle("is-hidden", !isTransfer);
+  }}
+  if (targetSelect) {{
+    targetSelect.disabled = !isTransfer;
+    const sourceCashbox = sourceSelect && sourceSelect.value.startsWith("cashbox:")
+      ? sourceSelect.value.slice("cashbox:".length)
+      : "";
+    Array.from(targetSelect.options).forEach((option) => {{
+      option.disabled = Boolean(sourceCashbox && option.value === sourceCashbox);
+    }});
+    if (isTransfer && sourceCashbox && targetSelect.value === sourceCashbox) {{
+      const replacement = Array.from(targetSelect.options).find((option) => !option.disabled);
+      if (replacement) {{
+        targetSelect.value = replacement.value;
+      }}
+    }}
+  }}
 }}
 
 function initDdsExpenseForms() {{
@@ -10139,11 +10171,11 @@ function initDdsExpenseForms() {{
 }}
 
 document.addEventListener("change", (event) => {{
-  const categorySelect = event.target.closest("[data-dds-category-select]");
-  if (!categorySelect) {{
+  const ddsControl = event.target.closest("[data-dds-category-select], [data-dds-expense-form='1'] select[name='payment_source']");
+  if (!ddsControl) {{
     return;
   }}
-  syncDdsExpenseForm(categorySelect.closest('[data-dds-expense-form="1"]'));
+  syncDdsExpenseForm(ddsControl.closest('[data-dds-expense-form="1"]'));
 }});
 
 document.addEventListener("change", (event) => {{
@@ -16576,6 +16608,10 @@ def expense_payment_source_label(code: str) -> str:
 
 
 def expense_payment_source_value_for_entry(entry, cashboxes: list[dict]) -> str:
+    if is_cashbox_linked_income_entry(entry):
+        source_code = cashbox_transfer_source_code_from_entry(entry, cashboxes)
+        if source_code:
+            return f"cashbox:{source_code}"
     source = entry.payment_source or "bank"
     if source == "cash":
         cashbox_code = cashbox_code_from_entry(entry, cashboxes)
@@ -16686,7 +16722,25 @@ def cashbox_label_from_directory(cashboxes: list[dict], code: str) -> str:
     return cashbox_label(code)
 
 
+def cashbox_code_from_label(cashboxes: list[dict], label: str) -> str:
+    normalized_label = " ".join((label or "").casefold().split())
+    if not normalized_label:
+        return ""
+    for cashbox in cashboxes:
+        cashbox_label_value = str(cashbox.get("label", "")).strip()
+        if " ".join(cashbox_label_value.casefold().split()) == normalized_label:
+            return str(cashbox.get("code", "")).strip()
+    for marker, code, _label in CASH_RECIPIENT_META:
+        if marker == normalized_label:
+            return code
+    return ""
+
+
 def expense_entry_payment_source_label(entry, cashboxes: list[dict]) -> str:
+    if is_cashbox_linked_income_entry(entry):
+        source_code = cashbox_transfer_source_code_from_entry(entry, cashboxes)
+        if source_code:
+            return cashbox_label_from_directory(cashboxes, source_code)
     if (entry.payment_source or "bank") == "cash":
         cashbox_code = cashbox_code_from_entry(entry, cashboxes)
         return cashbox_label_from_directory(cashboxes, cashbox_code) if cashbox_code else "Касса"
@@ -16704,11 +16758,17 @@ def expense_comment_without_service_markers(comment: str) -> str:
     return " ".join(cleaned.split())
 
 
-def expense_comment_service_markers(comment: str, keep_cashbox: bool = False) -> list[str]:
+def expense_comment_service_markers(comment: str, keep_cashbox: bool = False, keep_transfer_markers: bool = True) -> list[str]:
     markers = []
     for match in EXPENSE_COMMENT_SERVICE_MARKER_RE.finditer(comment or ""):
         marker = match.group(0)
         if not keep_cashbox and marker.casefold().startswith("[касса "):
+            continue
+        if not keep_transfer_markers and (
+            marker.casefold().startswith("[касса получателя:")
+            or marker.casefold().startswith("[связанный расход:")
+            or marker.casefold().startswith("[источник:")
+        ):
             continue
         markers.append(marker)
     return markers
@@ -16736,6 +16796,50 @@ def parse_expense_payment_source_form_value(raw_source: str, cashboxes: list[dic
     if source == "bank":
         return "bank", ""
     raise ValueError("Выберите источник оплаты")
+
+
+def cashbox_transfer_source_id(entry) -> int:
+    linked_match = re.search(r"\[Связанный расход:\s*(\d+)\]", entry.comment or "")
+    return int(linked_match.group(1)) if linked_match else 0
+
+
+def is_cashbox_linked_income_entry(entry) -> bool:
+    source_match = re.search(r"\[Источник:\s*([^\]]+)\]", entry.comment or "")
+    return (
+        entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+        and bool(cashbox_transfer_source_id(entry))
+        and source_match is not None
+        and source_match.group(1).strip().casefold().startswith("касса ")
+    )
+
+
+def cashbox_transfer_source_code_from_entry(entry, cashboxes: list[dict]) -> str:
+    if (entry.payment_source or "bank") == "cash":
+        return cashbox_code_from_entry(entry, cashboxes)
+    source_match = re.search(r"\[Источник:\s*([^\]]+)\]", entry.comment or "")
+    return cashbox_code_from_label(cashboxes, source_match.group(1).strip()) if source_match else ""
+
+
+def cashbox_transfer_target_code_from_entry(entry, cashboxes: list[dict]) -> str:
+    target_match = re.search(r"\[Касса получателя:\s*([^\]]+)\]", entry.comment or "")
+    if target_match:
+        return cashbox_code_from_label(cashboxes, target_match.group(1).strip())
+    if is_cashbox_linked_income_entry(entry):
+        return cashbox_code_from_entry(entry, cashboxes)
+    title_match = re.search(r"→\s*(.+)$", entry.title or "")
+    if title_match:
+        return cashbox_code_from_label(cashboxes, title_match.group(1).strip())
+    return ""
+
+
+def cashbox_transfer_category_code(category_options_list: list[tuple[str, str]], fallback: str = "") -> str:
+    category_labels = dict(category_options_list)
+    if fallback and is_cash_transfer_category(fallback, category_labels):
+        return fallback
+    for code, _label in category_options_list:
+        if is_cash_transfer_category(code, category_labels):
+            return code
+    return fallback
 
 
 def mobile_cash_can_modify_cashbox(cash_access: dict | None, cashbox_code: str) -> bool:
@@ -16789,20 +16893,46 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         code for code, _label in category_options_list
         if code == "salary" or is_labor_force_category(code, category_labels)
     ]
-    show_payroll_period = entry.category_code in payroll_category_codes
+    transfer_category_codes = [
+        code for code, _label in category_options_list
+        if is_cash_transfer_category(code, category_labels)
+    ]
+    transfer_category_code = cashbox_transfer_category_code(category_options_list, entry.category_code)
+    is_transfer_pair_entry = (
+        (entry.operation_type or "") == "transfer"
+        or (entry.title or "").startswith("Перевод между кассами")
+        or is_cash_transfer_category(entry.category_code, category_labels)
+        or is_cashbox_linked_income_entry(entry)
+    )
+    display_category_code = transfer_category_code if is_transfer_pair_entry and transfer_category_code else entry.category_code
+    show_payroll_period = display_category_code in payroll_category_codes
+    transfer_source_code = cashbox_transfer_source_code_from_entry(entry, cashboxes)
+    transfer_target_code = cashbox_transfer_target_code_from_entry(entry, cashboxes)
+    transfer_title = ""
+    if is_transfer_pair_entry and transfer_source_code and transfer_target_code:
+        transfer_title = (
+            f"Перевод между кассами: "
+            f"{cashbox_label_from_directory(cashboxes, transfer_source_code)} → "
+            f"{cashbox_label_from_directory(cashboxes, transfer_target_code)}"
+        )
     project_options = "".join(
         f'<option value="{code}"{" selected" if code == entry.project_code else ""}>{escape(label)}</option>'
         for code, label in project_options_list
     )
     category_options = "".join(
-        f'<option value="{code}"{" selected" if code == entry.category_code else ""}>{escape(label)}</option>'
+        f'<option value="{code}"{" selected" if code == display_category_code else ""}>{escape(label)}</option>'
         for code, label in category_options_list
+    )
+    target_cashbox_options = "".join(
+        f'<option value="{escape(str(cashbox.get("code", "")))}"{" selected" if str(cashbox.get("code", "")) == transfer_target_code else ""}>{escape(str(cashbox.get("label", "")))}</option>'
+        for cashbox in cashboxes
+        if str(cashbox.get("code", "")).strip()
     )
     return f"""
     <details class="status-menu expense-editor-menu">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
       <div class="status-popover expense-editor-popover" data-modal-title="Редактирование операции ДДС">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}">
           <input type="hidden" name="operation_type" value="{escape(entry.operation_type or 'expense')}">
           <div class="field">
             <label>Дата операции</label>
@@ -16820,13 +16950,17 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <label>Источник оплаты</label>
             <select name="payment_source">{expense_payment_source_options(expense_payment_source_value_for_entry(entry, cashboxes), cashboxes)}</select>
           </div>
+          <div class="field transfer-target-field{' is-hidden' if not is_transfer_pair_entry else ''}" data-dds-transfer-target-field>
+            <label>Касса получателя</label>
+            <select name="target_cashbox" {'disabled' if not is_transfer_pair_entry else ''}>{target_cashbox_options}</select>
+          </div>
           <div class="field payroll-period-field{' is-hidden' if not show_payroll_period else ''}" data-dds-payroll-period-field>
             <label>Период ФОТ</label>
             <input type="month" name="payroll_period" value="{escape(entry.payroll_period or '')}" {'disabled' if not show_payroll_period else ''}>
           </div>
           <div class="field span-2">
             <label>Наименование операции</label>
-            <input type="text" name="title" value="{escape(entry.title)}" required>
+            <input type="text" name="title" value="{escape(transfer_title or entry.title)}" required>
           </div>
           <div class="field">
             <label>Сумма, ₽</label>
@@ -21246,9 +21380,23 @@ def render_expenses_section(
         code for code, _label in category_options_list
         if code == "salary" or is_labor_force_category(code, category_labels)
     ]
+    transfer_category_codes = [
+        code for code, _label in category_options_list
+        if is_cash_transfer_category(code, category_labels)
+    ]
     default_cashbox_source = next(
         (f"cashbox:{item['code']}" for item in cashboxes if item.get("code") == "denis"),
         f"cashbox:{cashboxes[0]['code']}" if cashboxes else "cash",
+    )
+    default_source_cashbox_code = default_cashbox_source.split(":", 1)[1] if default_cashbox_source.startswith("cashbox:") else ""
+    default_target_cashbox_code = next(
+        (str(item["code"]) for item in cashboxes if str(item.get("code", "")) != default_source_cashbox_code),
+        "",
+    )
+    transfer_target_options = "".join(
+        f'<option value="{escape(str(item.get("code", "")))}"{" selected" if str(item.get("code", "")) == default_target_cashbox_code else ""}>{escape(str(item.get("label", "")))}</option>'
+        for item in cashboxes
+        if str(item.get("code", "")).strip()
     )
     source_options = "".join(
         f'<option value="{code}"{" selected" if code == source_filter else ""}>{escape(label)}</option>'
@@ -21437,7 +21585,7 @@ def render_expenses_section(
                   <div class="panel-sub">Ручное добавление списания в ДДС: объект, группа, сумма, источник и комментарий.</div>
                 </div>
               </div>
-              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}">
+              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}">
                 <div class="field">
                   <label>Дата операции</label>
                   <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
@@ -21467,6 +21615,10 @@ def render_expenses_section(
                   <select name="payment_source">
                     {expense_payment_source_options(default_cashbox_source, cashboxes)}
                   </select>
+                </div>
+                <div class="field transfer-target-field is-hidden" data-dds-transfer-target-field>
+                  <label>Касса получателя</label>
+                  <select name="target_cashbox" disabled>{transfer_target_options}</select>
                 </div>
                 <div class="field payroll-period-field is-hidden" data-dds-payroll-period-field>
                   <label>Период ФОТ</label>
@@ -28366,13 +28518,72 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите группу расхода")
             if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
                 raise ValueError("Выберите источник оплаты")
+            is_transfer_operation = is_cash_transfer_category(category_code, category_labels)
+            if is_transfer_operation:
+                if payment_source != "cash" or not selected_cashbox_code:
+                    raise ValueError("Для перевода выберите кассу-источник")
+                target_cashbox_code = form.get("target_cashbox", "").strip()
+                cashbox_codes = {str(item.get("code", "")) for item in cashboxes}
+                if target_cashbox_code not in cashbox_codes:
+                    raise ValueError("Выберите кассу получателя")
+                if target_cashbox_code == selected_cashbox_code:
+                    raise ValueError("Касса списания и касса получателя должны отличаться")
             needs_payroll_period = category_code == "salary" or is_labor_force_category(category_code, category_labels)
             payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if needs_payroll_period and payroll_period_raw else ""
-            if not title:
+            if not title and not is_transfer_operation:
                 raise ValueError("Укажите наименование операции")
             selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
             comment = expense_comment_with_cashbox_marker(raw_comment, selected_cashbox_label) if payment_source == "cash" else expense_comment_without_service_markers(raw_comment)
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            if is_transfer_operation:
+                target_cashbox_label = cashbox_label_from_directory(cashboxes, target_cashbox_code)
+                title = f"Перевод между кассами: {selected_cashbox_label} → {target_cashbox_label}"
+                comment = expense_comment_with_cashbox_marker(
+                    raw_comment,
+                    selected_cashbox_label,
+                    [f"[Касса получателя: {target_cashbox_label}]"],
+                )
+                source_entry_id = storage.add_expense_entry(
+                    current_owner,
+                    expense_date,
+                    "admin",
+                    category_code,
+                    title,
+                    amount,
+                    comment,
+                    "cash",
+                    needs_adjustment,
+                    (current_user or {}).get("id"),
+                    actor_name,
+                    operation_type="transfer",
+                )
+                pair_marker = f"[Связанный расход: {source_entry_id}]"
+                target_comment = " ".join(
+                    part
+                    for part in (
+                        f"[{target_cashbox_label}]",
+                        f"[Источник: {selected_cashbox_label}]",
+                        pair_marker,
+                        expense_comment_without_service_markers(raw_comment),
+                    )
+                    if part
+                )
+                storage.add_expense_entry(
+                    current_owner,
+                    expense_date,
+                    "admin",
+                    CASH_WITHDRAWAL_CATEGORY_CODE,
+                    f"Пополнение кассы: {target_cashbox_label}",
+                    amount,
+                    target_comment,
+                    "bank",
+                    False,
+                    (current_user or {}).get("id"),
+                    actor_name,
+                    client_request_key=f"cash-transfer:{source_entry_id}:in",
+                    operation_type="income",
+                )
+                return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_period=payroll_period)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
@@ -28431,11 +28642,125 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите источник оплаты")
             if operation_type not in MONEY_OPERATION_TYPE_META:
                 raise ValueError("Выберите тип операции")
+            is_transfer_operation = is_cash_transfer_category(category_code, category_labels)
+            existing_was_transfer_pair = (
+                (existing_entry.operation_type or "") == "transfer"
+                or (existing_entry.title or "").startswith("Перевод между кассами")
+                or is_cash_transfer_category(existing_entry.category_code, category_labels)
+                or is_cashbox_linked_income_entry(existing_entry)
+            )
+            if is_transfer_operation:
+                if payment_source != "cash" or not selected_cashbox_code:
+                    raise ValueError("Для перевода выберите кассу-источник")
+                target_cashbox_code = form.get("target_cashbox", "").strip()
+                cashbox_codes = {str(item.get("code", "")) for item in cashboxes}
+                if target_cashbox_code not in cashbox_codes:
+                    raise ValueError("Выберите кассу получателя")
+                if target_cashbox_code == selected_cashbox_code:
+                    raise ValueError("Касса списания и касса получателя должны отличаться")
+                source_entry = existing_entry
+                linked_income = None
+                if is_cashbox_linked_income_entry(existing_entry):
+                    source_entry_id = cashbox_transfer_source_id(existing_entry)
+                    source_entry = next((entry for entry in entries if entry.id == source_entry_id), None)
+                    if source_entry is None:
+                        raise ValueError("Связанная операция перевода не найдена")
+                    linked_income = existing_entry
+                pair_marker = f"[Связанный расход: {source_entry.id}]"
+                if linked_income is None:
+                    linked_income = next(
+                        (
+                            entry for entry in entries
+                            if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+                            and pair_marker in (entry.comment or "")
+                            and is_cashbox_linked_income_entry(entry)
+                        ),
+                        None,
+                    )
+                selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code)
+                target_cashbox_label = cashbox_label_from_directory(cashboxes, target_cashbox_code)
+                transfer_title = f"Перевод между кассами: {selected_cashbox_label} → {target_cashbox_label}"
+                source_comment = expense_comment_with_cashbox_marker(
+                    raw_comment,
+                    selected_cashbox_label,
+                    [f"[Касса получателя: {target_cashbox_label}]"],
+                )
+                storage.update_expense_entry(
+                    current_owner,
+                    source_entry.id,
+                    expense_date,
+                    "admin",
+                    category_code,
+                    transfer_title,
+                    amount,
+                    source_comment,
+                    "cash",
+                    needs_adjustment,
+                    payroll_period="",
+                    operation_type="transfer",
+                )
+                target_comment = " ".join(
+                    part
+                    for part in (
+                        f"[{target_cashbox_label}]",
+                        f"[Источник: {selected_cashbox_label}]",
+                        pair_marker,
+                        expense_comment_without_service_markers(raw_comment),
+                    )
+                    if part
+                )
+                if linked_income is not None:
+                    storage.update_expense_entry(
+                        current_owner,
+                        linked_income.id,
+                        expense_date,
+                        "admin",
+                        CASH_WITHDRAWAL_CATEGORY_CODE,
+                        f"Пополнение кассы: {target_cashbox_label}",
+                        amount,
+                        target_comment,
+                        "bank",
+                        False,
+                        payroll_period="",
+                        operation_type="income",
+                    )
+                else:
+                    actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+                    storage.add_expense_entry(
+                        current_owner,
+                        expense_date,
+                        "admin",
+                        CASH_WITHDRAWAL_CATEGORY_CODE,
+                        f"Пополнение кассы: {target_cashbox_label}",
+                        amount,
+                        target_comment,
+                        "bank",
+                        False,
+                        (current_user or {}).get("id"),
+                        actor_name,
+                        client_request_key=f"cash-transfer:{source_entry.id}:in",
+                        operation_type="income",
+                    )
+                return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
+            if is_cashbox_linked_income_entry(existing_entry):
+                raise ValueError("Пополнение пары перевода редактируется через группу «Перевод между кассами»")
+            if existing_was_transfer_pair:
+                pair_marker = f"[Связанный расход: {existing_entry.id}]"
+                linked_income = next(
+                    (
+                        entry for entry in entries
+                        if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+                        and pair_marker in (entry.comment or "")
+                    ),
+                    None,
+                )
+                if linked_income is not None:
+                    storage.delete_expense_entry(current_owner, linked_income.id)
             needs_payroll_period = category_code == "salary" or is_labor_force_category(category_code, category_labels)
             payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if needs_payroll_period and payroll_period_raw else ""
             if not title:
                 raise ValueError("Укажите наименование операции")
-            preserved_markers = expense_comment_service_markers(existing_entry.comment)
+            preserved_markers = expense_comment_service_markers(existing_entry.comment, keep_transfer_markers=not existing_was_transfer_pair)
             selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
             comment = (
                 expense_comment_with_cashbox_marker(raw_comment, selected_cashbox_label, preserved_markers)
