@@ -16687,6 +16687,19 @@ def render_cashoperations_body(
         ) or '<li><span>Сотрудники не указаны</span></li>'
         report_units = sum(float(worker["day_part"]) for worker in workers)
         comment_html = f'<span class="cash-mobile-op-comment">{escape(report.comment)}</span>' if report.comment else ""
+        work_description = (report.work_description or "").strip()
+        files_count = len(report.files)
+        if work_description:
+            work_report_html = f'<div class="cash-work-description">{escape(work_description)}</div>'
+        elif files_count:
+            work_report_html = ""
+        else:
+            work_report_html = '<div class="cash-work-missing">Нужно приложить отчет о работе</div>'
+        files_html = (
+            f'<div class="cash-work-file-row"><a href="/cashoperations/work-report-files/{report.files[0].id}/preview" target="_blank" rel="noopener">Фотоотчет: {files_count}</a></div>'
+            if files_count
+            else ""
+        )
         return f"""
         <article class="cash-mobile-op cash-work-report-card editable" role="button" tabindex="0"
           data-edit-work-report="1"
@@ -16699,6 +16712,8 @@ def render_cashoperations_body(
             <span class="cash-mobile-op-title"><strong>{escape(work_project_label(report))}</strong><span> · {len(workers)} чел.</span></span>
             <ol class="cash-work-worker-list">{worker_rows}</ol>
             {comment_html}
+            {work_report_html}
+            {files_html}
           </div>
           <div class="cash-mobile-op-side">
             <b class="income">{escape(work_units_label(report_units))}</b>
@@ -16723,8 +16738,11 @@ def render_cashoperations_body(
           </div>
         </section>
         <section class="cash-mobile-work-head" data-work-overview>
-          <div class="cash-mobile-actions">
+          <div class="cash-mobile-actions cash-work-primary-actions">
             <button class="cash-mobile-action expense" type="button" data-work-toggle-form>Добавить смену</button>
+            <button class="cash-mobile-action income" type="button" data-work-toggle-description>Добавить отчет</button>
+          </div>
+          <div class="cash-mobile-actions cash-work-secondary-actions">
             <button class="cash-mobile-action" type="button" data-work-toggle-stats>Смотреть статистику</button>
           </div>
         </section>
@@ -16757,11 +16775,32 @@ def render_cashoperations_body(
             <label>Комментарий
               <textarea name="comment" placeholder="Коротко, что делали на объекте"></textarea>
             </label>
-            <button type="submit" data-work-submit{" disabled" if not builder_employees else ""}>Сохранить отчет</button>
+            <button type="submit" data-work-submit{" disabled" if not builder_employees else ""}>Сохранить смену</button>
             <button class="danger" type="button" data-work-cancel>Отменить</button>
             <button class="cash-mobile-danger" type="submit" formaction="/cashoperations/work-report/delete" data-work-delete-report hidden>Удалить смену</button>
           </form>
           {'<div class="cash-mobile-sub" style="margin-top:10px;">В справочнике пока нет активных сотрудников-работяг.</div>' if not builder_employees else ''}
+        </section>
+        <section class="cash-mobile-panel is-hidden" data-work-description-panel>
+          <div class="cash-mobile-section-head"><h2>Добавить отчет</h2></div>
+          <form class="cash-mobile-form" method="post" action="/cashoperations/work-description" enctype="multipart/form-data">
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <label>Дата
+              <input type="date" name="report_date" value="{work_report_date.isoformat()}" required>
+            </label>
+            <label>Объект
+              <select name="project_code" required>{work_project_options}</select>
+            </label>
+            <label>Что сделали
+              <textarea name="work_description" placeholder="Что фактически сделали на объекте за день" required></textarea>
+            </label>
+            <label class="cash-receipt-button">Фото / видео
+              <input type="file" name="work_report_files" accept="image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp,video/mp4,.mp4,video/quicktime,.mov,video/webm,.webm,.m4v" multiple>
+              <span>Добавить фотоотчет</span>
+            </label>
+            <button type="submit">Сохранить отчет</button>
+            <button class="danger" type="button" data-work-description-cancel>Отменить</button>
+          </form>
         </section>
         <section class="cash-mobile-panel{" is-hidden" if not show_work_stats else ""}" data-work-stats-panel>
           <button class="cash-work-back" type="button" data-work-stats-back>Назад к работе</button>
@@ -17406,6 +17445,40 @@ def render_cashoperations_body(
       .cash-work-screen.is-stats-mode [data-work-daily-panel] {{
         display: none;
       }}
+      .cash-work-secondary-actions {{
+        grid-template-columns: 1fr;
+        margin-top: 8px;
+      }}
+      .cash-work-description {{
+        margin-top: 8px;
+        color: var(--ink);
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre-line;
+      }}
+      .cash-work-missing {{
+        margin-top: 8px;
+        color: #9b2f2f;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.35;
+      }}
+      .cash-work-file-row {{
+        margin-top: 8px;
+      }}
+      .cash-work-file-row a {{
+        display: inline-grid;
+        min-height: 32px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 10px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        text-decoration: none;
+      }}
       .cash-work-month-card {{
         touch-action: pan-y;
       }}
@@ -17896,9 +17969,13 @@ def render_cashoperations_body(
         const workWorkers = document.querySelector("[data-work-workers]");
         const workAddWorker = document.querySelector("[data-work-add-worker]");
         const workToggleForm = document.querySelector("[data-work-toggle-form]");
+        const workToggleDescription = document.querySelector("[data-work-toggle-description]");
         const workToggleStats = document.querySelector("[data-work-toggle-stats]");
         const workStatsBack = document.querySelector("[data-work-stats-back]");
         const workFormPanel = document.querySelector("[data-work-form-panel]");
+        const workDescriptionPanel = document.querySelector("[data-work-description-panel]");
+        const workDescriptionForm = document.querySelector(".cash-mobile-form[action='/cashoperations/work-description']");
+        const workDescriptionCancel = document.querySelector("[data-work-description-cancel]");
         const workStatsPanel = document.querySelector("[data-work-stats-panel]");
         const workFormTitle = document.querySelector("[data-work-form-title]");
         const workSubmit = document.querySelector("[data-work-submit]");
@@ -18227,7 +18304,7 @@ def render_cashoperations_body(
             if (row) workWorkers.appendChild(row);
           }}
           if (workFormTitle) workFormTitle.textContent = "Добавить смену";
-          if (workSubmit) workSubmit.textContent = "Сохранить отчет";
+          if (workSubmit) workSubmit.textContent = "Сохранить смену";
           if (workDeleteReport) workDeleteReport.hidden = true;
           formDirty = false;
         }}
@@ -18238,6 +18315,7 @@ def render_cashoperations_body(
           }}
           if (workFormPanel) workFormPanel.classList.remove("is-hidden");
           if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
+          if (workDescriptionPanel) workDescriptionPanel.classList.add("is-hidden");
           showEditbar(true);
           window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
@@ -18248,10 +18326,35 @@ def render_cashoperations_body(
           showEditbar(false);
           show("work");
         }}
+        function resetWorkDescriptionForm() {{
+          if (!workDescriptionForm) return;
+          workDescriptionForm.reset();
+          if (workDescriptionForm.elements.report_date) workDescriptionForm.elements.report_date.value = "{work_report_date.isoformat()}";
+          formDirty = false;
+        }}
+        function openWorkDescriptionForm() {{
+          if (workScreen) {{
+            workScreen.classList.add("is-form-mode");
+            workScreen.classList.remove("is-stats-mode");
+          }}
+          if (workFormPanel) workFormPanel.classList.add("is-hidden");
+          if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
+          if (workDescriptionPanel) workDescriptionPanel.classList.remove("is-hidden");
+          showEditbar(true);
+          window.scrollTo({{ top: 0, behavior: "smooth" }});
+        }}
+        function closeWorkDescriptionForm() {{
+          resetWorkDescriptionForm();
+          if (workScreen) workScreen.classList.remove("is-form-mode");
+          if (workDescriptionPanel) workDescriptionPanel.classList.add("is-hidden");
+          showEditbar(false);
+          show("work");
+        }}
         function closeWorkStats() {{
           if (workScreen) workScreen.classList.remove("is-stats-mode");
           if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
           if (workFormPanel) workFormPanel.classList.add("is-hidden");
+          if (workDescriptionPanel) workDescriptionPanel.classList.add("is-hidden");
           showEditbar(false);
           show("work");
         }}
@@ -18330,21 +18433,30 @@ def render_cashoperations_body(
         }});
         workToggleForm && workToggleForm.addEventListener("click", () => {{
           resetWorkForm();
+          resetWorkDescriptionForm();
           openWorkForm();
+        }});
+        workToggleDescription && workToggleDescription.addEventListener("click", () => {{
+          resetWorkForm();
+          resetWorkDescriptionForm();
+          openWorkDescriptionForm();
         }});
         workToggleStats && workToggleStats.addEventListener("click", () => {{
           resetWorkForm();
+          resetWorkDescriptionForm();
           if (workScreen) {{
             workScreen.classList.remove("is-form-mode");
             workScreen.classList.add("is-stats-mode");
           }}
           if (workFormPanel) workFormPanel.classList.add("is-hidden");
+          if (workDescriptionPanel) workDescriptionPanel.classList.add("is-hidden");
           if (workStatsPanel) workStatsPanel.classList.remove("is-hidden");
           showEditbar(false);
           if (workStatsPanel) workStatsPanel.scrollIntoView({{ behavior: "smooth", block: "start" }});
         }});
         workStatsBack && workStatsBack.addEventListener("click", closeWorkStats);
         workCancel && workCancel.addEventListener("click", closeWorkForm);
+        workDescriptionCancel && workDescriptionCancel.addEventListener("click", closeWorkDescriptionForm);
         if (workMonthCard) {{
           let workSwipeStartX = 0;
           let workSwipeStartY = 0;
@@ -18516,9 +18628,11 @@ def render_cashoperations_body(
           resetExpenseForm();
           resetIncomeForm();
           resetWorkForm();
+          resetWorkDescriptionForm();
           if (workScreen) workScreen.classList.remove("is-form-mode");
           if (workScreen) workScreen.classList.remove("is-stats-mode");
           if (workFormPanel) workFormPanel.classList.add("is-hidden");
+          if (workDescriptionPanel) workDescriptionPanel.classList.add("is-hidden");
           show(editBackScreen || "history");
         }});
         expenseCancel && expenseCancel.addEventListener("click", () => {{
@@ -18625,6 +18739,18 @@ def render_cashoperations_body(
         }});
         incomeForm && incomeForm.addEventListener("change", () => {{
           formDirty = true;
+        }});
+        workDescriptionForm && workDescriptionForm.addEventListener("input", () => {{
+          formDirty = true;
+        }});
+        workDescriptionForm && workDescriptionForm.addEventListener("change", () => {{
+          formDirty = true;
+        }});
+        workDescriptionForm && workDescriptionForm.addEventListener("submit", () => {{
+          isSubmitting = true;
+          workDescriptionForm.querySelectorAll("button").forEach((button) => {{
+            button.disabled = true;
+          }});
         }});
         incomeForm && incomeForm.addEventListener("submit", (event) => {{
           const submitter = event.submitter;
@@ -22285,13 +22411,6 @@ self.addEventListener("notificationclick", (event) => {
                     actor_name,
                 ):
                     raise ValueError("Смена не найдена")
-                storage.update_mobile_work_report_description(
-                    current_owner,
-                    report_id,
-                    form.get("comment", "").strip(),
-                    (current_user or {}).get("id"),
-                    actor_name,
-                )
                 flash = "Смена обновлена."
             else:
                 report_id = storage.add_mobile_work_report(
@@ -22304,19 +22423,79 @@ self.addEventListener("notificationclick", (event) => {
                     (current_user or {}).get("id"),
                     actor_name,
                 )
-                storage.update_mobile_work_report_description(
-                    current_owner,
-                    report_id,
-                    form.get("comment", "").strip(),
-                    (current_user or {}).get("id"),
-                    actor_name,
-                )
                 notify_work_report_created(storage, current_owner, report_id, report_date, project_labels[project_code])
-                flash = "Отчет о работе сохранен."
+                flash = "Смена сохранена."
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
             work_date = form.get("report_date", "").strip()
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={quote_plus(work_date)}&flash={quote_plus(str(exc))}")
+
+    if path == "/cashoperations/work-description" and method == "POST":
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        selected_cashbox = ""
+        report_date_raw = ""
+        try:
+            form, files = read_multipart_form_data(environ)
+            selected_cashbox = form.get("cashbox", "").strip()
+            if not cash_access or not cash_access["enabled"] or not cash_access.get("can_view_work_reports"):
+                raise ValueError("Нет доступа к отчетам о работе")
+            report_date_raw = form.get("report_date", "").strip()
+            report_date = parse_date(report_date_raw) if report_date_raw else None
+            if report_date is None:
+                raise ValueError("Укажите дату отчета")
+            entries = storage.list_expense_entries(current_owner)
+            project_options_list = expense_project_options(storage, current_owner, entries, include_legacy_entries=False)
+            project_labels = dict(project_options_list)
+            project_code = form.get("project_code", "").strip()
+            if project_code not in project_labels:
+                raise ValueError("Выберите объект")
+            uploads = [upload for upload in files.get("work_report_files", []) if upload.filename.strip()]
+            work_description = form.get("work_description", "").strip()
+            if not work_description and not uploads:
+                raise ValueError("Добавьте описание работ или фото/видео")
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            same_day_reports = storage.list_mobile_work_reports(current_owner, report_date)
+            existing_report = next(
+                (
+                    report for report in same_day_reports
+                    if report.project_code == project_code and report.workers
+                ),
+                None,
+            ) or next(
+                (
+                    report for report in same_day_reports
+                    if report.project_code == project_code
+                ),
+                None,
+            )
+            if existing_report is None:
+                report_id = storage.add_mobile_work_report(
+                    current_owner,
+                    report_date,
+                    project_code,
+                    project_labels[project_code],
+                    [],
+                    "",
+                    (current_user or {}).get("id"),
+                    actor_name,
+                    source_kind="work_report_only",
+                    allow_empty_workers=True,
+                )
+            else:
+                report_id = existing_report.id
+            storage.update_mobile_work_report_description(
+                current_owner,
+                report_id,
+                work_description,
+                (current_user or {}).get("id"),
+                actor_name,
+            )
+            if uploads:
+                save_workforce_report_files(storage, current_owner, report_id, uploads, (current_user or {}).get("id"), actor_name)
+            flash = "Отчет о работе сохранен."
+            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
+        except Exception as exc:
+            return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={quote_plus(report_date_raw)}&flash={quote_plus(str(exc))}")
 
     if path == "/cashoperations/work-report/delete" and method == "POST":
         form = read_post_data(environ)
@@ -22333,6 +22512,44 @@ self.addEventListener("notificationclick", (event) => {
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
+
+    if path.startswith("/cashoperations/work-report-files/") and method == "GET":
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        if not cash_access or not cash_access["enabled"] or not cash_access.get("can_view_work_reports"):
+            start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Forbidden"]
+        try:
+            file_id = int(path.split("/")[3])
+            report_file = storage.get_mobile_work_report_file(current_owner, file_id)
+            if report_file is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            absolute_path, safe_filename, content_type = resolve_workforce_report_file(storage, report_file)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            if path.endswith("/preview"):
+                file_url = f"/cashoperations/work-report-files/{report_file.id}/file"
+                download_url = f"/cashoperations/work-report-files/{report_file.id}/download"
+                html = render_legal_file_preview_page(file_url, download_url, safe_filename, content_type)
+                start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+                return [html.encode("utf-8")]
+            if path.endswith("/download"):
+                start_response(
+                    "200 OK",
+                    [
+                        ("Content-Type", content_type),
+                        ("Content-Disposition", attachment_content_disposition(safe_filename)),
+                    ],
+                )
+                return [absolute_path.read_bytes()]
+            if path.endswith("/file"):
+                start_response("200 OK", [("Content-Type", content_type)])
+                return [absolute_path.read_bytes()]
+        except Exception:
+            pass
+        start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"Not found"]
 
     if path == "/cashoperations/reconcile" and method == "POST":
         form = read_post_data(environ)
