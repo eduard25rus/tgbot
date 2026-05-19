@@ -7844,8 +7844,7 @@ def layout(
       position: absolute;
       inset: 0;
       z-index: 0;
-      background: rgba(0, 0, 0, 0.56);
-      backdrop-filter: blur(2px);
+      background: rgba(17, 24, 33, 0.72);
       pointer-events: auto;
     }}
     .floating-popover-layer .is-floating-modal {{
@@ -8109,7 +8108,9 @@ def layout(
       overflow: auto;
       z-index: 1003;
     }}
-    .status-popover.is-floating-modal {{
+    .status-popover.is-floating-modal,
+    .settings-popover.is-floating-modal,
+    .name-popover.is-floating-modal {{
       top: 24px !important;
       left: 50% !important;
       right: auto !important;
@@ -8170,13 +8171,21 @@ def layout(
       color: var(--ink);
       background: #fff;
     }}
-    .status-popover.is-floating-modal .form-grid {{
+    .status-popover.is-floating-modal .form-grid,
+    .settings-popover.is-floating-modal .form-grid,
+    .name-popover.is-floating-modal .form-grid {{
       grid-template-columns: repeat(2, minmax(0, 1fr));
       align-items: start;
     }}
     .status-popover.is-floating-modal .field.span-2,
     .status-popover.is-floating-modal .field.span-4,
-    .status-popover.is-floating-modal .submit-btn {{
+    .status-popover.is-floating-modal .submit-btn,
+    .settings-popover.is-floating-modal .field.span-2,
+    .settings-popover.is-floating-modal .field.span-4,
+    .settings-popover.is-floating-modal .submit-btn,
+    .name-popover.is-floating-modal .field.span-2,
+    .name-popover.is-floating-modal .field.span-4,
+    .name-popover.is-floating-modal .submit-btn {{
       grid-column: 1 / -1;
     }}
     .expense-editor-popover {{
@@ -8680,6 +8689,7 @@ function resetFloatingPopover(popover) {{
     if (source) {{
       source.hidden = false;
       delete source.dataset.floatingSourceId;
+      resetFloatingPopover(source);
     }}
     if (menu) {{
       delete menu.dataset.floatingPopoverId;
@@ -8765,6 +8775,10 @@ function modalPopoverTitle(menu, popover) {{
 }}
 
 function ensureFloatingPopoverHeader(menu, popover) {{
+  const existingHeader = Array.from(popover.children).find((child) => child.classList && child.classList.contains("floating-popover-head"));
+  if (existingHeader) {{
+    return;
+  }}
   const header = document.createElement("div");
   header.className = "floating-popover-head";
   const title = document.createElement("div");
@@ -8786,6 +8800,24 @@ function ensureFloatingPopoverHeader(menu, popover) {{
   popover.prepend(header);
 }}
 
+function applyFloatingModalLayout(menu, popover) {{
+  if (!menu || !popover) {{
+    return popover;
+  }}
+  const modalWidth = Math.min(860, window.innerWidth - 32);
+  menu.classList.add("has-floating-modal");
+  popover.classList.add("is-floating-modal");
+  ensureFloatingPopoverHeader(menu, popover);
+  popover.style.right = "auto";
+  popover.style.bottom = "auto";
+  popover.style.width = `${{modalWidth}}px`;
+  popover.style.minWidth = `${{modalWidth}}px`;
+  popover.style.maxWidth = `${{modalWidth}}px`;
+  popover.style.maxHeight = `${{Math.max(220, window.innerHeight - 48)}}px`;
+  popover.style.visibility = "";
+  return popover;
+}}
+
 function fitStatusMenuPopover(menu) {{
   if (!menu || !menu.open) {{
     return;
@@ -8797,13 +8829,8 @@ function fitStatusMenuPopover(menu) {{
     return;
   }}
   if (popover.dataset.floatingClone === "1") {{
-    const floatingId = popover.dataset.floatingPopoverId || "";
-    const source = floatingId ? document.querySelector(`[data-floating-source-id="${{floatingId}}"]`) : null;
-    resetFloatingPopover(popover);
-    popover = source || statusMenuPopover(menu);
-    if (!popover) {{
-      return;
-    }}
+    applyFloatingModalLayout(menu, popover);
+    return;
   }}
   resetFloatingPopover(popover);
   rememberFloatingPopoverStyles(popover);
@@ -8824,35 +8851,14 @@ function fitStatusMenuPopover(menu) {{
   popover.style.maxHeight = `${{Math.max(180, window.innerHeight - viewportPad * 2)}}px`;
 
   if (popover.classList.contains("directory-employee-popover")) {{
-    const modalWidth = Math.min(860, window.innerWidth - 32);
-    const modalHeight = window.innerHeight - 48;
-    menu.classList.add("has-floating-modal");
     popover = attachFloatingPopover(menu, popover);
-    popover.classList.add("is-floating-modal");
-    ensureFloatingPopoverHeader(menu, popover);
-    popover.style.left = `${{Math.max(16, (window.innerWidth - modalWidth) / 2)}}px`;
-    popover.style.top = "24px";
-    popover.style.right = "auto";
-    popover.style.bottom = "auto";
-    popover.style.width = `${{modalWidth}}px`;
-    popover.style.minWidth = `${{modalWidth}}px`;
-    popover.style.maxWidth = `${{modalWidth}}px`;
-    popover.style.maxHeight = `${{modalHeight}}px`;
-    popover.style.visibility = "";
+    applyFloatingModalLayout(menu, popover);
     return;
   }}
 
   if (shouldUseFloatingModal(popover)) {{
-    const modalWidth = Math.min(860, window.innerWidth - 32);
-    menu.classList.add("has-floating-modal");
     popover = attachFloatingPopover(menu, popover);
-    popover.classList.add("is-floating-modal");
-    ensureFloatingPopoverHeader(menu, popover);
-    popover.style.width = `${{modalWidth}}px`;
-    popover.style.minWidth = `${{modalWidth}}px`;
-    popover.style.maxWidth = `${{modalWidth}}px`;
-    popover.style.maxHeight = `${{Math.max(220, window.innerHeight - 48)}}px`;
-    popover.style.visibility = "";
+    applyFloatingModalLayout(menu, popover);
     return;
   }}
 
