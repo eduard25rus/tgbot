@@ -6335,6 +6335,10 @@ def layout(
       grid-template-columns: repeat(7, minmax(0, 1fr));
       gap: 8px;
     }}
+    .workforce-calendar-panel,
+    .workforce-detail-panel {{
+      scroll-margin-top: 24px;
+    }}
     .workforce-calendar-weekday {{
       padding: 0 4px 4px;
       color: var(--muted);
@@ -14805,7 +14809,7 @@ def render_workforce_section(
     <details class="status-menu">
       <summary><span class="secondary-btn">Показать реестр</span></summary>
       <div class="status-popover align-right" style="min-width:min(520px, 92vw);">
-        <form class="form-grid" method="get" action="/workforce">
+        <form class="form-grid" method="get" action="/workforce#workforce-detail">
           <input type="hidden" name="owner" value="{owner_chat_id}">
           <input type="hidden" name="month" value="{selected_month.strftime('%Y-%m')}">
           <div class="field">
@@ -14845,7 +14849,7 @@ def render_workforce_section(
     for day_number in range(1, days_in_month + 1):
         day_value = date(selected_month.year, selected_month.month, day_number)
         day_stats = daily_stats.get(day_value)
-        day_href = f"/workforce{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, day_value)}"
+        day_href = f"/workforce{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, day_value)}#workforce-detail"
         day_classes = ["workforce-calendar-day"]
         if day_value == today:
             day_classes.append("is-today")
@@ -14940,7 +14944,7 @@ def render_workforce_section(
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     return f"""
     {stats}
-    <section class="card panel" style="margin-top:22px;">
+    <section id="workforce-calendar" class="card panel workforce-calendar-panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Календарь смен</h2>
@@ -14954,13 +14958,13 @@ def render_workforce_section(
       {workforce_calendar_html}
     </section>
     {f'''
-    <section class="card panel" style="margin-top:22px;">
+    <section id="workforce-detail" class="card panel workforce-detail-panel" style="margin-top:22px;">
       <div class="panel-head">
         <div>
           <h2 class="panel-title">{escape(detail_title)}</h2>
           <div class="panel-sub">Детализация смен по выбранному дню, объекту или сотруднику.</div>
         </div>
-        <a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}">К календарю месяца</a>
+        <a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}#workforce-calendar">К календарю месяца</a>
       </div>
       <table class="table contract-table workforce-table">
         <thead>
