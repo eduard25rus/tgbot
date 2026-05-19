@@ -7803,9 +7803,13 @@ def layout(
       position: fixed;
       inset: 0;
       z-index: 900;
-      background: rgba(17, 25, 38, 0.58);
+      background: rgba(0, 0, 0, 0.56);
       backdrop-filter: blur(2px);
       pointer-events: auto;
+    }}
+    .status-menu[open]:has(.is-floating-modal),
+    .status-menu[open]:has(.directory-employee-popover) {{
+      z-index: 1002;
     }}
     .directory-employee-popover {{
       width: min(860px, calc(100vw - 32px));
@@ -8059,7 +8063,7 @@ def layout(
       margin-top: 0;
       max-width: calc(100vw - 24px);
       overflow: auto;
-      z-index: 1000;
+      z-index: 1003;
     }}
     .status-popover.is-floating-modal {{
       top: 24px !important;
@@ -8076,7 +8080,7 @@ def layout(
       padding: 18px;
       background: rgba(255, 255, 255, 0.98);
       box-shadow: 0 26px 72px rgba(17, 25, 38, 0.30);
-      z-index: 1001;
+      z-index: 1004;
     }}
     .floating-popover-head {{
       position: sticky;
