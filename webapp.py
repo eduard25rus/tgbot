@@ -813,6 +813,191 @@ def render_legal_file_preview_page(file_url: str, download_url: str, safe_filena
 </html>"""
 
 
+def render_cash_work_report_files_preview_page(report, owner_chat_id: int) -> str:
+    files = report.files
+    slides_html = "".join(
+        f"""
+        <figure class="cash-work-preview-slide{' active' if index == 0 else ''}" data-cash-work-preview-slide>
+          {'<video src="/cashoperations/work-report-files/%d/file" controls playsinline></video>' % file.id if file.file_kind == 'video' else f'<img src="/cashoperations/work-report-files/{file.id}/file" alt="{escape(file.file_name or "Фотоотчет")}">'}
+          <figcaption>{index + 1} / {len(files)}</figcaption>
+        </figure>
+        """
+        for index, file in enumerate(files)
+    )
+    report_title = f"{format_date(report.report_date)} · {report.project_label or report.project_code}"
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Фотоотчет</title>
+  <style>
+    :root {{
+      --bg: #f4f6f2;
+      --ink: #19201c;
+      --muted: #68736d;
+      --line: #dde4dd;
+      --green: #186844;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    }}
+    .cash-work-preview {{
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
+      gap: 10px;
+    }}
+    .cash-work-preview-head {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }}
+    .cash-work-preview-head strong {{
+      min-width: 0;
+      font-size: 16px;
+      line-height: 1.25;
+    }}
+    .cash-work-preview-close {{
+      flex: 0 0 auto;
+      min-width: 44px;
+      height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+      font: inherit;
+      font-size: 24px;
+      font-weight: 800;
+    }}
+    .cash-work-preview-stage {{
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 10px 28px rgba(27, 34, 28, .08);
+    }}
+    .cash-work-preview-slide {{
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-items: center;
+      margin: 0;
+      padding: 12px;
+    }}
+    .cash-work-preview-slide.active {{
+      display: grid;
+    }}
+    .cash-work-preview-slide img,
+    .cash-work-preview-slide video {{
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      border-radius: 6px;
+    }}
+    .cash-work-preview-slide figcaption {{
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: rgba(255,255,255,.92);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+    }}
+    .cash-work-preview-controls {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }}
+    .cash-work-preview-controls button {{
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+      font-weight: 800;
+    }}
+    .cash-work-preview-controls button:disabled {{
+      opacity: .45;
+    }}
+  </style>
+</head>
+<body>
+  <main class="cash-work-preview">
+    <div class="cash-work-preview-head">
+      <strong>{escape(report_title)}</strong>
+      <button class="cash-work-preview-close" type="button" data-close-preview aria-label="Закрыть">×</button>
+    </div>
+    <section class="cash-work-preview-stage" data-cash-work-preview-stage>
+      {slides_html or '<div style="padding:18px;color:var(--muted);">Файлы не найдены.</div>'}
+    </section>
+    <div class="cash-work-preview-controls">
+      <button type="button" data-cash-work-preview-prev>Назад</button>
+      <button type="button" data-cash-work-preview-next>Вперед</button>
+    </div>
+  </main>
+  <script>
+    (() => {{
+      const slides = Array.from(document.querySelectorAll("[data-cash-work-preview-slide]"));
+      const prev = document.querySelector("[data-cash-work-preview-prev]");
+      const next = document.querySelector("[data-cash-work-preview-next]");
+      const close = document.querySelector("[data-close-preview]");
+      const stage = document.querySelector("[data-cash-work-preview-stage]");
+      let index = 0;
+      function render() {{
+        slides.forEach((slide, slideIndex) => slide.classList.toggle("active", slideIndex === index));
+        if (prev) prev.disabled = slides.length <= 1;
+        if (next) next.disabled = slides.length <= 1;
+      }}
+      function move(delta) {{
+        if (!slides.length) return;
+        index = (index + delta + slides.length) % slides.length;
+        render();
+      }}
+      prev && prev.addEventListener("click", () => move(-1));
+      next && next.addEventListener("click", () => move(1));
+      close && close.addEventListener("click", () => {{
+        if (window.history.length > 1) window.history.back();
+        else window.location.href = "/cashoperations?screen=work";
+      }});
+      let startX = 0;
+      let startY = 0;
+      stage && stage.addEventListener("touchstart", (event) => {{
+        const touch = event.changedTouches && event.changedTouches[0];
+        if (!touch) return;
+        startX = touch.clientX;
+        startY = touch.clientY;
+      }}, {{ passive: true }});
+      stage && stage.addEventListener("touchend", (event) => {{
+        const touch = event.changedTouches && event.changedTouches[0];
+        if (!touch) return;
+        const dx = touch.clientX - startX;
+        const dy = touch.clientY - startY;
+        if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.3) return;
+        move(dx < 0 ? 1 : -1);
+      }}, {{ passive: true }});
+      render();
+    }})();
+  </script>
+</body>
+</html>"""
+
+
 def attachment_content_disposition(filename: str) -> str:
     ascii_fallback = secure_upload_name(filename or "file")
     return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quote(filename or ascii_fallback, safe="")}'
@@ -16690,13 +16875,13 @@ def render_cashoperations_body(
         work_description = (report.work_description or "").strip()
         files_count = len(report.files)
         if work_description:
-            work_report_html = f'<div class="cash-work-description">{escape(work_description)}</div>'
+            work_report_html = f'<button class="cash-work-description" type="button" data-edit-work-description>{escape(work_description)}</button>'
         elif files_count:
             work_report_html = ""
         else:
-            work_report_html = '<div class="cash-work-missing">Нужно приложить отчет о работе</div>'
+            work_report_html = '<button class="cash-work-missing" type="button" data-edit-work-description>Нужно приложить отчет о работе</button>'
         files_html = (
-            f'<div class="cash-work-file-row"><a href="/cashoperations/work-report-files/{report.files[0].id}/preview" target="_blank" rel="noopener">Фотоотчет: {files_count}</a></div>'
+            f'<div class="cash-work-file-row"><a href="/cashoperations/work-reports/{report.id}/preview">Фотоотчет: {files_count}</a></div>'
             if files_count
             else ""
         )
@@ -16707,6 +16892,7 @@ def render_cashoperations_body(
           data-work-report-date="{report.report_date.isoformat()}"
           data-work-report-project="{escape(report.project_code)}"
           data-work-report-comment="{escape(report.comment)}"
+          data-work-report-description="{escape(work_description, quote=True)}"
           data-work-report-workers="{escape(worker_items_json, quote=True)}">
           <div class="cash-mobile-op-main">
             <span class="cash-mobile-op-title"><strong>{escape(work_project_label(report))}</strong><span> · {len(workers)} чел.</span></span>
@@ -17450,18 +17636,32 @@ def render_cashoperations_body(
         margin-top: 8px;
       }}
       .cash-work-description {{
+        display: block;
+        width: 100%;
+        border: 0;
+        padding: 0;
+        background: transparent;
         margin-top: 8px;
         color: var(--ink);
         font-size: 12px;
         line-height: 1.4;
+        font: inherit;
+        text-align: left;
         white-space: pre-line;
       }}
       .cash-work-missing {{
+        display: block;
+        width: 100%;
+        border: 0;
+        padding: 0;
+        background: transparent;
         margin-top: 8px;
         color: #9b2f2f;
         font-size: 12px;
         font-weight: 800;
         line-height: 1.35;
+        font-family: inherit;
+        text-align: left;
       }}
       .cash-work-file-row {{
         margin-top: 8px;
@@ -18350,6 +18550,18 @@ def render_cashoperations_body(
           showEditbar(false);
           show("work");
         }}
+        function editWorkDescription(card) {{
+          if (!workDescriptionForm) return;
+          clearNotice();
+          resetWorkForm();
+          resetWorkDescriptionForm();
+          if (workDescriptionForm.elements.report_date) workDescriptionForm.elements.report_date.value = card.dataset.workReportDate || "{work_report_date.isoformat()}";
+          if (workDescriptionForm.elements.project_code) workDescriptionForm.elements.project_code.value = card.dataset.workReportProject || "";
+          if (workDescriptionForm.elements.work_description) workDescriptionForm.elements.work_description.value = card.dataset.workReportDescription || "";
+          formDirty = false;
+          editBackScreen = "work";
+          openWorkDescriptionForm();
+        }}
         function closeWorkStats() {{
           if (workScreen) workScreen.classList.remove("is-stats-mode");
           if (workStatsPanel) workStatsPanel.classList.add("is-hidden");
@@ -18615,6 +18827,12 @@ def render_cashoperations_body(
         }});
         document.querySelectorAll("[data-edit-work-report]").forEach((card) => {{
           card.addEventListener("click", (event) => {{
+            if (event.target.closest("[data-edit-work-description]")) {{
+              event.preventDefault();
+              event.stopPropagation();
+              editWorkDescription(card);
+              return;
+            }}
             if (event.target.closest("form, button, a, input, select, textarea, label")) return;
             editWorkReport(card);
           }});
@@ -22512,6 +22730,27 @@ self.addEventListener("notificationclick", (event) => {
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&flash={quote_plus(str(exc))}")
+
+    if path.startswith("/cashoperations/work-reports/") and path.endswith("/preview") and method == "GET":
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
+        if not cash_access or not cash_access["enabled"] or not cash_access.get("can_view_work_reports"):
+            start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Forbidden"]
+        try:
+            report_id = int(path.split("/")[3])
+            report = next(
+                (item for item in storage.list_mobile_work_reports(current_owner) if item.id == report_id),
+                None,
+            )
+            if report is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"Report not found"]
+            html = render_cash_work_report_files_preview_page(report, current_owner)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
 
     if path.startswith("/cashoperations/work-report-files/") and method == "GET":
         cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"]))
