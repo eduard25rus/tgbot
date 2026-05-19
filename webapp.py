@@ -966,7 +966,7 @@ def send_cash_push(
     owner_chat_id: int,
     safe_payload: dict,
     amount_payload: dict | None = None,
-    require_letters_access: bool = False,
+    push_group: str = "cash",
 ) -> tuple[int, int]:
     public_key = cash_push_public_key(storage)
     private_key = cash_push_private_key(storage)
@@ -985,7 +985,11 @@ def send_cash_push(
         "sub": os.getenv("CASH_PUSH_VAPID_SUBJECT", os.getenv("VAPID_SUBJECT", "mailto:admin@felisgroup.ru")).strip(),
     }
     for subscription in subscriptions:
-        if require_letters_access and not subscription.get("can_view_letters"):
+        if push_group == "letters" and not (subscription.get("can_receive_letter_push") and subscription.get("can_view_letters")):
+            continue
+        if push_group == "work" and not (subscription.get("can_receive_work_push") and subscription.get("can_view_work_reports")):
+            continue
+        if push_group == "cash" and not subscription.get("can_receive_cash_push"):
             continue
         payload = safe_payload
         if amount_payload and subscription.get("push_detail_mode") == "amount":
@@ -1050,6 +1054,7 @@ def notify_cash_operation_created(
                 "kind": "cash_update",
             },
         },
+        push_group="cash",
     )
 
 
@@ -1096,7 +1101,21 @@ def notify_legal_letter_created(storage: Storage, owner_chat_id: int, direction:
             "kind": "legal_letter",
         },
     }
-    return send_cash_push(storage, owner_chat_id, safe_payload, detailed_payload, require_letters_access=True)
+    return send_cash_push(storage, owner_chat_id, safe_payload, detailed_payload, push_group="letters")
+
+
+def notify_work_report_created(storage: Storage, owner_chat_id: int, report_date: date) -> tuple[int, int]:
+    date_label = f"{report_date.day} {RU_MONTH_GENITIVE_NAMES[report_date.month]}"
+    payload = {
+        "title": f"Закрыта смена за {date_label}",
+        "body": "Откройте приложение для проверки",
+        "tag": f"work-report-{report_date.isoformat()}",
+        "url": f"/cashoperations?screen=work&work_date={report_date.isoformat()}",
+        "data": {
+            "kind": "work_report",
+        },
+    }
+    return send_cash_push(storage, owner_chat_id, payload, payload, push_group="work")
 
 
 def parse_amount(raw: str) -> float:
@@ -19986,6 +20005,14 @@ def render_access_section(
         push_device_count = storage.count_cash_push_subscriptions_for_user(owner_chat_id, user["id"])
         push_detail_mode = user_access.get("push_detail_mode") if user_access.get("push_detail_mode") in {"safe", "amount"} else "safe"
         push_mode_label = "с суммой" if push_detail_mode == "amount" else "без деталей"
+        push_groups = []
+        if user_access.get("can_receive_cash_push"):
+            push_groups.append("касса")
+        if user_access.get("can_receive_letter_push"):
+            push_groups.append("письма")
+        if user_access.get("can_receive_work_push"):
+            push_groups.append("работа")
+        push_groups_label = ", ".join(push_groups) if push_groups else "не выбраны"
         cashbox_checks = "".join(
             f"""
             <label>
@@ -20009,6 +20036,7 @@ def render_access_section(
                     <span class="badge">{escape(user_access["role"])}</span>
                     <span class="badge{" warn" if user_access["can_receive_push"] and push_device_count == 0 else ""}">Пуш-устройств: {push_device_count}</span>
                     <span class="badge">Пуши: {push_mode_label}</span>
+                    <span class="badge">Группы пушей: {escape(push_groups_label)}</span>
                     <span class="badge">Письма: {"да" if user_access.get("can_view_letters") else "нет"}</span>
                     <span class="badge">Работа: {"да" if user_access.get("can_view_work_reports") else "нет"}</span>
                   </div>
@@ -20051,10 +20079,19 @@ def render_access_section(
                       <label><input type="checkbox" name="can_add_expense" value="1" {"checked" if user_access["can_add_expense"] else ""}> Расходы в своей кассе</label>
                       <label><input type="checkbox" name="can_modify_other_cashboxes" value="1" {"checked" if user_access.get("can_modify_other_cashboxes") else ""}> Может менять чужие кассы</label>
                       <label><input type="checkbox" name="can_reconcile" value="1" {"checked" if user_access["can_reconcile"] else ""}> Может сверять кассу</label>
-                      <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Получает пуши</label>
                       <label><input type="checkbox" name="can_view_letters" value="1" {"checked" if user_access.get("can_view_letters") else ""}> Доступны письма</label>
                       <label><input type="checkbox" name="can_view_work_reports" value="1" {"checked" if user_access.get("can_view_work_reports") else ""}> Доступна работа</label>
                     </div>
+                  </div>
+                  <div class="permission-box cash-setting"{cash_settings_hidden}>
+                    <strong>Push-уведомления</strong>
+                    <div class="check-row">
+                      <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Разрешить пуши</label>
+                      <label><input type="checkbox" name="can_receive_cash_push" value="1" {"checked" if user_access.get("can_receive_cash_push") else ""}> Касса</label>
+                      <label><input type="checkbox" name="can_receive_letter_push" value="1" {"checked" if user_access.get("can_receive_letter_push") else ""}> Письма</label>
+                      <label><input type="checkbox" name="can_receive_work_push" value="1" {"checked" if user_access.get("can_receive_work_push") else ""}> Работа</label>
+                    </div>
+                    <div class="field-hint">Сначала включаем пуши в целом, потом выбираем группы событий, которые будут приходить этому пользователю.</div>
                   </div>
                   <div class="field span-2 cash-setting"{cash_settings_hidden}>
                     <label>Режим push-уведомлений</label>
@@ -22198,6 +22235,7 @@ self.addEventListener("notificationclick", (event) => {
                     (current_user or {}).get("id"),
                     actor_name,
                 )
+                notify_work_report_created(storage, current_owner, report_date)
                 flash = "Отчет о работе сохранен."
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
@@ -25034,6 +25072,9 @@ self.addEventListener("notificationclick", (event) => {
                 form.get("can_add_expense") == "1",
                 form.get("can_reconcile") == "1",
                 form.get("can_receive_push") == "1",
+                form.get("can_receive_cash_push") == "1",
+                form.get("can_receive_letter_push") == "1",
+                form.get("can_receive_work_push") == "1",
                 form.get("push_detail_mode", "safe"),
                 form.get("can_view_letters") == "1",
                 form.get("can_modify_other_cashboxes") == "1",

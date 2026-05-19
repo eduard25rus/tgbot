@@ -1192,6 +1192,9 @@ class Storage:
                     can_modify_other_cashboxes INTEGER NOT NULL DEFAULT 0,
                     can_reconcile INTEGER NOT NULL DEFAULT 0,
                     can_receive_push INTEGER NOT NULL DEFAULT 0,
+                    can_receive_cash_push INTEGER NOT NULL DEFAULT 0,
+                    can_receive_letter_push INTEGER NOT NULL DEFAULT 0,
+                    can_receive_work_push INTEGER NOT NULL DEFAULT 0,
                     push_detail_mode TEXT NOT NULL DEFAULT 'safe',
                     can_view_letters INTEGER NOT NULL DEFAULT 0,
                     can_view_work_reports INTEGER NOT NULL DEFAULT 0,
@@ -1256,6 +1259,15 @@ class Storage:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN preview_password_hash TEXT NOT NULL DEFAULT ''")
             if "can_receive_push" not in mobile_cash_access_columns:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_receive_push INTEGER NOT NULL DEFAULT 0")
+            if "can_receive_cash_push" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_receive_cash_push INTEGER NOT NULL DEFAULT 0")
+                conn.execute("UPDATE mobile_cash_access SET can_receive_cash_push = can_receive_push")
+            if "can_receive_letter_push" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_receive_letter_push INTEGER NOT NULL DEFAULT 0")
+                conn.execute("UPDATE mobile_cash_access SET can_receive_letter_push = can_receive_push")
+            if "can_receive_work_push" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_receive_work_push INTEGER NOT NULL DEFAULT 0")
+                conn.execute("UPDATE mobile_cash_access SET can_receive_work_push = can_receive_push")
             if "can_modify_other_cashboxes" not in mobile_cash_access_columns:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN can_modify_other_cashboxes INTEGER NOT NULL DEFAULT 0")
             if "push_detail_mode" not in mobile_cash_access_columns:
@@ -2014,7 +2026,9 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
-                       can_reconcile, can_receive_push, push_detail_mode, can_view_letters,
+                       can_reconcile, can_receive_push, can_receive_cash_push,
+                       can_receive_letter_push, can_receive_work_push,
+                       push_detail_mode, can_view_letters,
                        can_view_work_reports, updated_at
                 FROM mobile_cash_access
                 WHERE owner_chat_id = ? AND user_id IN (
@@ -2041,7 +2055,9 @@ class Storage:
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
                        allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
-                       can_reconcile, can_receive_push, push_detail_mode, can_view_letters,
+                       can_reconcile, can_receive_push, can_receive_cash_push,
+                       can_receive_letter_push, can_receive_work_push,
+                       push_detail_mode, can_view_letters,
                        can_view_work_reports, updated_at
                 FROM mobile_cash_access
                 WHERE user_id = ?
@@ -2065,6 +2081,9 @@ class Storage:
         can_add_expense: bool,
         can_reconcile: bool,
         can_receive_push: bool = False,
+        can_receive_cash_push: bool = False,
+        can_receive_letter_push: bool = False,
+        can_receive_work_push: bool = False,
         push_detail_mode: str = "safe",
         can_view_letters: bool = False,
         can_modify_other_cashboxes: bool = False,
@@ -2103,10 +2122,12 @@ class Storage:
                     user_id, owner_chat_id, enabled, role, default_cashbox_code,
                     allowed_cashbox_codes, preview_login, preview_password_hash,
                     can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
-                    can_reconcile, can_receive_push, push_detail_mode, can_view_letters,
+                    can_reconcile, can_receive_push, can_receive_cash_push,
+                    can_receive_letter_push, can_receive_work_push,
+                    push_detail_mode, can_view_letters,
                     can_view_work_reports, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     owner_chat_id = excluded.owner_chat_id,
                     enabled = excluded.enabled,
@@ -2120,6 +2141,9 @@ class Storage:
                     can_modify_other_cashboxes = excluded.can_modify_other_cashboxes,
                     can_reconcile = excluded.can_reconcile,
                     can_receive_push = excluded.can_receive_push,
+                    can_receive_cash_push = excluded.can_receive_cash_push,
+                    can_receive_letter_push = excluded.can_receive_letter_push,
+                    can_receive_work_push = excluded.can_receive_work_push,
                     push_detail_mode = excluded.push_detail_mode,
                     can_view_letters = excluded.can_view_letters,
                     can_view_work_reports = excluded.can_view_work_reports,
@@ -2139,6 +2163,9 @@ class Storage:
                     1 if can_modify_other_cashboxes else 0,
                     1 if can_reconcile else 0,
                     1 if can_receive_push else 0,
+                    1 if can_receive_cash_push else 0,
+                    1 if can_receive_letter_push else 0,
+                    1 if can_receive_work_push else 0,
                     push_detail_mode,
                     1 if can_view_letters else 0,
                     1 if can_view_work_reports else 0,
@@ -2233,7 +2260,9 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT s.id, s.owner_chat_id, s.user_id, s.endpoint, s.p256dh, s.auth,
-                       s.user_agent, s.created_at, s.updated_at, a.push_detail_mode, a.can_view_letters,
+                       s.user_agent, s.created_at, s.updated_at, a.push_detail_mode,
+                       a.can_receive_cash_push, a.can_receive_letter_push, a.can_receive_work_push,
+                       a.can_view_letters, a.can_view_work_reports,
                        u.full_name, u.email
                 FROM cash_push_subscriptions s
                 JOIN web_users u ON u.id = s.user_id
@@ -2258,7 +2287,11 @@ class Storage:
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "push_detail_mode": row["push_detail_mode"] if "push_detail_mode" in row.keys() else "safe",
+                "can_receive_cash_push": bool(row["can_receive_cash_push"]) if "can_receive_cash_push" in row.keys() else True,
+                "can_receive_letter_push": bool(row["can_receive_letter_push"]) if "can_receive_letter_push" in row.keys() else False,
+                "can_receive_work_push": bool(row["can_receive_work_push"]) if "can_receive_work_push" in row.keys() else False,
                 "can_view_letters": bool(row["can_view_letters"]) if "can_view_letters" in row.keys() else False,
+                "can_view_work_reports": bool(row["can_view_work_reports"]) if "can_view_work_reports" in row.keys() else False,
                 "full_name": row["full_name"],
                 "login": row["email"],
             }
@@ -9006,6 +9039,9 @@ class Storage:
                 "can_modify_other_cashboxes": True,
                 "can_reconcile": True,
                 "can_receive_push": False,
+                "can_receive_cash_push": False,
+                "can_receive_letter_push": False,
+                "can_receive_work_push": False,
                 "push_detail_mode": "safe",
                 "can_view_letters": True,
                 "can_view_work_reports": True,
@@ -9026,6 +9062,9 @@ class Storage:
                 "can_modify_other_cashboxes": False,
                 "can_reconcile": True,
                 "can_receive_push": False,
+                "can_receive_cash_push": False,
+                "can_receive_letter_push": False,
+                "can_receive_work_push": False,
                 "push_detail_mode": "safe",
                 "can_view_letters": False,
                 "can_view_work_reports": True,
@@ -9046,6 +9085,9 @@ class Storage:
                 "can_modify_other_cashboxes": False,
                 "can_reconcile": True,
                 "can_receive_push": False,
+                "can_receive_cash_push": False,
+                "can_receive_letter_push": False,
+                "can_receive_work_push": False,
                 "push_detail_mode": "safe",
                 "can_view_letters": False,
                 "can_view_work_reports": True,
@@ -9065,6 +9107,9 @@ class Storage:
             "can_modify_other_cashboxes": False,
             "can_reconcile": False,
             "can_receive_push": False,
+            "can_receive_cash_push": False,
+            "can_receive_letter_push": False,
+            "can_receive_work_push": False,
             "push_detail_mode": "safe",
             "can_view_letters": False,
             "can_view_work_reports": False,
@@ -9086,6 +9131,9 @@ class Storage:
             "can_modify_other_cashboxes": bool(row["can_modify_other_cashboxes"]) if "can_modify_other_cashboxes" in row.keys() else False,
             "can_reconcile": bool(row["can_reconcile"]),
             "can_receive_push": bool(row["can_receive_push"]) if "can_receive_push" in row.keys() else False,
+            "can_receive_cash_push": bool(row["can_receive_cash_push"]) if "can_receive_cash_push" in row.keys() else bool(row["can_receive_push"]),
+            "can_receive_letter_push": bool(row["can_receive_letter_push"]) if "can_receive_letter_push" in row.keys() else False,
+            "can_receive_work_push": bool(row["can_receive_work_push"]) if "can_receive_work_push" in row.keys() else False,
             "push_detail_mode": row["push_detail_mode"] if "push_detail_mode" in row.keys() and row["push_detail_mode"] in {"safe", "amount"} else "safe",
             "can_view_letters": bool(row["can_view_letters"]) if "can_view_letters" in row.keys() else False,
             "can_view_work_reports": bool(row["can_view_work_reports"]) if "can_view_work_reports" in row.keys() else False,
