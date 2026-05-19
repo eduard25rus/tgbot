@@ -16489,11 +16489,24 @@ def render_cashoperations_body(
     ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
     can_view_letters = bool(cash_access.get("can_view_letters"))
     can_view_work_reports = bool(cash_access.get("can_view_work_reports"))
-    if not has_cashbox_access:
+    if not initial_screen:
+        initial_screen = str(cash_access.get("default_screen") or "home")
+    allowed_screens = set()
+    if has_cashbox_access:
+        allowed_screens.update({"home", "history"})
+        if can_edit:
+            allowed_screens.update({"expense", "income"})
+    if can_view_letters:
+        allowed_screens.add("letters")
+    if can_view_work_reports:
+        allowed_screens.add("work")
+    if initial_screen not in allowed_screens:
         if can_view_work_reports:
             initial_screen = "work"
         elif can_view_letters:
             initial_screen = "letters"
+        elif has_cashbox_access:
+            initial_screen = "home"
         else:
             initial_screen = "none"
     letters_screen_html = ""
@@ -20045,6 +20058,14 @@ def render_access_section(
         cash_enabled = bool(user_access["enabled"])
         cash_settings_hidden = " hidden"
         allowed_codes = set(user_access["allowed_cashbox_codes"])
+        cashbox_default_hidden = cash_settings_hidden if allowed_codes else " hidden"
+        default_screen = user_access.get("default_screen") if user_access.get("default_screen") in {"home", "history", "letters", "work"} else "home"
+        default_screen_labels = {
+            "home": "Касса",
+            "history": "История",
+            "letters": "Письма",
+            "work": "Работа",
+        }
         push_device_count = storage.count_cash_push_subscriptions_for_user(owner_chat_id, user["id"])
         push_detail_mode = user_access.get("push_detail_mode") if user_access.get("push_detail_mode") in {"safe", "amount"} else "safe"
         push_mode_label = "с суммой" if push_detail_mode == "amount" else "без деталей"
@@ -20080,6 +20101,7 @@ def render_access_section(
                     <span class="badge{" warn" if user_access["can_receive_push"] and push_device_count == 0 else ""}">Пуш-устройств: {push_device_count}</span>
                     <span class="badge">Пуши: {push_mode_label}</span>
                     <span class="badge">Группы пушей: {escape(push_groups_label)}</span>
+                    <span class="badge">Старт: {escape(default_screen_labels.get(default_screen, "Касса"))}</span>
                     <span class="badge">Письма: {"да" if user_access.get("can_view_letters") else "нет"}</span>
                     <span class="badge">Работа: {"да" if user_access.get("can_view_work_reports") else "нет"}</span>
                   </div>
@@ -20100,8 +20122,19 @@ def render_access_section(
                     </select>
                   </div>
                   <div class="field cash-setting"{cash_settings_hidden}>
-                    <label>Касса по умолчанию</label>
+                    <label>Раздел по умолчанию</label>
+                    <select name="default_screen">
+                      <option value="home"{" selected" if default_screen == "home" else ""}>Касса</option>
+                      <option value="history"{" selected" if default_screen == "history" else ""}>История</option>
+                      <option value="letters"{" selected" if default_screen == "letters" else ""}>Письма</option>
+                      <option value="work"{" selected" if default_screen == "work" else ""}>Работа</option>
+                    </select>
+                    <div class="field-hint">Что открывать первым после входа в мобильное приложение.</div>
+                  </div>
+                  <div class="field cash-setting"{cashbox_default_hidden}>
+                    <label>Касса по умолчанию для раздела «Касса»</label>
                     <select name="default_cashbox_code">{cashbox_select_options_cache[user_access["user_id"]]}</select>
+                    <div class="field-hint">Это не выдает доступ само по себе. Доступ к кассам задается галочками ниже.</div>
                   </div>
                   <div class="field cash-setting"{cash_settings_hidden}>
                     <label>Резервный логин для входа в кассу</label>
@@ -21651,7 +21684,7 @@ self.addEventListener("notificationclick", (event) => {
     if path == "/cashoperations" and method == "GET":
         selected_cashbox = query.get("cashbox", [""])[0].strip()
         selected_letter_object_filter = query.get("letter_object", [""])[0].strip()
-        initial_screen = query.get("screen", ["home"])[0].strip()
+        initial_screen = query.get("screen", [""])[0].strip()
         work_date_raw = query.get("work_date", [""])[0].strip()
         work_month_raw = query.get("work_month", [""])[0].strip()
         selected_work_month = parse_month_key(work_month_raw)
@@ -25108,6 +25141,7 @@ self.addEventListener("notificationclick", (event) => {
                 form.get("enabled") == "1",
                 form.get("role", "limited"),
                 form.get("default_cashbox_code", ""),
+                form.get("default_screen", "home"),
                 allowed_cashbox_codes,
                 form.get("preview_login", ""),
                 hash_password(form.get("preview_password", "").strip()) if form.get("preview_password", "").strip() else None,

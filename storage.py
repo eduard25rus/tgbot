@@ -1184,6 +1184,7 @@ class Storage:
                     enabled INTEGER NOT NULL DEFAULT 0,
                     role TEXT NOT NULL DEFAULT 'limited',
                     default_cashbox_code TEXT NOT NULL DEFAULT '',
+                    default_screen TEXT NOT NULL DEFAULT 'home',
                     allowed_cashbox_codes TEXT NOT NULL DEFAULT '',
                     preview_login TEXT NOT NULL DEFAULT '',
                     preview_password_hash TEXT NOT NULL DEFAULT '',
@@ -1255,6 +1256,8 @@ class Storage:
             }
             if "preview_login" not in mobile_cash_access_columns:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN preview_login TEXT NOT NULL DEFAULT ''")
+            if "default_screen" not in mobile_cash_access_columns:
+                conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN default_screen TEXT NOT NULL DEFAULT 'home'")
             if "preview_password_hash" not in mobile_cash_access_columns:
                 conn.execute("ALTER TABLE mobile_cash_access ADD COLUMN preview_password_hash TEXT NOT NULL DEFAULT ''")
             if "can_receive_push" not in mobile_cash_access_columns:
@@ -2024,7 +2027,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
-                       allowed_cashbox_codes, preview_login, preview_password_hash,
+                       default_screen, allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
                        can_reconcile, can_receive_push, can_receive_cash_push,
                        can_receive_letter_push, can_receive_work_push,
@@ -2053,7 +2056,7 @@ class Storage:
             row = conn.execute(
                 """
                 SELECT user_id, owner_chat_id, enabled, role, default_cashbox_code,
-                       allowed_cashbox_codes, preview_login, preview_password_hash,
+                       default_screen, allowed_cashbox_codes, preview_login, preview_password_hash,
                        can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
                        can_reconcile, can_receive_push, can_receive_cash_push,
                        can_receive_letter_push, can_receive_work_push,
@@ -2074,6 +2077,7 @@ class Storage:
         enabled: bool,
         role: str,
         default_cashbox_code: str,
+        default_screen: str,
         allowed_cashbox_codes: list[str],
         preview_login: str,
         preview_password_hash: str | None,
@@ -2099,6 +2103,8 @@ class Storage:
         normalized_allowed = [code for code in allowed_cashbox_codes if code in known_codes]
         if role not in {"owner", "manager", "limited"}:
             role = "limited"
+        if default_screen not in {"home", "history", "letters", "work"}:
+            default_screen = "home"
         if push_detail_mode not in {"safe", "amount"}:
             push_detail_mode = "safe"
         cleaned_preview_login = preview_login.strip().lower()
@@ -2117,7 +2123,7 @@ class Storage:
             conn.execute(
                 """
                 INSERT INTO mobile_cash_access (
-                    user_id, owner_chat_id, enabled, role, default_cashbox_code,
+                    user_id, owner_chat_id, enabled, role, default_cashbox_code, default_screen,
                     allowed_cashbox_codes, preview_login, preview_password_hash,
                     can_view_all_cashboxes, can_add_expense, can_modify_other_cashboxes,
                     can_reconcile, can_receive_push, can_receive_cash_push,
@@ -2125,12 +2131,13 @@ class Storage:
                     push_detail_mode, can_view_letters,
                     can_view_work_reports, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     owner_chat_id = excluded.owner_chat_id,
                     enabled = excluded.enabled,
                     role = excluded.role,
                     default_cashbox_code = excluded.default_cashbox_code,
+                    default_screen = excluded.default_screen,
                     allowed_cashbox_codes = excluded.allowed_cashbox_codes,
                     preview_login = excluded.preview_login,
                     preview_password_hash = excluded.preview_password_hash,
@@ -2153,6 +2160,7 @@ class Storage:
                     1 if enabled else 0,
                     role,
                     default_cashbox_code,
+                    default_screen,
                     ",".join(normalized_allowed),
                     cleaned_preview_login,
                     stored_preview_password_hash,
@@ -9029,6 +9037,7 @@ class Storage:
                 "enabled": True,
                 "role": "owner",
                 "default_cashbox_code": "eduard",
+                "default_screen": "home",
                 "allowed_cashbox_codes": ["eduard", "denis", "ikram"],
                 "preview_login": "eduard",
                 "preview_password_hash": "",
@@ -9052,6 +9061,7 @@ class Storage:
                 "enabled": True,
                 "role": "manager",
                 "default_cashbox_code": "denis",
+                "default_screen": "home",
                 "allowed_cashbox_codes": ["denis"],
                 "preview_login": "denis",
                 "preview_password_hash": "",
@@ -9075,6 +9085,7 @@ class Storage:
                 "enabled": True,
                 "role": "limited",
                 "default_cashbox_code": "ikram",
+                "default_screen": "home",
                 "allowed_cashbox_codes": ["ikram"],
                 "preview_login": "ikram",
                 "preview_password_hash": "",
@@ -9097,6 +9108,7 @@ class Storage:
             "enabled": False,
             "role": "limited",
             "default_cashbox_code": "denis",
+            "default_screen": "home",
             "allowed_cashbox_codes": [],
             "preview_login": user.get("login", ""),
             "preview_password_hash": "",
@@ -9121,6 +9133,7 @@ class Storage:
             "enabled": bool(row["enabled"]),
             "role": row["role"],
             "default_cashbox_code": row["default_cashbox_code"],
+            "default_screen": row["default_screen"] if "default_screen" in row.keys() and row["default_screen"] in {"home", "history", "letters", "work"} else "home",
             "allowed_cashbox_codes": self._split_cashbox_codes(row["allowed_cashbox_codes"]),
             "preview_login": row["preview_login"],
             "preview_password_hash": row["preview_password_hash"],
