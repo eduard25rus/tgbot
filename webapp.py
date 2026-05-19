@@ -7565,6 +7565,9 @@ def layout(
     .employee-termination-field.is-hidden {{
       display: none;
     }}
+    .payroll-period-field.is-hidden {{
+      display: none;
+    }}
     .action-row {{
       display: flex;
       gap: 10px;
@@ -10105,6 +10108,44 @@ function initAutoSubmitForms() {{
   }});
 }}
 
+function syncDdsExpenseForm(form) {{
+  if (!form) {{
+    return;
+  }}
+  let payrollCategoryCodes = [];
+  try {{
+    payrollCategoryCodes = JSON.parse(form.dataset.payrollCategoryCodes || "[]");
+  }} catch (error) {{
+    payrollCategoryCodes = [];
+  }}
+  const payrollSet = new Set(payrollCategoryCodes);
+  const categorySelect = form.querySelector("[data-dds-category-select]");
+  const periodField = form.querySelector("[data-dds-payroll-period-field]");
+  const periodInput = periodField ? periodField.querySelector('input[name="payroll_period"]') : null;
+  const needsPeriod = Boolean(categorySelect && payrollSet.has(categorySelect.value));
+  if (periodField) {{
+    periodField.classList.toggle("is-hidden", !needsPeriod);
+  }}
+  if (periodInput) {{
+    periodInput.disabled = !needsPeriod;
+    if (!needsPeriod) {{
+      periodInput.value = "";
+    }}
+  }}
+}}
+
+function initDdsExpenseForms() {{
+  document.querySelectorAll('[data-dds-expense-form="1"]').forEach(syncDdsExpenseForm);
+}}
+
+document.addEventListener("change", (event) => {{
+  const categorySelect = event.target.closest("[data-dds-category-select]");
+  if (!categorySelect) {{
+    return;
+  }}
+  syncDdsExpenseForm(categorySelect.closest('[data-dds-expense-form="1"]'));
+}});
+
 document.addEventListener("change", (event) => {{
   const employeeStatusSelect = event.target.closest('.employee-status-select');
   if (employeeStatusSelect) {{
@@ -10146,6 +10187,7 @@ window.addEventListener("load", () => {{
   initSidebarNavGroups();
   initExpensesDayCarousel();
   initAutoSubmitForms();
+  initDdsExpenseForms();
   document.querySelectorAll('.contract-create-form').forEach((form) => {{
     const stageCountInput = form.querySelector('[data-stage-count-input]');
     buildContractStageFields(form, stageCountInput ? stageCountInput.value : 1);
@@ -16533,10 +16575,28 @@ def expense_payment_source_label(code: str) -> str:
     return EXPENSE_PAYMENT_SOURCE_META.get(code, EXPENSE_PAYMENT_SOURCE_META["bank"])
 
 
-def expense_payment_source_options(selected_source: str = "bank") -> str:
+def expense_payment_source_value_for_entry(entry, cashboxes: list[dict]) -> str:
+    source = entry.payment_source or "bank"
+    if source == "cash":
+        cashbox_code = cashbox_code_from_entry(entry, cashboxes)
+        return f"cashbox:{cashbox_code}" if cashbox_code else "cash"
+    return source
+
+
+def expense_payment_source_options(selected_source: str = "bank", cashboxes: list[dict] | None = None) -> str:
+    source_options: list[tuple[str, str]] = [("bank", "Расчетный счет")]
+    for cashbox in cashboxes or []:
+        code = str(cashbox.get("code", "")).strip()
+        label = str(cashbox.get("label", "")).strip()
+        if code and label:
+            source_options.append((f"cashbox:{code}", label))
+    if not cashboxes:
+        source_options.append(("cash", "Касса"))
+    if selected_source == "cash" and source_options:
+        selected_source = next((code for code, _label in source_options if code.startswith("cashbox:")), "cash")
     return "".join(
         f'<option value="{code}"{" selected" if code == selected_source else ""}>{escape(label)}</option>'
-        for code, label in EXPENSE_PAYMENT_SOURCE_META.items()
+        for code, label in source_options
     )
 
 
@@ -16626,6 +16686,58 @@ def cashbox_label_from_directory(cashboxes: list[dict], code: str) -> str:
     return cashbox_label(code)
 
 
+def expense_entry_payment_source_label(entry, cashboxes: list[dict]) -> str:
+    if (entry.payment_source or "bank") == "cash":
+        cashbox_code = cashbox_code_from_entry(entry, cashboxes)
+        return cashbox_label_from_directory(cashboxes, cashbox_code) if cashbox_code else "Касса"
+    return expense_payment_source_label(entry.payment_source or "bank")
+
+
+EXPENSE_COMMENT_SERVICE_MARKER_RE = re.compile(
+    r"\[(?:Касса [^\]]+|Источник:\s*[^\]]+|Касса получателя:\s*[^\]]+|"
+    r"Связанный расход:\s*\d+|Сотрудник:\s*[^\]]+)\]"
+)
+
+
+def expense_comment_without_service_markers(comment: str) -> str:
+    cleaned = EXPENSE_COMMENT_SERVICE_MARKER_RE.sub(" ", comment or "")
+    return " ".join(cleaned.split())
+
+
+def expense_comment_service_markers(comment: str, keep_cashbox: bool = False) -> list[str]:
+    markers = []
+    for match in EXPENSE_COMMENT_SERVICE_MARKER_RE.finditer(comment or ""):
+        marker = match.group(0)
+        if not keep_cashbox and marker.casefold().startswith("[касса "):
+            continue
+        markers.append(marker)
+    return markers
+
+
+def expense_comment_with_cashbox_marker(comment: str, cashbox_label_value: str, preserved_markers: list[str] | None = None) -> str:
+    markers = [f"[{cashbox_label_value}]"] if cashbox_label_value else []
+    markers.extend(preserved_markers or [])
+    return " ".join(part for part in [*markers, expense_comment_without_service_markers(comment)] if part)
+
+
+def parse_expense_payment_source_form_value(raw_source: str, cashboxes: list[dict], default_cashbox_code: str = "") -> tuple[str, str]:
+    source = (raw_source or "").strip()
+    cashbox_codes = {str(item.get("code", "")).strip() for item in cashboxes}
+    if source.startswith("cashbox:"):
+        cashbox_code = source.split(":", 1)[1].strip()
+        if cashbox_code not in cashbox_codes:
+            raise ValueError("Выберите кассу")
+        return "cash", cashbox_code
+    if source == "cash":
+        fallback_code = default_cashbox_code if default_cashbox_code in cashbox_codes else ""
+        if not fallback_code and cashboxes:
+            fallback_code = str(cashboxes[0].get("code", "")).strip()
+        return "cash", fallback_code
+    if source == "bank":
+        return "bank", ""
+    raise ValueError("Выберите источник оплаты")
+
+
 def mobile_cash_can_modify_cashbox(cash_access: dict | None, cashbox_code: str) -> bool:
     if not cash_access or not cash_access.get("enabled") or not cash_access.get("can_add_expense"):
         return False
@@ -16668,9 +16780,16 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "") -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None) -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return summary_html or f'<div class="timeline-title">{escape(entry.title)}</div>'
+    cashboxes = cashboxes or []
+    category_labels = dict(category_options_list)
+    payroll_category_codes = [
+        code for code, _label in category_options_list
+        if code == "salary" or is_labor_force_category(code, category_labels)
+    ]
+    show_payroll_period = entry.category_code in payroll_category_codes
     project_options = "".join(
         f'<option value="{code}"{" selected" if code == entry.project_code else ""}>{escape(label)}</option>'
         for code, label in project_options_list
@@ -16683,10 +16802,10 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     <details class="status-menu expense-editor-menu">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
       <div class="status-popover expense-editor-popover" data-modal-title="Редактирование операции ДДС">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}">
           <input type="hidden" name="operation_type" value="{escape(entry.operation_type or 'expense')}">
           <div class="field">
-            <label>Дата расхода</label>
+            <label>Дата операции</label>
             <input type="date" name="expense_date" value="{entry.expense_date.isoformat()}" required>
           </div>
           <div class="field">
@@ -16695,18 +16814,18 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
           </div>
           <div class="field">
             <label>Группа</label>
-            <select name="category_code">{category_options}</select>
+            <select name="category_code" data-dds-category-select>{category_options}</select>
           </div>
           <div class="field">
             <label>Источник оплаты</label>
-            <select name="payment_source">{expense_payment_source_options(entry.payment_source or "bank")}</select>
+            <select name="payment_source">{expense_payment_source_options(expense_payment_source_value_for_entry(entry, cashboxes), cashboxes)}</select>
           </div>
-          <div class="field">
+          <div class="field payroll-period-field{' is-hidden' if not show_payroll_period else ''}" data-dds-payroll-period-field>
             <label>Период ФОТ</label>
-            <input type="month" name="payroll_period" value="{escape(entry.payroll_period or '')}">
+            <input type="month" name="payroll_period" value="{escape(entry.payroll_period or '')}" {'disabled' if not show_payroll_period else ''}>
           </div>
           <div class="field span-2">
-            <label>Наименование траты</label>
+            <label>Наименование операции</label>
             <input type="text" name="title" value="{escape(entry.title)}" required>
           </div>
           <div class="field">
@@ -16715,15 +16834,15 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
           </div>
           <div class="field span-2">
             <label>Комментарий</label>
-            <textarea name="comment">{escape(entry.comment)}</textarea>
+            <textarea name="comment">{escape(expense_comment_without_service_markers(entry.comment))}</textarea>
           </div>
           <label class="advance-toggle span-2">
             <input class="toggle-checkbox" type="checkbox" name="needs_adjustment" value="1" {"checked" if entry.needs_adjustment and not clear_adjustment_on_open else ""}> Откорректировать
           </label>
           <button class="submit-btn" type="submit">Сохранить изменения</button>
         </form>
-        <form class="expense-delete-form" method="post" action="{base_path}/{entry.id}/delete?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" onsubmit="return confirm('Удалить расход из ДДС?');">
-          <button class="secondary-btn danger" type="submit">Удалить расход</button>
+        <form class="expense-delete-form" method="post" action="{base_path}/{entry.id}/delete?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" onsubmit="return confirm('Удалить операцию из ДДС?');">
+          <button class="secondary-btn danger" type="submit">Удалить операцию</button>
         </form>
       </div>
     </details>
@@ -20996,6 +21115,7 @@ def render_expenses_section(
     project_labels = dict(project_options_list)
     category_labels = dict(category_options_list)
     project_colors = expense_project_color_map(storage, owner_chat_id)
+    cashboxes = storage.list_cashbox_directory(owner_chat_id)
     if project_filter and project_filter not in project_labels:
         project_filter = ""
     if category_filter and category_filter not in category_labels:
@@ -21004,10 +21124,9 @@ def render_expenses_section(
         adjustment_filter = ""
     if source_filter not in {"", "bank", "cash"}:
         source_filter = ""
-    if cashbox_filter not in {code for code, _label in CASHBOX_OPTIONS}:
+    if cashbox_filter not in {str(item.get("code", "")) for item in cashboxes}:
         cashbox_filter = ""
     query_filter = " ".join(query_filter.split())
-    cashboxes = storage.list_cashbox_directory(owner_chat_id)
     if date_from and date_to and date_from > date_to:
         date_from, date_to = date_to, date_from
     def entry_matches_query(entry) -> bool:
@@ -21123,13 +21242,21 @@ def render_expenses_section(
         f'<option value="{code}"{" selected" if code == category_filter else ""}>{escape(label)}</option>'
         for code, label in category_options_list
     )
+    payroll_category_codes = [
+        code for code, _label in category_options_list
+        if code == "salary" or is_labor_force_category(code, category_labels)
+    ]
+    default_cashbox_source = next(
+        (f"cashbox:{item['code']}" for item in cashboxes if item.get("code") == "denis"),
+        f"cashbox:{cashboxes[0]['code']}" if cashboxes else "cash",
+    )
     source_options = "".join(
         f'<option value="{code}"{" selected" if code == source_filter else ""}>{escape(label)}</option>'
         for code, label in [("", "Все источники"), ("bank", "Расчетный счет"), ("cash", "Касса")]
     )
     cashbox_options = "".join(
         f'<option value="{code}"{" selected" if code == cashbox_filter else ""}>{escape(label)}</option>'
-        for code, label in [("", "Все кассы"), *CASHBOX_OPTIONS]
+        for code, label in [("", "Все кассы"), *[(str(item["code"]), str(item["label"])) for item in cashboxes]]
     )
     filter_project_options = '<option value="">Все объекты</option>' + project_options
     filter_category_options = '<option value="">Все группы</option>' + category_options
@@ -21183,10 +21310,7 @@ def render_expenses_section(
               <td class="nowrap">{format_date(entry.expense_date)}</td>
               <td>
                 <div class="timeline-title">Пополнение кассы: {escape(recipient_label)}</div>
-                <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Вывод денежных средств в кассу"} <span class="dds-source-inline">· Касса</span></div>
-                <div class="dds-meta-row">
-                  <span class="chip">Касса</span>
-                </div>
+                <div class="dds-purpose">{escape(expense_comment_without_service_markers(entry.comment)) if expense_comment_without_service_markers(entry.comment) else "Вывод денежных средств в кассу"} <span class="dds-source-inline">· {escape(recipient_label)}</span></div>
               </td>
               <td class="nowrap"><span class="dds-amount income">+{format_amount(entry.amount)}</span></td>
               <td><span class="contract-table-subtle">{escape(source_label)}</span></td>
@@ -21215,7 +21339,7 @@ def render_expenses_section(
         def status_editor(entry) -> str:
             status_html = f'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'
             if has_permission(current_user, "expenses", "edit"):
-                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry.needs_adjustment, extra_filter_query)
+                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry.needs_adjustment, extra_filter_query, cashboxes)
             return status_html
         def row_is_income_display(entry) -> bool:
             return (entry.operation_type or "expense") == "income" or (cash_withdrawal_as_income and is_cash_income_display(entry))
@@ -21231,7 +21355,7 @@ def render_expenses_section(
                   <td class="nowrap">{format_date(entry.expense_date)}</td>
                   <td>
                     <div class="timeline-title">{escape(entry.title)}</div>
-                    <div class="dds-purpose">{escape(entry.comment) if entry.comment else "Назначение не указано"} <span class="dds-source-inline">· {escape(expense_payment_source_label(entry.payment_source))}</span></div>
+                    <div class="dds-purpose">{escape(expense_comment_without_service_markers(entry.comment)) if expense_comment_without_service_markers(entry.comment) else "Назначение не указано"} <span class="dds-source-inline">· {escape(expense_entry_payment_source_label(entry, cashboxes))}</span></div>
                     <div class="dds-meta-row">
                       {project_chip(entry)}
                       <span class="chip">{escape(expense_category_label(entry.category_code, category_labels))}</span>
@@ -21313,9 +21437,9 @@ def render_expenses_section(
                   <div class="panel-sub">Ручное добавление списания в ДДС: объект, группа, сумма, источник и комментарий.</div>
                 </div>
               </div>
-              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}">
+              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}">
                 <div class="field">
-                  <label>Дата расхода</label>
+                  <label>Дата операции</label>
                   <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
                 </div>
                 <div class="field">
@@ -21326,12 +21450,12 @@ def render_expenses_section(
                 </div>
                 <div class="field">
                   <label>Группа расхода</label>
-                  <select name="category_code" required>
+                  <select name="category_code" required data-dds-category-select>
                     {category_options}
                   </select>
                 </div>
                 <div class="field span-2">
-                  <label>Наименование траты</label>
+                  <label>Наименование операции</label>
                   <input type="text" name="title" placeholder="Например, закупка кабеля / аренда манипулятора / канцелярия" required>
                 </div>
                 <div class="field">
@@ -21341,12 +21465,12 @@ def render_expenses_section(
                 <div class="field">
                   <label>Источник оплаты</label>
                   <select name="payment_source">
-                    {expense_payment_source_options("cash")}
+                    {expense_payment_source_options(default_cashbox_source, cashboxes)}
                   </select>
                 </div>
-                <div class="field">
+                <div class="field payroll-period-field is-hidden" data-dds-payroll-period-field>
                   <label>Период ФОТ</label>
-                  <input type="month" name="payroll_period">
+                  <input type="month" name="payroll_period" disabled>
                 </div>
                 <div class="field span-2">
                   <label>Комментарий</label>
@@ -28218,29 +28342,36 @@ self.addEventListener("notificationclick", (event) => {
         extra_query = expenses_extra_query_from_filters(extra_filters)
         form = read_post_data(environ)
         try:
+            cashboxes = storage.list_cashbox_directory(current_owner)
             expense_date_raw = form.get("expense_date", "").strip()
             project_code = form.get("project_code", "").strip()
             category_code = form.get("category_code", "").strip()
             title = form.get("title", "").strip()
             amount = parse_amount(form.get("amount", "").strip())
-            comment = form.get("comment", "").strip()
-            payment_source = form.get("payment_source", "cash").strip() or "cash"
+            raw_comment = form.get("comment", "").strip()
+            payment_source, selected_cashbox_code = parse_expense_payment_source_form_value(form.get("payment_source", "cash"), cashboxes, "denis")
             payroll_period_raw = form.get("payroll_period", "").strip()
-            payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if payroll_period_raw else ""
             needs_adjustment = form.get("needs_adjustment", "").strip() == "1"
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
-                raise ValueError("Укажите дату расхода")
-            project_codes = {code for code, _label in expense_project_options(storage, current_owner, storage.list_expense_entries(current_owner))}
-            category_codes = {code for code, _label in expense_category_options(storage, current_owner, storage.list_expense_entries(current_owner))}
+                raise ValueError("Укажите дату операции")
+            entries = storage.list_expense_entries(current_owner)
+            project_codes = {code for code, _label in expense_project_options(storage, current_owner, entries)}
+            category_options_list = expense_category_options(storage, current_owner, entries)
+            category_labels = dict(category_options_list)
+            category_codes = {code for code, _label in category_options_list}
             if project_code not in project_codes:
                 raise ValueError("Выберите объект")
             if category_code not in category_codes:
                 raise ValueError("Выберите группу расхода")
             if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
                 raise ValueError("Выберите источник оплаты")
+            needs_payroll_period = category_code == "salary" or is_labor_force_category(category_code, category_labels)
+            payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if needs_payroll_period and payroll_period_raw else ""
             if not title:
-                raise ValueError("Укажите наименование траты")
+                raise ValueError("Укажите наименование операции")
+            selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
+            comment = expense_comment_with_cashbox_marker(raw_comment, selected_cashbox_label) if payment_source == "cash" else expense_comment_without_service_markers(raw_comment)
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_period=payroll_period)
         except ValueError as exc:
@@ -28269,22 +28400,29 @@ self.addEventListener("notificationclick", (event) => {
         extra_query = expenses_extra_query_from_filters(extra_filters)
         form = read_post_data(environ)
         try:
+            entries = storage.list_expense_entries(current_owner)
+            existing_entry = next((entry for entry in entries if entry.id == entry_id), None)
+            if existing_entry is None:
+                raise ValueError("Операция ДДС не найдена")
+            cashboxes = storage.list_cashbox_directory(current_owner)
+            existing_cashbox_code = cashbox_code_from_entry(existing_entry, cashboxes)
             expense_date_raw = form.get("expense_date", "").strip()
             project_code = form.get("project_code", "").strip()
             category_code = form.get("category_code", "").strip()
             title = form.get("title", "").strip()
             amount = parse_amount(form.get("amount", "").strip())
-            comment = form.get("comment", "").strip()
-            payment_source = form.get("payment_source", "bank").strip() or "bank"
+            raw_comment = form.get("comment", "").strip()
+            payment_source, selected_cashbox_code = parse_expense_payment_source_form_value(form.get("payment_source", "bank"), cashboxes, existing_cashbox_code)
             operation_type = form.get("operation_type", "expense").strip() or "expense"
             payroll_period_raw = form.get("payroll_period", "").strip()
-            payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if payroll_period_raw else ""
             needs_adjustment = form.get("needs_adjustment", "").strip() == "1"
             expense_date = parse_date(expense_date_raw) if expense_date_raw else None
             if expense_date is None:
-                raise ValueError("Укажите дату расхода")
-            project_codes = {code for code, _label in expense_project_options(storage, current_owner, storage.list_expense_entries(current_owner))}
-            category_codes = {code for code, _label in expense_category_options(storage, current_owner, storage.list_expense_entries(current_owner))}
+                raise ValueError("Укажите дату операции")
+            project_codes = {code for code, _label in expense_project_options(storage, current_owner, entries)}
+            category_options_list = expense_category_options(storage, current_owner, entries)
+            category_labels = dict(category_options_list)
+            category_codes = {code for code, _label in category_options_list}
             if project_code not in project_codes:
                 raise ValueError("Выберите объект")
             if category_code not in category_codes:
@@ -28293,8 +28431,17 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите источник оплаты")
             if operation_type not in MONEY_OPERATION_TYPE_META:
                 raise ValueError("Выберите тип операции")
+            needs_payroll_period = category_code == "salary" or is_labor_force_category(category_code, category_labels)
+            payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if needs_payroll_period and payroll_period_raw else ""
             if not title:
-                raise ValueError("Укажите наименование траты")
+                raise ValueError("Укажите наименование операции")
+            preserved_markers = expense_comment_service_markers(existing_entry.comment)
+            selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
+            comment = (
+                expense_comment_with_cashbox_marker(raw_comment, selected_cashbox_label, preserved_markers)
+                if payment_source == "cash"
+                else " ".join(part for part in [*preserved_markers, expense_comment_without_service_markers(raw_comment)] if part)
+            )
             storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, payroll_period=payroll_period, operation_type=operation_type)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
@@ -28348,7 +28495,7 @@ self.addEventListener("notificationclick", (event) => {
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
         extra_filters = expenses_filter_args_from_query(query)
         extra_query = expenses_extra_query_from_filters(extra_filters)
-        flash = "Расход удален." if storage.delete_expense_entry(current_owner, entry_id) else "Расход не найден."
+        flash = "Операция удалена." if storage.delete_expense_entry(current_owner, entry_id) else "Операция не найдена."
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}&flash={quote_plus(flash)}")
 
     if path == "/payables":
