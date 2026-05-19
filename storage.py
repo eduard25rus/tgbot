@@ -6439,6 +6439,19 @@ class Storage:
                 ).fetchone()
                 if existing_file is not None:
                     continue
+                deleted_file = conn.execute(
+                    """
+                    SELECT id
+                    FROM mobile_work_report_events
+                    WHERE report_id = ?
+                      AND event_type = 'file_deleted'
+                      AND details LIKE ?
+                    LIMIT 1
+                    """,
+                    (report_id, f"construction_report_photo:{source_photo_ref}:%"),
+                ).fetchone()
+                if deleted_file is not None:
+                    continue
                 conn.execute(
                     """
                     INSERT INTO mobile_work_report_files (
@@ -6578,6 +6591,37 @@ class Storage:
             )
             self._add_mobile_work_report_event(conn, report_id, "file_added", actor_user_id, actor_name, file_name)
             return int(cursor.lastrowid)
+
+    def delete_mobile_work_report_file(
+        self,
+        owner_chat_id: int,
+        file_id: int,
+        actor_user_id: int | None,
+        actor_name: str,
+    ) -> int | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT f.id, f.report_id, f.file_name, f.source_kind, f.source_ref
+                FROM mobile_work_report_files f
+                JOIN mobile_work_reports r ON r.id = f.report_id
+                WHERE f.id = ? AND r.owner_chat_id = ? AND r.deleted_at IS NULL
+                """,
+                (file_id, owner_chat_id),
+            ).fetchone()
+            if row is None:
+                return None
+            report_id = int(row["report_id"])
+            conn.execute("DELETE FROM mobile_work_report_files WHERE id = ?", (file_id,))
+            self._add_mobile_work_report_event(
+                conn,
+                report_id,
+                "file_deleted",
+                actor_user_id,
+                actor_name,
+                f"{row['source_kind'] or ''}:{row['source_ref'] or ''}:{row['file_name'] or 'Файл отчета'}",
+            )
+            return report_id
 
     def delete_mobile_work_report(self, owner_chat_id: int, report_id: int) -> date | None:
         with self.connection() as conn:

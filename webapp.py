@@ -6336,6 +6336,10 @@ def layout(
     .workforce-table td:not(:nth-child(2)) {{
       text-align: center;
     }}
+    .workforce-main-row.has-report-detail td {{
+      border-bottom: 0;
+      padding-bottom: 8px;
+    }}
     .workforce-worker-list {{
       margin: 6px 0 0;
       padding-left: 18px;
@@ -6398,22 +6402,32 @@ def layout(
       display: grid;
       gap: 4px;
       justify-items: end;
+      align-self: center;
     }}
-    .workforce-report-events {{
+    .workforce-report-meta {{
       color: var(--muted);
       font-size: 12px;
       text-align: right;
     }}
-    .workforce-report-events summary {{
-      cursor: pointer;
-      text-decoration: underline;
-      text-decoration-style: dashed;
-      text-underline-offset: 3px;
+    .workforce-report-label {{
+      color: var(--muted);
+      font-weight: 800;
     }}
-    .workforce-report-events ul {{
-      margin: 6px 0 0;
-      padding-left: 16px;
-      text-align: left;
+    .workforce-existing-files {{
+      grid-column: 1 / -1;
+      display: grid;
+      gap: 8px;
+      margin-top: 2px;
+    }}
+    .workforce-existing-file {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 0;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
     }}
     .workforce-summary-grid {{
       display: grid;
@@ -8230,8 +8244,13 @@ def layout(
       .workforce-report-detail {{
         grid-template-columns: 1fr;
       }}
+      .workforce-existing-file {{
+        grid-template-columns: 1fr;
+      }}
       .workforce-report-actions {{
         justify-items: start;
+        align-self: start;
+        text-align: left;
       }}
       .contract-money {{
         text-align: left;
@@ -15016,6 +15035,25 @@ def render_workforce_work_report_form(
     selected_day: date | None = None,
 ) -> str:
     action = f"/workforce/reports/{report.id}/description{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)}"
+    file_rows = "".join(
+        f"""
+        <div class="workforce-existing-file">
+          <span>{escape(file.file_name or ("Видео" if file.file_kind == "video" else "Фото"))}</span>
+          <a class="secondary-btn mini" href="/workforce/report-files/{file.id}/preview?owner={owner_chat_id}" target="_blank" rel="noopener">Смотреть</a>
+          <a class="secondary-btn mini" href="/workforce/report-files/{file.id}/download?owner={owner_chat_id}">Скачать</a>
+          <form method="post" action="/workforce/report-files/{file.id}/delete{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)}" onsubmit="return confirm('Убрать файл из отчета?');">
+            <button class="secondary-btn danger mini" type="submit">Удалить</button>
+          </form>
+        </div>
+        """
+        for file in report.files
+    )
+    existing_files_html = f"""
+      <div class="workforce-existing-files">
+        <div class="contract-table-subtle">Уже загружено</div>
+        {file_rows}
+      </div>
+    """ if file_rows else ""
     return f"""
     <form class="form-grid" method="post" action="{action}" enctype="multipart/form-data">
       <div class="field span-2">
@@ -15028,6 +15066,7 @@ def render_workforce_work_report_form(
       </div>
       <button class="submit-btn" type="submit">Сохранить отчет</button>
     </form>
+    {existing_files_html}
     """
 
 
@@ -15357,16 +15396,33 @@ def render_workforce_section(
             description_status = '<div class="workforce-report-missing danger">Загрузите отчет о работе смены!</div>'
             files_status = ""
         events = storage.list_mobile_work_report_events(owner_chat_id, report.id)
-        event_rows = "".join(
-            f'<li>{escape(event["actor_name"] or "Автор неизвестен")} · {escape(event["details"] or event["event_type"])} · {format_datetime(event["created_at"])}</li>'
-            for event in events[:5]
+        report_added_event = next(
+            (
+                event for event in reversed(events)
+                if event["event_type"] in {"description_updated", "file_added", "construction_imported"}
+            ),
+            None,
         )
-        event_log = f"""
-        <details class="workforce-report-events">
-          <summary>Технический лог</summary>
-          <ul>{event_rows or '<li>Событий пока нет.</li>'}</ul>
-        </details>
-        """
+        if missing_full_report:
+            report_added_html = '<div class="workforce-report-meta"><strong>Добавил:</strong><br>пока не добавлен</div>'
+        else:
+            report_added_name = (
+                (report_added_event or {}).get("actor_name")
+                or report.created_by_name
+                or "Автор неизвестен"
+            )
+            report_added_at = (
+                (report_added_event or {}).get("created_at")
+                or report.updated_at
+                or report.created_at
+            )
+            report_added_html = f"""
+            <div class="workforce-report-meta">
+              <strong>Добавил:</strong><br>
+              {escape(report_added_name)}<br>
+              {format_datetime(report_added_at)}
+            </div>
+            """
         edit_control = ""
         report_control = ""
         if has_permission(current_user, "workforce", "edit"):
@@ -15391,7 +15447,7 @@ def render_workforce_section(
             """
         report_rows.append(
             f"""
-            <tr>
+            <tr class="workforce-main-row has-report-detail">
               <td class="nowrap">{index}</td>
               <td>
                 <div class="timeline-title">{escape(workforce_report_project_label(report))}</div>
@@ -15409,7 +15465,7 @@ def render_workforce_section(
               <td colspan="6">
                 <div class="workforce-report-detail">
                   <div>
-                    <div class="contract-table-subtle">Выполненные работы</div>
+                    <div class="workforce-report-label">Выполненные работы:</div>
                     {description_status}
                   </div>
                   <div>
@@ -15417,8 +15473,8 @@ def render_workforce_section(
                     {files_status}
                   </div>
                   <div class="workforce-report-actions">
+                    {report_added_html}
                     {report_control}
-                    {event_log}
                   </div>
                 </div>
               </td>
@@ -26532,6 +26588,31 @@ self.addEventListener("notificationclick", (event) => {
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
+
+    if path.startswith("/workforce/report-files/") and path.endswith("/delete") and method == "POST":
+        denied = guard("workforce", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        selected_month = parse_month_key(query.get("month", [""])[0]) or datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+        project_filter = query.get("project", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        try:
+            selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        except ValueError:
+            selected_day = None
+        try:
+            employee_filter = int(query.get("employee", ["0"])[0] or "0")
+        except ValueError:
+            employee_filter = 0
+        try:
+            file_id = int(path.split("/")[3])
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            if storage.delete_mobile_work_report_file(current_owner, file_id, (current_user or {}).get("id"), actor_name) is None:
+                raise ValueError("Файл отчета не найден")
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&ok=1&flash={quote_plus('Файл убран из отчета.')}")
+        except Exception as exc:
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&flash={quote_plus(f'Не удалось убрать файл: {exc}')}")
 
     if path.startswith("/workforce/report-files/") and path.endswith("/download") and method == "GET":
         denied = guard("workforce", "view")
