@@ -7447,6 +7447,8 @@ def layout(
     .directory-edit-form .submit-btn {{
       font-weight: 500;
     }}
+    html.has-fixed-popover,
+    body.has-fixed-popover,
     html.has-directory-employee-popover,
     body.has-directory-employee-popover {{
       overflow: hidden;
@@ -7705,6 +7707,29 @@ def layout(
       max-width: calc(100vw - 24px);
       overflow: auto;
       z-index: 1000;
+    }}
+    .status-popover.is-floating-modal {{
+      top: 24px !important;
+      left: 50% !important;
+      right: auto !important;
+      bottom: auto !important;
+      width: min(860px, calc(100vw - 32px));
+      min-width: min(860px, calc(100vw - 32px)) !important;
+      max-width: calc(100vw - 32px) !important;
+      max-height: calc(100vh - 48px) !important;
+      transform: translateX(-50%);
+      overscroll-behavior: contain;
+      align-content: start;
+      padding: 18px;
+    }}
+    .status-popover.is-floating-modal .form-grid {{
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: start;
+    }}
+    .status-popover.is-floating-modal .field.span-2,
+    .status-popover.is-floating-modal .field.span-4,
+    .status-popover.is-floating-modal .submit-btn {{
+      grid-column: 1 / -1;
     }}
     .expense-editor-popover {{
       left: 0;
@@ -8036,6 +8061,9 @@ def layout(
         padding: 8px;
         border-radius: 12px;
       }}
+      .status-popover.is-floating-modal .form-grid {{
+        grid-template-columns: 1fr;
+      }}
       .workforce-calendar-projects {{
         display: none;
       }}
@@ -8151,7 +8179,7 @@ document.addEventListener("click", (event) => {{
 }});
 
 const floatingPopoverSelector = ".status-popover, .settings-popover, .name-popover";
-const floatingPopoverStyleProps = ["top", "left", "right", "bottom", "maxHeight", "maxWidth", "minWidth", "visibility"];
+const floatingPopoverStyleProps = ["top", "left", "right", "bottom", "width", "maxHeight", "maxWidth", "minWidth", "visibility", "transform"];
 
 function rememberFloatingPopoverStyles(popover) {{
   if (popover.dataset.floatingOriginalStyles) {{
@@ -8169,7 +8197,7 @@ function resetFloatingPopover(popover) {{
     return;
   }}
   const originalStyles = popover.dataset.floatingOriginalStyles ? JSON.parse(popover.dataset.floatingOriginalStyles) : null;
-  popover.classList.remove("is-viewport-fitted");
+  popover.classList.remove("is-viewport-fitted", "is-floating-modal");
   floatingPopoverStyleProps.forEach((prop) => {{
     popover.style[prop] = originalStyles ? originalStyles[prop] || "" : "";
   }});
@@ -8178,6 +8206,18 @@ function resetFloatingPopover(popover) {{
 
 function statusMenuPopover(menu) {{
   return menu ? menu.querySelector(floatingPopoverSelector) : null;
+}}
+
+function shouldUseFloatingModal(popover) {{
+  if (!popover || popover.classList.contains("compact")) {{
+    return false;
+  }}
+  const rect = popover.getBoundingClientRect();
+  return (
+    rect.width >= Math.min(520, window.innerWidth - 24) ||
+    rect.height >= window.innerHeight * 0.58 ||
+    Boolean(popover.querySelector(".workforce-worker-picker, .expense-editor-popover, .directory-employee-form, textarea, input[type='file']"))
+  );
 }}
 
 function fitStatusMenuPopover(menu) {{
@@ -8222,6 +8262,17 @@ function fitStatusMenuPopover(menu) {{
     return;
   }}
 
+  if (shouldUseFloatingModal(popover)) {{
+    const modalWidth = Math.min(860, window.innerWidth - 32);
+    popover.classList.add("is-floating-modal");
+    popover.style.width = `${{modalWidth}}px`;
+    popover.style.minWidth = `${{modalWidth}}px`;
+    popover.style.maxWidth = `${{modalWidth}}px`;
+    popover.style.maxHeight = `${{Math.max(220, window.innerHeight - 48)}}px`;
+    popover.style.visibility = "";
+    return;
+  }}
+
   const popoverRect = popover.getBoundingClientRect();
   const popoverWidth = Math.min(popoverRect.width, availableWidth);
   const popoverHeight = Math.min(popoverRect.height, window.innerHeight - viewportPad * 2);
@@ -8250,7 +8301,10 @@ function fitOpenStatusPopovers() {{
   document.querySelectorAll(".status-menu[open]").forEach((menu) => fitStatusMenuPopover(menu));
 }}
 
-function updateDirectoryEmployeePopoverLock() {{
+function updateFixedPopoverLock() {{
+  const hasOpenFixedPopover = Boolean(document.querySelector(".status-menu[open] .is-floating-modal, .status-menu[open] .directory-employee-popover"));
+  document.documentElement.classList.toggle("has-fixed-popover", hasOpenFixedPopover);
+  document.body.classList.toggle("has-fixed-popover", hasOpenFixedPopover);
   const hasOpenEmployeePopover = Boolean(document.querySelector(".status-menu[open] .directory-employee-popover"));
   document.documentElement.classList.toggle("has-directory-employee-popover", hasOpenEmployeePopover);
   document.body.classList.toggle("has-directory-employee-popover", hasOpenEmployeePopover);
@@ -8264,12 +8318,12 @@ document.addEventListener("toggle", (event) => {{
   const popover = statusMenuPopover(menu);
   if (!menu.open) {{
     resetFloatingPopover(popover);
-    updateDirectoryEmployeePopoverLock();
+    updateFixedPopoverLock();
     return;
   }}
   window.requestAnimationFrame(() => {{
     fitStatusMenuPopover(menu);
-    updateDirectoryEmployeePopoverLock();
+    updateFixedPopoverLock();
   }});
 }}, true);
 
