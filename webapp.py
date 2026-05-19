@@ -7821,17 +7821,14 @@ def layout(
       font-weight: 500;
     }}
     html.has-fixed-popover,
-    body.has-fixed-popover,
+    body.has-fixed-popover {{
+      overflow: hidden;
+      overscroll-behavior: none;
+    }}
     html.has-directory-employee-popover,
     body.has-directory-employee-popover {{
       overflow: hidden;
       height: 100%;
-    }}
-    body.has-fixed-popover {{
-      position: fixed;
-      left: 0;
-      right: 0;
-      width: 100%;
     }}
     .floating-popover-layer {{
       position: fixed;
@@ -8910,7 +8907,6 @@ function lockFixedPopoverScroll() {{
     return;
   }}
   fixedPopoverScrollY = window.scrollY || document.documentElement.scrollTop || 0;
-  document.body.style.top = `-${{fixedPopoverScrollY}}px`;
 }}
 
 function unlockFixedPopoverScroll() {{
