@@ -5175,6 +5175,13 @@ def layout(
       overflow-y: auto;
       overscroll-behavior: contain;
     }}
+    body.has-fixed-popover .sidebar {{
+      position: fixed;
+      top: 22px;
+      left: max(16px, calc((100vw - 1440px) / 2));
+      width: 280px;
+      z-index: 9999;
+    }}
     .brand-mark {{
       font-size: 12px;
       letter-spacing: 0.14em;
@@ -8524,6 +8531,10 @@ def layout(
       .sidebar {{
         min-height: 0;
         position: static;
+      }}
+      body.has-fixed-popover .sidebar {{
+        position: static;
+        width: auto;
       }}
       .grid, .detail-hero {{
         grid-template-columns: 1fr;
