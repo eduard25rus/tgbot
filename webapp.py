@@ -7454,6 +7454,12 @@ def layout(
       overflow: hidden;
       height: 100%;
     }}
+    body.has-fixed-popover {{
+      position: fixed;
+      left: 0;
+      right: 0;
+      width: 100%;
+    }}
     body.has-fixed-popover::before {{
       content: "";
       position: fixed;
@@ -8230,6 +8236,7 @@ document.addEventListener("click", (event) => {{
 
 const floatingPopoverSelector = ".status-popover, .settings-popover, .name-popover";
 const floatingPopoverStyleProps = ["top", "left", "right", "bottom", "width", "maxHeight", "maxWidth", "minWidth", "visibility", "transform"];
+let fixedPopoverScrollY = null;
 
 function rememberFloatingPopoverStyles(popover) {{
   if (popover.dataset.floatingOriginalStyles) {{
@@ -8390,10 +8397,35 @@ function fitOpenStatusPopovers() {{
   updateFixedPopoverLock();
 }}
 
+function lockFixedPopoverScroll() {{
+  if (fixedPopoverScrollY !== null) {{
+    return;
+  }}
+  fixedPopoverScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  document.body.style.top = `-${{fixedPopoverScrollY}}px`;
+}}
+
+function unlockFixedPopoverScroll() {{
+  if (fixedPopoverScrollY === null) {{
+    return;
+  }}
+  const scrollY = fixedPopoverScrollY;
+  fixedPopoverScrollY = null;
+  document.body.style.top = "";
+  window.scrollTo({{ top: scrollY, behavior: "auto" }});
+}}
+
 function updateFixedPopoverLock() {{
   const hasOpenFixedPopover = Boolean(document.querySelector(".status-menu[open] .is-floating-modal, .status-menu[open] .directory-employee-popover"));
+  const wasFixed = document.body.classList.contains("has-fixed-popover");
+  if (hasOpenFixedPopover && !wasFixed) {{
+    lockFixedPopoverScroll();
+  }}
   document.documentElement.classList.toggle("has-fixed-popover", hasOpenFixedPopover);
   document.body.classList.toggle("has-fixed-popover", hasOpenFixedPopover);
+  if (!hasOpenFixedPopover && wasFixed) {{
+    unlockFixedPopoverScroll();
+  }}
   const hasOpenEmployeePopover = Boolean(document.querySelector(".status-menu[open] .directory-employee-popover"));
   document.documentElement.classList.toggle("has-directory-employee-popover", hasOpenEmployeePopover);
   document.body.classList.toggle("has-directory-employee-popover", hasOpenEmployeePopover);
