@@ -6545,6 +6545,41 @@ def layout(
     .workforce-table th:not(:nth-child(2)) {{
       text-align: center;
     }}
+    .workforce-table {{
+      table-layout: fixed;
+      width: 100%;
+    }}
+    .workforce-table th:nth-child(1),
+    .workforce-table td:nth-child(1) {{
+      width: 48px;
+    }}
+    .workforce-table th:nth-child(3),
+    .workforce-table td:nth-child(3) {{
+      width: 150px;
+    }}
+    .workforce-table th:nth-child(4),
+    .workforce-table td:nth-child(4),
+    .workforce-table th:nth-child(5),
+    .workforce-table td:nth-child(5) {{
+      width: 92px;
+    }}
+    .workforce-table th:nth-child(6),
+    .workforce-table td:nth-child(6) {{
+      width: 150px;
+    }}
+    .workforce-table th:nth-child(7),
+    .workforce-table td:nth-child(7) {{
+      width: 190px;
+    }}
+    .workforce-table td:nth-child(2),
+    .workforce-report-detail {{
+      overflow-wrap: anywhere;
+    }}
+    .workforce-table td:nth-child(7) .secondary-btn {{
+      width: 100%;
+      justify-content: center;
+      white-space: normal;
+    }}
     .workforce-main-row.has-report-detail td {{
       border-bottom: 0;
       padding-bottom: 8px;
@@ -7798,17 +7833,14 @@ def layout(
       right: 0;
       width: 100%;
     }}
-    body.has-fixed-popover::before {{
-      content: "";
+    .floating-popover-backdrop {{
       position: fixed;
       inset: 0;
       z-index: 900;
       background: rgba(0, 0, 0, 0.56);
       backdrop-filter: blur(2px);
-      pointer-events: auto;
     }}
-    .status-menu[open]:has(.is-floating-modal),
-    .status-menu[open]:has(.directory-employee-popover) {{
+    .status-menu.has-floating-modal {{
       z-index: 1002;
     }}
     .directory-employee-popover {{
@@ -8610,6 +8642,7 @@ document.addEventListener("click", (event) => {{
 const floatingPopoverSelector = ".status-popover, .settings-popover, .name-popover";
 const floatingPopoverStyleProps = ["top", "left", "right", "bottom", "width", "maxHeight", "maxWidth", "minWidth", "visibility", "transform"];
 let fixedPopoverScrollY = null;
+let floatingPopoverBackdrop = null;
 
 function rememberFloatingPopoverStyles(popover) {{
   if (popover.dataset.floatingOriginalStyles) {{
@@ -8692,6 +8725,7 @@ function fitStatusMenuPopover(menu) {{
   if (!menu || !menu.open) {{
     return;
   }}
+  menu.classList.remove("has-floating-modal");
   const summary = menu.querySelector("summary");
   const popover = statusMenuPopover(menu);
   if (!summary || !popover) {{
@@ -8718,6 +8752,8 @@ function fitStatusMenuPopover(menu) {{
   if (popover.classList.contains("directory-employee-popover")) {{
     const modalWidth = Math.min(860, window.innerWidth - 32);
     const modalHeight = window.innerHeight - 48;
+    menu.classList.add("has-floating-modal");
+    popover.classList.add("is-floating-modal");
     ensureFloatingPopoverHeader(menu, popover);
     popover.style.left = `${{Math.max(16, (window.innerWidth - modalWidth) / 2)}}px`;
     popover.style.top = "24px";
@@ -8733,6 +8769,7 @@ function fitStatusMenuPopover(menu) {{
 
   if (shouldUseFloatingModal(popover)) {{
     const modalWidth = Math.min(860, window.innerWidth - 32);
+    menu.classList.add("has-floating-modal");
     popover.classList.add("is-floating-modal");
     ensureFloatingPopoverHeader(menu, popover);
     popover.style.width = `${{modalWidth}}px`;
@@ -8790,14 +8827,45 @@ function unlockFixedPopoverScroll() {{
   window.scrollTo({{ top: scrollY, behavior: "auto" }});
 }}
 
+function ensureFloatingPopoverBackdrop() {{
+  if (floatingPopoverBackdrop) {{
+    return;
+  }}
+  floatingPopoverBackdrop = document.createElement("div");
+  floatingPopoverBackdrop.className = "floating-popover-backdrop";
+  floatingPopoverBackdrop.addEventListener("click", () => {{
+    document.querySelectorAll(".status-menu[open]").forEach((menu) => {{
+      const popover = statusMenuPopover(menu);
+      menu.removeAttribute("open");
+      menu.classList.remove("has-floating-modal");
+      resetFloatingPopover(popover);
+    }});
+    updateFixedPopoverLock();
+  }});
+  document.body.appendChild(floatingPopoverBackdrop);
+}}
+
+function removeFloatingPopoverBackdrop() {{
+  if (!floatingPopoverBackdrop) {{
+    return;
+  }}
+  floatingPopoverBackdrop.remove();
+  floatingPopoverBackdrop = null;
+}}
+
 function updateFixedPopoverLock() {{
-  const hasOpenFixedPopover = Boolean(document.querySelector(".status-menu[open] .is-floating-modal, .status-menu[open] .directory-employee-popover"));
+  const hasOpenFixedPopover = Boolean(document.querySelector(".status-menu[open].has-floating-modal"));
   const wasFixed = document.body.classList.contains("has-fixed-popover");
   if (hasOpenFixedPopover && !wasFixed) {{
     lockFixedPopoverScroll();
   }}
   document.documentElement.classList.toggle("has-fixed-popover", hasOpenFixedPopover);
   document.body.classList.toggle("has-fixed-popover", hasOpenFixedPopover);
+  if (hasOpenFixedPopover) {{
+    ensureFloatingPopoverBackdrop();
+  }} else {{
+    removeFloatingPopoverBackdrop();
+  }}
   if (!hasOpenFixedPopover && wasFixed) {{
     unlockFixedPopoverScroll();
   }}
@@ -8813,6 +8881,7 @@ document.addEventListener("toggle", (event) => {{
   }}
   const popover = statusMenuPopover(menu);
   if (!menu.open) {{
+    menu.classList.remove("has-floating-modal");
     resetFloatingPopover(popover);
     updateFixedPopoverLock();
     return;
