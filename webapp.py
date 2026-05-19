@@ -8127,6 +8127,7 @@ def layout(
       max-width: calc(100vw - 32px) !important;
       max-height: calc(100vh - 48px) !important;
       transform: translateX(-50%);
+      overflow-y: auto;
       overscroll-behavior: contain;
       align-content: start;
       padding: 18px;
@@ -8673,6 +8674,7 @@ let fixedPopoverScrollY = null;
 let floatingPopoverLayer = null;
 let floatingPopoverBackdrop = null;
 let floatingPopoverCounter = 0;
+let fixedPopoverTouchY = null;
 
 function rememberFloatingPopoverStyles(popover) {{
   if (popover.dataset.floatingOriginalStyles) {{
@@ -8810,6 +8812,17 @@ function ensureFloatingPopoverHeader(menu, popover) {{
   popover.prepend(header);
 }}
 
+function autoSizeFloatingModalTextareas(popover) {{
+  if (!popover) {{
+    return;
+  }}
+  popover.querySelectorAll("textarea").forEach((textarea) => {{
+    textarea.style.height = "auto";
+    textarea.style.height = `${{textarea.scrollHeight + 2}}px`;
+    textarea.style.overflowY = "hidden";
+  }});
+}}
+
 function applyFloatingModalLayout(menu, popover) {{
   if (!menu || !popover) {{
     return popover;
@@ -8825,6 +8838,7 @@ function applyFloatingModalLayout(menu, popover) {{
   popover.style.maxWidth = `${{modalWidth}}px`;
   popover.style.maxHeight = `${{Math.max(220, window.innerHeight - 48)}}px`;
   popover.style.visibility = "";
+  autoSizeFloatingModalTextareas(popover);
   return popover;
 }}
 
@@ -8976,6 +8990,66 @@ function ensureFloatingPopoverLayer() {{
   document.body.appendChild(floatingPopoverLayer);
 }}
 
+function fixedPopoverModalFromTarget(target) {{
+  return target && target.closest
+    ? target.closest(".status-popover.is-floating-modal, .settings-popover.is-floating-modal, .name-popover.is-floating-modal")
+    : null;
+}}
+
+function canScrollInDirection(element, deltaY) {{
+  if (!element || !deltaY) {{
+    return false;
+  }}
+  if (deltaY < 0) {{
+    return element.scrollTop > 0;
+  }}
+  return element.scrollTop + element.clientHeight < element.scrollHeight - 1;
+}}
+
+function fixedPopoverScrollContainer(target, deltaY) {{
+  const modal = fixedPopoverModalFromTarget(target);
+  if (!modal) {{
+    return null;
+  }}
+  let node = target;
+  while (node && node !== modal) {{
+    if (node instanceof HTMLElement && canScrollInDirection(node, deltaY)) {{
+      return node;
+    }}
+    node = node.parentElement;
+  }}
+  return canScrollInDirection(modal, deltaY) ? modal : null;
+}}
+
+function containFixedPopoverWheel(event) {{
+  if (!document.body.classList.contains("has-fixed-popover")) {{
+    return;
+  }}
+  if (!fixedPopoverScrollContainer(event.target, event.deltaY)) {{
+    event.preventDefault();
+  }}
+}}
+
+function containFixedPopoverTouchStart(event) {{
+  if (!document.body.classList.contains("has-fixed-popover") || !event.touches || !event.touches.length) {{
+    fixedPopoverTouchY = null;
+    return;
+  }}
+  fixedPopoverTouchY = event.touches[0].clientY;
+}}
+
+function containFixedPopoverTouchMove(event) {{
+  if (!document.body.classList.contains("has-fixed-popover") || !event.touches || !event.touches.length || fixedPopoverTouchY === null) {{
+    return;
+  }}
+  const currentY = event.touches[0].clientY;
+  const deltaY = fixedPopoverTouchY - currentY;
+  if (!fixedPopoverScrollContainer(event.target, deltaY)) {{
+    event.preventDefault();
+  }}
+  fixedPopoverTouchY = currentY;
+}}
+
 function removeFloatingPopoverLayer() {{
   if (!floatingPopoverLayer) {{
     return;
@@ -9042,6 +9116,15 @@ document.addEventListener("keydown", (event) => {{
     closeStatusMenu(menu);
   }} else {{
     openStatusMenuAsModal(menu);
+  }}
+}}, true);
+
+document.addEventListener("wheel", containFixedPopoverWheel, {{ passive: false, capture: true }});
+document.addEventListener("touchstart", containFixedPopoverTouchStart, {{ passive: true, capture: true }});
+document.addEventListener("touchmove", containFixedPopoverTouchMove, {{ passive: false, capture: true }});
+document.addEventListener("input", (event) => {{
+  if (event.target && event.target.matches && event.target.matches(".is-floating-modal textarea")) {{
+    autoSizeFloatingModalTextareas(event.target.closest(".is-floating-modal"));
   }}
 }}, true);
 
