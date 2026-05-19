@@ -7844,8 +7844,9 @@ def layout(
       position: absolute;
       inset: 0;
       z-index: 0;
-      background: rgba(17, 24, 33, 0.72);
+      background: transparent;
       pointer-events: auto;
+      touch-action: none;
     }}
     .floating-popover-layer .is-floating-modal {{
       z-index: 1;
