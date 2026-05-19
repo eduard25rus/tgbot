@@ -6376,10 +6376,6 @@ def layout(
       padding-top: 0;
     }}
     .workforce-report-detail {{
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(170px, 240px) auto;
-      gap: 12px;
-      align-items: start;
       padding: 0 0 12px 0;
       color: var(--muted);
       font-size: 13px;
@@ -6401,17 +6397,19 @@ def layout(
     .workforce-report-actions {{
       display: grid;
       gap: 4px;
-      justify-items: end;
+      justify-items: center;
       align-self: center;
     }}
     .workforce-report-meta {{
-      color: var(--muted);
-      font-size: 12px;
-      text-align: right;
+      color: var(--ink);
+      text-align: center;
     }}
     .workforce-report-label {{
       color: var(--muted);
       font-weight: 800;
+    }}
+    .workforce-report-files {{
+      margin-top: 8px;
     }}
     .workforce-existing-files {{
       grid-column: 1 / -1;
@@ -15008,8 +15006,8 @@ def render_workforce_report_files(owner_chat_id: int, report_id: int, files: lis
         for index, file in enumerate(files)
     )
     return f"""
-    <button class="secondary-btn construction-photo-view-btn" type="button" data-construction-carousel-open="workforce-report-files-{report_id}">
-      Смотреть
+    <button class="secondary-btn mini construction-photo-view-btn" type="button" data-construction-carousel-open="workforce-report-files-{report_id}">
+      Фотоотчет
       <span>{len(files)}</span>
     </button>
     <div class="construction-photo-modal" data-construction-carousel-modal="workforce-report-files-{report_id}" aria-hidden="true">
@@ -15404,7 +15402,7 @@ def render_workforce_section(
             None,
         )
         if missing_full_report:
-            report_added_html = '<div class="workforce-report-meta"><strong>Добавил:</strong><br>пока не добавлен</div>'
+            report_added_html = '<span class="contract-table-subtle">пока не добавлен</span>'
         else:
             report_added_name = (
                 (report_added_event or {}).get("actor_name")
@@ -15418,9 +15416,8 @@ def render_workforce_section(
             )
             report_added_html = f"""
             <div class="workforce-report-meta">
-              <strong>Добавил:</strong><br>
-              {escape(report_added_name)}<br>
-              {format_datetime(report_added_at)}
+              {escape(report_added_name)}
+              <div class="contract-table-subtle">{format_datetime(report_added_at)}</div>
             </div>
             """
         edit_control = ""
@@ -15462,22 +15459,15 @@ def render_workforce_section(
             </tr>
             <tr class="workforce-report-detail-row">
               <td></td>
-              <td colspan="6">
+              <td colspan="4">
                 <div class="workforce-report-detail">
-                  <div>
-                    <div class="workforce-report-label">Выполненные работы:</div>
-                    {description_status}
-                  </div>
-                  <div>
-                    <div class="contract-table-subtle">Фото / видео</div>
-                    {files_status}
-                  </div>
-                  <div class="workforce-report-actions">
-                    {report_added_html}
-                    {report_control}
-                  </div>
+                  <div class="workforce-report-label">Выполненные работы:</div>
+                  {description_status}
+                  {f'<div class="workforce-report-files">{files_status}</div>' if files_status else ''}
                 </div>
               </td>
+              <td>{report_added_html}</td>
+              <td><div class="workforce-report-actions">{report_control}</div></td>
             </tr>
             """
         )
