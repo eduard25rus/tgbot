@@ -7454,6 +7454,14 @@ def layout(
       overflow: hidden;
       height: 100%;
     }}
+    body.has-fixed-popover::before {{
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 900;
+      background: rgba(7, 12, 18, 0.54);
+      pointer-events: auto;
+    }}
     .directory-employee-popover {{
       width: min(860px, calc(100vw - 32px));
       max-height: calc(100vh - 48px);
@@ -7721,6 +7729,48 @@ def layout(
       overscroll-behavior: contain;
       align-content: start;
       padding: 18px;
+      z-index: 1001;
+    }}
+    .floating-popover-head {{
+      position: sticky;
+      top: -18px;
+      z-index: 2;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin: -18px -18px 2px;
+      padding: 16px 18px 14px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--paper) 96%, white 4%);
+    }}
+    .floating-popover-title {{
+      min-width: 0;
+      color: var(--ink);
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1.2;
+      overflow-wrap: anywhere;
+    }}
+    .floating-popover-close {{
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.86);
+      color: var(--muted);
+      font: inherit;
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+    }}
+    .floating-popover-close:hover {{
+      color: var(--ink);
+      background: #fff;
     }}
     .status-popover.is-floating-modal .form-grid {{
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8197,6 +8247,10 @@ function resetFloatingPopover(popover) {{
     return;
   }}
   const originalStyles = popover.dataset.floatingOriginalStyles ? JSON.parse(popover.dataset.floatingOriginalStyles) : null;
+  const generatedHead = Array.from(popover.children).find((child) => child.classList && child.classList.contains("floating-popover-head"));
+  if (generatedHead) {{
+    generatedHead.remove();
+  }}
   popover.classList.remove("is-viewport-fitted", "is-floating-modal");
   floatingPopoverStyleProps.forEach((prop) => {{
     popover.style[prop] = originalStyles ? originalStyles[prop] || "" : "";
@@ -8218,6 +8272,38 @@ function shouldUseFloatingModal(popover) {{
     rect.height >= window.innerHeight * 0.58 ||
     Boolean(popover.querySelector(".workforce-worker-picker, .expense-editor-popover, .directory-employee-form, textarea, input[type='file']"))
   );
+}}
+
+function modalPopoverTitle(menu, popover) {{
+  const explicitTitle = popover.dataset.modalTitle ? popover.dataset.modalTitle.trim() : "";
+  if (explicitTitle) {{
+    return explicitTitle;
+  }}
+  const summary = menu ? menu.querySelector("summary") : null;
+  const summaryText = summary ? summary.textContent.trim() : "";
+  return summaryText || "Редактирование";
+}}
+
+function ensureFloatingPopoverHeader(menu, popover) {{
+  const header = document.createElement("div");
+  header.className = "floating-popover-head";
+  const title = document.createElement("div");
+  title.className = "floating-popover-title";
+  title.textContent = modalPopoverTitle(menu, popover);
+  const closeButton = document.createElement("button");
+  closeButton.className = "floating-popover-close";
+  closeButton.type = "button";
+  closeButton.setAttribute("aria-label", "Закрыть окно");
+  closeButton.textContent = "×";
+  closeButton.addEventListener("click", () => {{
+    if (menu) {{
+      menu.removeAttribute("open");
+    }}
+    resetFloatingPopover(popover);
+    updateFixedPopoverLock();
+  }});
+  header.append(title, closeButton);
+  popover.prepend(header);
 }}
 
 function fitStatusMenuPopover(menu) {{
@@ -8250,6 +8336,7 @@ function fitStatusMenuPopover(menu) {{
   if (popover.classList.contains("directory-employee-popover")) {{
     const modalWidth = Math.min(860, window.innerWidth - 32);
     const modalHeight = window.innerHeight - 48;
+    ensureFloatingPopoverHeader(menu, popover);
     popover.style.left = `${{Math.max(16, (window.innerWidth - modalWidth) / 2)}}px`;
     popover.style.top = "24px";
     popover.style.right = "auto";
@@ -8265,6 +8352,7 @@ function fitStatusMenuPopover(menu) {{
   if (shouldUseFloatingModal(popover)) {{
     const modalWidth = Math.min(860, window.innerWidth - 32);
     popover.classList.add("is-floating-modal");
+    ensureFloatingPopoverHeader(menu, popover);
     popover.style.width = `${{modalWidth}}px`;
     popover.style.minWidth = `${{modalWidth}}px`;
     popover.style.maxWidth = `${{modalWidth}}px`;
@@ -8299,6 +8387,7 @@ function fitStatusMenuPopover(menu) {{
 
 function fitOpenStatusPopovers() {{
   document.querySelectorAll(".status-menu[open]").forEach((menu) => fitStatusMenuPopover(menu));
+  updateFixedPopoverLock();
 }}
 
 function updateFixedPopoverLock() {{
@@ -8328,7 +8417,13 @@ document.addEventListener("toggle", (event) => {{
 }}, true);
 
 window.addEventListener("resize", () => window.requestAnimationFrame(fitOpenStatusPopovers), {{ passive: true }});
-document.addEventListener("scroll", () => window.requestAnimationFrame(fitOpenStatusPopovers), true);
+document.addEventListener("scroll", (event) => {{
+  const target = event.target;
+  if (target && target.closest && target.closest(".status-popover.is-floating-modal, .directory-employee-popover")) {{
+    return;
+  }}
+  window.requestAnimationFrame(fitOpenStatusPopovers);
+}}, true);
 
 function buildContractStageFields(form, count) {{
   const container = form ? form.querySelector('[data-stage-container]') : null;
@@ -8539,8 +8634,7 @@ document.addEventListener("click", (event) => {{
     window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
     return;
   }}
-  const activeElement = document.activeElement;
-  if (activeElement && activeElement.closest(".status-popover")) {{
+  if (event.target.closest && event.target.closest(".status-popover")) {{
     return;
   }}
   const selection = window.getSelection ? window.getSelection() : null;
@@ -14828,7 +14922,7 @@ def render_workforce_section(
         add_form = f"""
         <details class="status-menu">
           <summary><span class="secondary-btn">Добавить смену</span></summary>
-          <div class="status-popover align-right" style="min-width:min(760px, 92vw);">
+          <div class="status-popover align-right" data-modal-title="Добавление смены" style="min-width:min(760px, 92vw);">
             {render_workforce_report_form(owner_chat_id, selected_month, project_options_list, builder_employees, current_user, project_filter=project_filter, employee_filter=employee_filter, selected_day=selected_day)}
           </div>
         </details>
@@ -14947,7 +15041,7 @@ def render_workforce_section(
             edit_control = f"""
             <details class="status-menu">
               <summary><span class="secondary-btn mini">Изменить</span></summary>
-              <div class="status-popover align-right" style="min-width:min(760px, 92vw);">
+              <div class="status-popover align-right" data-modal-title="Редактирование смены · {escape(format_date(report.report_date))}" style="min-width:min(760px, 92vw);">
                 {render_workforce_report_form(owner_chat_id, selected_month, project_options_list, all_builder_employees, current_user, report, project_filter, employee_filter, selected_day)}
                 <form method="post" action="/workforce/reports/{report.id}/delete{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)}" onsubmit="return confirm('Удалить смену из учета рабочей силы?');" style="margin-top:12px;">
                   <button class="secondary-btn danger" type="submit">Удалить смену</button>
