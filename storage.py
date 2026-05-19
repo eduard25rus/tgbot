@@ -2097,8 +2097,6 @@ class Storage:
         if default_cashbox_code not in known_codes:
             default_cashbox_code = cashboxes[0]["code"] if cashboxes else ""
         normalized_allowed = [code for code in allowed_cashbox_codes if code in known_codes]
-        if default_cashbox_code and default_cashbox_code not in normalized_allowed:
-            normalized_allowed.append(default_cashbox_code)
         if role not in {"owner", "manager", "limited"}:
             role = "limited"
         if push_detail_mode not in {"safe", "amount"}:

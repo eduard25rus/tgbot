@@ -16232,8 +16232,7 @@ def render_cashoperations_body(
     allowed_cashboxes = [
         item for item in cashboxes if item["code"] in set(cash_access["allowed_cashbox_codes"])
     ]
-    if not allowed_cashboxes:
-        allowed_cashboxes = [item for item in cashboxes if item["code"] == cash_access["default_cashbox_code"]]
+    has_cashbox_access = bool(allowed_cashboxes)
     allowed_codes = {item["code"] for item in allowed_cashboxes}
     if selected_cashbox not in allowed_codes:
         selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (allowed_cashboxes[0]["code"] if allowed_cashboxes else "")
@@ -16325,8 +16324,8 @@ def render_cashoperations_body(
     operations.sort(key=lambda item: (item[1].expense_date, item[1].created_at, item[1].id), reverse=True)
     worker_allocations_by_entry = storage.list_expense_worker_allocations(owner_chat_id, [entry.id for _kind, entry in operations])
     latest_operations = operations[:14]
-    can_edit = mobile_cash_can_modify_cashbox(cash_access, selected_cashbox)
-    can_reconcile_selected = mobile_cash_can_reconcile_cashbox(cash_access, selected_cashbox)
+    can_edit = has_cashbox_access and mobile_cash_can_modify_cashbox(cash_access, selected_cashbox)
+    can_reconcile_selected = has_cashbox_access and mobile_cash_can_reconcile_cashbox(cash_access, selected_cashbox)
 
     def editable_comment(entry) -> str:
         comment = entry.comment or ""
@@ -16488,6 +16487,13 @@ def render_cashoperations_body(
     ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
     can_view_letters = bool(cash_access.get("can_view_letters"))
     can_view_work_reports = bool(cash_access.get("can_view_work_reports"))
+    if not has_cashbox_access:
+        if can_view_work_reports:
+            initial_screen = "work"
+        elif can_view_letters:
+            initial_screen = "letters"
+        else:
+            initial_screen = "none"
     letters_screen_html = ""
     letters_nav_html = ""
     if can_view_letters:
@@ -16548,7 +16554,7 @@ def render_cashoperations_body(
 
         letters_rows = "".join(letter_card(letter) for letter in legal_letters) or '<div class="cash-mobile-empty">Писем пока нет.</div>'
         letters_screen_html = f"""
-        <section id="cashScreenLetters" class="cash-mobile-screen">
+        <section id="cashScreenLetters" class="cash-mobile-screen{" active" if initial_screen == "letters" else ""}">
           <section class="cash-mobile-panel">
             <div class="cash-mobile-section-head"><h2>Письма</h2></div>
             <form class="cash-mobile-letter-filter" method="get" action="/cashoperations">
@@ -16923,14 +16929,15 @@ def render_cashoperations_body(
         </section>
         """
 
-    cash_action_buttons = f"""
+    cash_action_buttons = ""
+    if has_cashbox_access:
+        cash_action_buttons = f"""
           <button class="cash-mobile-action expense" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
           <button class="cash-mobile-action income" type="button" data-cash-screen="income" data-cash-new-income="1">Добавить поступление</button>
-    """ if can_edit else ""
-    cash_action_buttons += """
-          <button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>
-          <button class="cash-mobile-action" type="button" data-cash-screen="work">Отчеты о работе</button>
-    """
+        """ if can_edit else ""
+        cash_action_buttons += '<button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>'
+    if can_view_work_reports:
+        cash_action_buttons += '<button class="cash-mobile-action" type="button" data-cash-screen="work">Отчеты о работе</button>'
 
     reconcile_screen = (
     f"""
@@ -16955,6 +16962,63 @@ def render_cashoperations_body(
     if can_reconcile_selected
     else '<section class="cash-mobile-panel"><h2>Сверка недоступна</h2><div class="cash-mobile-sub">Для этой кассы доступен только просмотр.</div></section>'
     )
+
+    home_screen_html = ""
+    expense_screen_html = ""
+    income_screen_html = ""
+    history_screen_html = ""
+    cash_nav_html = ""
+    history_nav_html = ""
+    if has_cashbox_access:
+        home_screen_html = f"""
+      <section id="cashScreenHome" class="cash-mobile-screen{" active" if initial_screen == "home" else ""}">
+        <section class="cash-mobile-panel">
+        <div class="cash-mobile-sub">{escape(cashbox_labels.get(selected_cashbox, "Касса"))}</div>
+          <div class="cash-mobile-balance{" negative" if balance < -0.009 else ""}">{escape(format_amount(balance))}</div>
+          <div class="cash-mobile-metrics">
+            <div class="cash-mobile-metric"><span>Поступило сегодня</span><b>{escape(format_amount(today_income))}</b></div>
+            <div class="cash-mobile-metric"><span>Потрачено сегодня</span><b>{escape(format_amount(today_expense))}</b></div>
+            <div class="cash-mobile-metric"><span>На начало дня</span><b>{escape(format_amount(start_balance))}</b></div>
+          </div>
+          {warning_html}
+        </section>
+        <div class="cash-mobile-actions">
+          {cash_action_buttons}
+        </div>
+        <section class="cash-mobile-panel">
+          <div class="cash-mobile-section-head"><h2>Последние операции</h2></div>
+          {latest_rows}
+        </section>
+        {push_status_html}
+      </section>
+        """
+        expense_screen_html = f'<section id="cashScreenExpense" class="cash-mobile-screen{" active" if initial_screen == "expense" else ""}">{expense_screen}</section>'
+        income_screen_html = f'<section id="cashScreenIncome" class="cash-mobile-screen{" active" if initial_screen == "income" else ""}">{income_screen}</section>'
+        history_screen_html = f"""
+      <section id="cashScreenHistory" class="cash-mobile-screen{" active" if initial_screen == "history" else ""}">
+        <section class="cash-mobile-panel">
+          <div class="cash-mobile-section-head"><h2>История операций</h2></div>
+          {history_rows}
+        </section>
+      </section>
+        """
+        cash_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="home">Касса</button>'
+        history_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="history">История</button>'
+    empty_screen_html = ""
+    if initial_screen == "none":
+        empty_screen_html = """
+      <section id="cashScreenNone" class="cash-mobile-screen active">
+        <section class="cash-mobile-panel">
+          <h2>Разделы не включены</h2>
+          <div class="cash-mobile-sub">Администратор должен выбрать хотя бы одну доступную вкладку.</div>
+        </section>
+      </section>
+        """
+    work_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="work">Работа</button>' if can_view_work_reports else ""
+    bottom_nav_items = "".join([cash_nav_html, letters_nav_html, history_nav_html, work_nav_html])
+    bottom_nav_count = sum(1 for item in [cash_nav_html, letters_nav_html, history_nav_html, work_nav_html] if item)
+    bottom_nav_html = f'<nav class="cash-mobile-bottom-tabs">{bottom_nav_items}</nav>' if bottom_nav_items else ""
+    work_screen_class = f'cash-mobile-screen cash-work-screen{" active" if initial_screen == "work" else ""}{" is-stats-mode" if show_work_stats else ""}'
 
     return f"""
     <style>
@@ -17604,7 +17668,7 @@ def render_cashoperations_body(
         width: min(100%, 560px);
         transform: translateX(-50%);
         display: grid;
-        grid-template-columns: repeat({"4" if can_view_letters else "3"}, 1fr);
+        grid-template-columns: repeat({bottom_nav_count or 1}, 1fr);
         gap: 6px;
         padding: 9px 10px calc(9px + env(safe-area-inset-bottom));
         background: rgba(255,255,255,.96);
@@ -17753,43 +17817,15 @@ def render_cashoperations_body(
       <div class="cash-mobile-tabs{cashbox_tabs_extra_class}" data-cashbox-tabs>{cashbox_tabs}</div>
       {flash_html}
       {edit_back_html}
-      <section id="cashScreenHome" class="cash-mobile-screen active">
-        <section class="cash-mobile-panel">
-        <div class="cash-mobile-sub">{escape(cashbox_labels.get(selected_cashbox, "Касса"))}</div>
-          <div class="cash-mobile-balance{" negative" if balance < -0.009 else ""}">{escape(format_amount(balance))}</div>
-          <div class="cash-mobile-metrics">
-            <div class="cash-mobile-metric"><span>Поступило сегодня</span><b>{escape(format_amount(today_income))}</b></div>
-            <div class="cash-mobile-metric"><span>Потрачено сегодня</span><b>{escape(format_amount(today_expense))}</b></div>
-            <div class="cash-mobile-metric"><span>На начало дня</span><b>{escape(format_amount(start_balance))}</b></div>
-          </div>
-          {warning_html}
-        </section>
-        <div class="cash-mobile-actions">
-          {cash_action_buttons}
-        </div>
-        <section class="cash-mobile-panel">
-          <div class="cash-mobile-section-head"><h2>Последние операции</h2></div>
-          {latest_rows}
-        </section>
-        {push_status_html}
-      </section>
-      <section id="cashScreenExpense" class="cash-mobile-screen">{expense_screen}</section>
-      <section id="cashScreenIncome" class="cash-mobile-screen">{income_screen}</section>
+      {home_screen_html}
+      {expense_screen_html}
+      {income_screen_html}
       {letters_screen_html}
-      <section id="cashScreenHistory" class="cash-mobile-screen">
-        <section class="cash-mobile-panel">
-          <div class="cash-mobile-section-head"><h2>История операций</h2></div>
-          {history_rows}
-        </section>
-      </section>
-      <section id="cashScreenWork" class="cash-mobile-screen cash-work-screen{" is-stats-mode" if show_work_stats else ""}">{work_report_screen}</section>
+      {history_screen_html}
+      <section id="cashScreenWork" class="{work_screen_class}">{work_report_screen}</section>
+      {empty_screen_html}
     </section>
-    <nav class="cash-mobile-bottom-tabs">
-      <button class="cash-mobile-nav active" type="button" data-cash-screen="home">Касса</button>
-      {letters_nav_html}
-      <button class="cash-mobile-nav" type="button" data-cash-screen="history">История</button>
-      <button class="cash-mobile-nav" type="button" data-cash-screen="work">Работа</button>
-    </nav>
+    {bottom_nav_html}
     <section class="cash-receipt-viewer" data-cash-receipt-viewer aria-hidden="true">
       <div class="cash-receipt-viewer-head">
         <strong data-cash-receipt-viewer-title>Чек</strong>
@@ -18606,6 +18642,7 @@ def render_cashoperations_body(
           if (submitter) submitter.textContent = submitter.dataset.workDeleteReport ? "Удаляем..." : "Сохраняем...";
         }});
         syncAdminProject();
+        const defaultScreen = {json.dumps(initial_screen)};
         let usedInitialScreen = false;
         try {{
           const requestedScreen = new URLSearchParams(window.location.search).get("screen");
@@ -18619,8 +18656,12 @@ def render_cashoperations_body(
           if (!usedInitialScreen && nextScreen && screens[nextScreen]) {{
             sessionStorage.removeItem("cashNextScreen");
             show(nextScreen);
+            usedInitialScreen = true;
           }}
         }} catch (_err) {{}}
+        if (!usedInitialScreen && defaultScreen && screens[defaultScreen]) {{
+          show(defaultScreen);
+        }}
         document.addEventListener("visibilitychange", () => {{
           if (!document.hidden) refreshIfStale(activeScreenName(), 300000);
         }});
