@@ -8094,6 +8094,16 @@ def layout(
       display: grid;
       gap: 8px;
     }}
+    .status-popover[hidden],
+    .settings-popover[hidden],
+    .name-popover[hidden] {{
+      display: none !important;
+    }}
+    .status-menu:not([open]) > .status-popover,
+    .status-menu:not([open]) > .settings-popover,
+    .status-menu:not([open]) > .name-popover {{
+      display: none !important;
+    }}
     .status-popover.align-right {{
       left: auto;
       right: 0;
@@ -8755,6 +8765,9 @@ function shouldUseFloatingModal(popover) {{
   if (!popover || popover.classList.contains("compact")) {{
     return false;
   }}
+  if (popover.dataset.modalTitle && popover.dataset.modalTitle.trim()) {{
+    return true;
+  }}
   const rect = popover.getBoundingClientRect();
   return (
     rect.width >= Math.min(520, window.innerWidth - 24) ||
@@ -8911,13 +8924,46 @@ function unlockFixedPopoverScroll() {{
 }}
 
 function closeOpenFloatingPopovers() {{
-  document.querySelectorAll(".status-menu[open]").forEach((menu) => {{
+  document.querySelectorAll(".status-menu[open], .status-menu.has-floating-modal").forEach((menu) => {{
     const popover = statusMenuPopover(menu);
     menu.removeAttribute("open");
     menu.classList.remove("has-floating-modal");
     resetFloatingPopover(popover);
   }});
   updateFixedPopoverLock();
+}}
+
+function closeStatusMenu(menu) {{
+  if (!menu) {{
+    return;
+  }}
+  const popover = statusMenuPopover(menu);
+  menu.removeAttribute("open");
+  menu.classList.remove("has-floating-modal");
+  resetFloatingPopover(popover);
+  updateFixedPopoverLock();
+}}
+
+function openStatusMenuAsModal(menu) {{
+  if (!menu) {{
+    return;
+  }}
+  document.querySelectorAll(".status-menu[open], .status-menu.has-floating-modal").forEach((openMenu) => {{
+    if (openMenu !== menu) {{
+      closeStatusMenu(openMenu);
+    }}
+  }});
+  menu.open = true;
+  fitStatusMenuPopover(menu);
+  updateFixedPopoverLock();
+}}
+
+function shouldInterceptStatusMenuOpen(menu) {{
+  if (!menu || menu.dataset.allowNativeOpen === "1") {{
+    return false;
+  }}
+  const popover = menu.querySelector(floatingPopoverSelector);
+  return shouldUseFloatingModal(popover);
 }}
 
 function ensureFloatingPopoverLayer() {{
@@ -8964,6 +9010,45 @@ function updateFixedPopoverLock() {{
   document.documentElement.classList.toggle("has-directory-employee-popover", hasOpenEmployeePopover);
   document.body.classList.toggle("has-directory-employee-popover", hasOpenEmployeePopover);
 }}
+
+document.addEventListener("click", (event) => {{
+  const summary = event.target.closest && event.target.closest(".status-menu > summary");
+  if (!summary) {{
+    return;
+  }}
+  const menu = summary.parentElement;
+  if (!shouldInterceptStatusMenuOpen(menu)) {{
+    return;
+  }}
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (menu.open) {{
+    closeStatusMenu(menu);
+  }} else {{
+    openStatusMenuAsModal(menu);
+  }}
+}}, true);
+
+document.addEventListener("keydown", (event) => {{
+  if (event.key !== "Enter" && event.key !== " ") {{
+    return;
+  }}
+  const summary = event.target.closest && event.target.closest(".status-menu > summary");
+  if (!summary) {{
+    return;
+  }}
+  const menu = summary.parentElement;
+  if (!shouldInterceptStatusMenuOpen(menu)) {{
+    return;
+  }}
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (menu.open) {{
+    closeStatusMenu(menu);
+  }} else {{
+    openStatusMenuAsModal(menu);
+  }}
+}}, true);
 
 document.addEventListener("toggle", (event) => {{
   const menu = event.target.matches && event.target.matches(".status-menu") ? event.target : null;
