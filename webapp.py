@@ -8643,6 +8643,7 @@ const floatingPopoverSelector = ".status-popover, .settings-popover, .name-popov
 const floatingPopoverStyleProps = ["top", "left", "right", "bottom", "width", "maxHeight", "maxWidth", "minWidth", "visibility", "transform"];
 let fixedPopoverScrollY = null;
 let floatingPopoverBackdrop = null;
+let floatingPopoverCounter = 0;
 
 function rememberFloatingPopoverStyles(popover) {{
   if (popover.dataset.floatingOriginalStyles) {{
@@ -8669,10 +8670,52 @@ function resetFloatingPopover(popover) {{
     popover.style[prop] = originalStyles ? originalStyles[prop] || "" : "";
   }});
   delete popover.dataset.floatingOriginalStyles;
+  restoreFloatingPopover(popover);
 }}
 
 function statusMenuPopover(menu) {{
-  return menu ? menu.querySelector(floatingPopoverSelector) : null;
+  if (!menu) {{
+    return null;
+  }}
+  const floatingId = menu.dataset.floatingPopoverId || "";
+  if (floatingId) {{
+    return document.querySelector(`[data-floating-popover-id="${{floatingId}}"]`);
+  }}
+  return menu.querySelector(floatingPopoverSelector);
+}}
+
+function attachFloatingPopover(menu, popover) {{
+  if (!menu || !popover || popover.dataset.floatingAttached === "1") {{
+    return;
+  }}
+  const floatingId = menu.dataset.floatingPopoverId || `floating-popover-${{++floatingPopoverCounter}}`;
+  const anchor = document.createElement("span");
+  anchor.hidden = true;
+  anchor.className = "floating-popover-anchor";
+  anchor.dataset.floatingPopoverId = floatingId;
+  popover.parentNode.insertBefore(anchor, popover);
+  menu.dataset.floatingPopoverId = floatingId;
+  popover.dataset.floatingPopoverId = floatingId;
+  popover.dataset.floatingAttached = "1";
+  document.body.appendChild(popover);
+}}
+
+function restoreFloatingPopover(popover) {{
+  if (!popover || popover.dataset.floatingAttached !== "1") {{
+    return;
+  }}
+  const floatingId = popover.dataset.floatingPopoverId || "";
+  const anchor = floatingId ? document.querySelector(`.floating-popover-anchor[data-floating-popover-id="${{floatingId}}"]`) : null;
+  const menu = floatingId ? document.querySelector(`.status-menu[data-floating-popover-id="${{floatingId}}"]`) : null;
+  if (anchor && anchor.parentNode) {{
+    anchor.parentNode.insertBefore(popover, anchor);
+    anchor.remove();
+  }}
+  if (menu) {{
+    delete menu.dataset.floatingPopoverId;
+  }}
+  delete popover.dataset.floatingAttached;
+  delete popover.dataset.floatingPopoverId;
 }}
 
 function shouldUseFloatingModal(popover) {{
@@ -8753,6 +8796,7 @@ function fitStatusMenuPopover(menu) {{
     const modalWidth = Math.min(860, window.innerWidth - 32);
     const modalHeight = window.innerHeight - 48;
     menu.classList.add("has-floating-modal");
+    attachFloatingPopover(menu, popover);
     popover.classList.add("is-floating-modal");
     ensureFloatingPopoverHeader(menu, popover);
     popover.style.left = `${{Math.max(16, (window.innerWidth - modalWidth) / 2)}}px`;
@@ -8770,6 +8814,7 @@ function fitStatusMenuPopover(menu) {{
   if (shouldUseFloatingModal(popover)) {{
     const modalWidth = Math.min(860, window.innerWidth - 32);
     menu.classList.add("has-floating-modal");
+    attachFloatingPopover(menu, popover);
     popover.classList.add("is-floating-modal");
     ensureFloatingPopoverHeader(menu, popover);
     popover.style.width = `${{modalWidth}}px`;
