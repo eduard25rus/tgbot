@@ -7803,7 +7803,8 @@ def layout(
       position: fixed;
       inset: 0;
       z-index: 900;
-      background: rgba(0, 0, 0, 0.30);
+      background: rgba(17, 25, 38, 0.58);
+      backdrop-filter: blur(2px);
       pointer-events: auto;
     }}
     .directory-employee-popover {{
@@ -8073,6 +8074,8 @@ def layout(
       overscroll-behavior: contain;
       align-content: start;
       padding: 18px;
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: 0 26px 72px rgba(17, 25, 38, 0.30);
       z-index: 1001;
     }}
     .floating-popover-head {{
@@ -8136,6 +8139,19 @@ def layout(
       border-radius: 18px;
       background: rgba(255, 250, 242, 0.98);
       box-shadow: var(--card-shadow);
+    }}
+    .expense-editor-popover.is-floating-modal {{
+      width: min(760px, calc(100vw - 32px)) !important;
+      min-width: min(760px, calc(100vw - 32px)) !important;
+      max-width: calc(100vw - 32px) !important;
+    }}
+    .expense-editor-popover .expense-delete-form {{
+      display: block;
+      margin-top: 12px;
+    }}
+    .expense-editor-popover .expense-delete-form .secondary-btn {{
+      width: 100%;
+      min-height: 48px;
     }}
     .status-popover.compact {{
       min-width: 150px;
@@ -8630,6 +8646,8 @@ function shouldUseFloatingModal(popover) {{
   return (
     rect.width >= Math.min(520, window.innerWidth - 24) ||
     rect.height >= window.innerHeight * 0.58 ||
+    popover.classList.contains("expense-editor-popover") ||
+    popover.classList.contains("directory-employee-popover") ||
     Boolean(popover.querySelector(".workforce-worker-picker, .expense-editor-popover, .directory-employee-form, textarea, input[type='file']"))
   );
 }}
@@ -16337,7 +16355,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     return f"""
     <details class="status-menu expense-editor-menu">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
-      <div class="status-popover expense-editor-popover">
+      <div class="status-popover expense-editor-popover" data-modal-title="Редактирование операции ДДС">
         <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}">
           <input type="hidden" name="operation_type" value="{escape(entry.operation_type or 'expense')}">
           <div class="field">
@@ -16377,7 +16395,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
           </label>
           <button class="submit-btn" type="submit">Сохранить изменения</button>
         </form>
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/delete?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" onsubmit="return confirm('Удалить расход из ДДС?');" style="margin-top:12px;">
+        <form class="expense-delete-form" method="post" action="{base_path}/{entry.id}/delete?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" onsubmit="return confirm('Удалить расход из ДДС?');">
           <button class="secondary-btn danger" type="submit">Удалить расход</button>
         </form>
       </div>
