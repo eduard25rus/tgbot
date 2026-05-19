@@ -6367,28 +6367,36 @@ def layout(
       justify-self: start;
     }}
     .workforce-report-detail-row td {{
-      background: color-mix(in srgb, var(--soft) 54%, white 46%);
+      background: transparent;
       border-top: 0;
+      padding-top: 0;
     }}
     .workforce-report-detail {{
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(170px, 240px) auto;
-      gap: 14px;
+      gap: 12px;
       align-items: start;
-      padding: 12px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: rgba(255,255,255,0.54);
+      padding: 0 0 12px 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
     }}
     .workforce-report-description {{
-      margin-top: 6px;
-      color: var(--ink);
+      margin-top: 2px;
+      color: var(--muted);
       white-space: pre-line;
-      line-height: 1.45;
+    }}
+    .workforce-report-missing {{
+      color: var(--muted);
+      margin-top: 2px;
+    }}
+    .workforce-report-missing.danger {{
+      color: var(--danger);
+      font-weight: 700;
     }}
     .workforce-report-actions {{
       display: grid;
-      gap: 8px;
+      gap: 4px;
       justify-items: end;
     }}
     .workforce-report-events {{
@@ -15023,6 +15031,44 @@ def render_workforce_work_report_form(
     """
 
 
+def render_workforce_new_work_report_form(
+    owner_chat_id: int,
+    selected_month: date,
+    project_options_list: list[tuple[str, str]],
+    project_filter: str = "",
+    employee_filter: int = 0,
+    selected_day: date | None = None,
+) -> str:
+    report_date = selected_day or datetime.now(VLADIVOSTOK_TZ).date()
+    selected_project = project_filter or (project_options_list[0][0] if project_options_list else "")
+    project_options = "".join(
+        f'<option value="{escape(code)}"{" selected" if code == selected_project else ""}>{escape(label)}</option>'
+        for code, label in project_options_list
+    )
+    action = f"/workforce/reports/description/new{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)}"
+    return f"""
+    <form class="form-grid" method="post" action="{action}" enctype="multipart/form-data">
+      <div class="field">
+        <label>Дата</label>
+        <input type="date" name="report_date" value="{report_date.isoformat()}" required>
+      </div>
+      <div class="field">
+        <label>Объект</label>
+        <select name="project_code" required>{project_options}</select>
+      </div>
+      <div class="field span-2">
+        <label>Выполненные работы на объекте</label>
+        <textarea name="work_description" placeholder="Что сделали за день на этом объекте"></textarea>
+      </div>
+      <div class="field span-2">
+        <label>Фото / видео отчет</label>
+        <input type="file" name="work_report_files" accept="image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp,video/mp4,.mp4,video/quicktime,.mov,video/webm,.webm,.m4v" multiple>
+      </div>
+      <button class="submit-btn" type="submit"{" disabled" if not project_options_list else ""}>Сохранить отчет</button>
+    </form>
+    """
+
+
 def render_workforce_section(
     storage: Storage,
     owner_chat_id: int,
@@ -15155,12 +15201,30 @@ def render_workforce_section(
         if project_filter or employee_filter or selected_day is not None else ""
     )
     add_form = ""
+    detail_add_shift_form = ""
+    detail_add_report_form = ""
     if has_permission(current_user, "workforce", "edit"):
         add_form = f"""
         <details class="status-menu">
           <summary><span class="secondary-btn">Добавить смену</span></summary>
           <div class="status-popover align-right" data-modal-title="Добавление смены" style="min-width:min(760px, 92vw);">
             {render_workforce_report_form(owner_chat_id, selected_month, project_options_list, builder_employees, current_user, project_filter=project_filter, employee_filter=employee_filter, selected_day=selected_day)}
+          </div>
+        </details>
+        """
+        detail_add_shift_form = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn mini">Добавить смену</span></summary>
+          <div class="status-popover align-right" data-modal-title="Добавление смены" style="min-width:min(760px, 92vw);">
+            {render_workforce_report_form(owner_chat_id, selected_month, project_options_list, builder_employees, current_user, project_filter=project_filter, employee_filter=employee_filter, selected_day=selected_day)}
+          </div>
+        </details>
+        """
+        detail_add_report_form = f"""
+        <details class="status-menu">
+          <summary><span class="secondary-btn mini">Добавить отчет о работе</span></summary>
+          <div class="status-popover align-right" data-modal-title="Добавление отчета о работе" style="min-width:min(760px, 92vw);">
+            {render_workforce_new_work_report_form(owner_chat_id, selected_month, project_options_list, project_filter, employee_filter, selected_day)}
           </div>
         </details>
         """
@@ -15274,20 +15338,24 @@ def render_workforce_section(
         )
         if not worker_rows:
             worker_rows = (
-                '<li><span class="chip">Отчет из строительного раздела · люди не привязаны</span></li>'
-                if report.source_kind == "construction_report"
+                '<li><span class="chip">Отчет о работе · люди не привязаны</span></li>'
+                if report.source_kind in {"construction_report", "work_report_only"}
                 else '<li><span class="chip danger">Люди не закрыты</span></li>'
             )
         report_units = sum(float(worker["day_part"]) for worker in report.workers)
         people_comment = report.people_comment or ""
         work_description = report.work_description or ""
         report_files_html = render_workforce_report_files(owner_chat_id, report.id, report.files)
+        missing_full_report = not work_description and not report.files
         description_status = (
             f'<div class="workforce-report-description">{escape(work_description)}</div>'
             if work_description
-            else '<span class="chip danger">Описание не заполнено</span>'
+            else '<div class="workforce-report-missing">Описание не заполнено</div>'
         )
-        files_status = report_files_html or '<span class="chip danger">Фото/видео не приложены</span>'
+        files_status = report_files_html or '<div class="workforce-report-missing">Нет фото/видео</div>'
+        if missing_full_report:
+            description_status = '<div class="workforce-report-missing danger">Загрузите отчет о работе смены!</div>'
+            files_status = ""
         events = storage.list_mobile_work_report_events(owner_chat_id, report.id)
         event_rows = "".join(
             f'<li>{escape(event["actor_name"] or "Автор неизвестен")} · {escape(event["details"] or event["event_type"])} · {format_datetime(event["created_at"])}</li>'
@@ -15403,7 +15471,11 @@ def render_workforce_section(
           <h2 class="panel-title">{escape(detail_title)}</h2>
           <div class="panel-sub">Детализация смен по выбранному дню, объекту или сотруднику.</div>
         </div>
-        <a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}#workforce-calendar">К календарю месяца</a>
+        <div class="action-row" style="gap:10px; margin:0;">
+          {detail_add_shift_form}
+          {detail_add_report_form}
+          <a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}#workforce-calendar">К календарю месяца</a>
+        </div>
       </div>
       <table class="table contract-table workforce-table">
         <thead>
@@ -25305,6 +25377,65 @@ self.addEventListener("notificationclick", (event) => {
             return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, target_month, project_filter, employee_filter, selected_day)}&ok=1&flash={quote_plus('Смена обновлена.')}")
         except Exception as exc:
             return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&flash={quote_plus(f'Не удалось обновить смену: {exc}')}")
+
+    if path == "/workforce/reports/description/new" and method == "POST":
+        denied = guard("workforce", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        selected_month = parse_month_key(query.get("month", [""])[0]) or datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+        project_filter = query.get("project", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        try:
+            selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        except ValueError:
+            selected_day = None
+        try:
+            employee_filter = int(query.get("employee", ["0"])[0] or "0")
+        except ValueError:
+            employee_filter = 0
+        try:
+            form, files = read_multipart_form_data(environ)
+            report_date_raw = form.get("report_date", "").strip()
+            report_date = parse_date(report_date_raw) if report_date_raw else None
+            if report_date is None:
+                raise ValueError("Укажите дату отчета")
+            entries = storage.list_expense_entries(current_owner)
+            project_options_list = expense_project_options(storage, current_owner, entries, include_legacy_entries=False)
+            project_labels = dict(project_options_list)
+            project_code = form.get("project_code", "").strip()
+            if project_code not in project_labels:
+                raise ValueError("Выберите объект")
+            uploads = [upload for upload in files.get("work_report_files", []) if upload.filename.strip()]
+            work_description = form.get("work_description", "").strip()
+            if not work_description and not uploads:
+                raise ValueError("Добавьте описание работ или фото/видео")
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            report_id = storage.add_mobile_work_report(
+                current_owner,
+                report_date,
+                project_code,
+                project_labels[project_code],
+                [],
+                "",
+                (current_user or {}).get("id"),
+                actor_name,
+                source_kind="work_report_only",
+                allow_empty_workers=True,
+            )
+            storage.update_mobile_work_report_description(
+                current_owner,
+                report_id,
+                work_description,
+                (current_user or {}).get("id"),
+                actor_name,
+            )
+            if uploads:
+                save_workforce_report_files(storage, current_owner, report_id, uploads, (current_user or {}).get("id"), actor_name)
+            target_month = report_date.replace(day=1)
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, target_month, project_filter, employee_filter, report_date)}&ok=1&flash={quote_plus('Отчет о работе добавлен.')}")
+        except Exception as exc:
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&flash={quote_plus(f'Не удалось добавить отчет: {exc}')}")
 
     if path.startswith("/workforce/reports/") and path.endswith("/description") and method == "POST":
         denied = guard("workforce", "edit")
