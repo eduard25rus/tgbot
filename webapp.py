@@ -6430,6 +6430,20 @@ def layout(
       color: var(--muted);
       font-size: 13px;
     }}
+    .workforce-object-feed td {{
+      vertical-align: top;
+    }}
+    .workforce-object-feed .workforce-worker-list {{
+      margin-top: 0;
+    }}
+    .workforce-object-link {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }}
+    .workforce-object-link:hover {{
+      color: var(--brand);
+    }}
     .workforce-summary-grid {{
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -7583,7 +7597,7 @@ def layout(
       position: fixed;
       inset: 0;
       z-index: 900;
-      background: rgba(7, 12, 18, 0.54);
+      background: rgba(0, 0, 0, 0.30);
       pointer-events: auto;
     }}
     .directory-employee-popover {{
@@ -7871,9 +7885,12 @@ def layout(
     .floating-popover-title {{
       min-width: 0;
       color: var(--ink);
-      font-size: 20px;
-      font-weight: 800;
-      line-height: 1.2;
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1.15;
+      letter-spacing: 0;
+      font-variant-numeric: proportional-nums;
       overflow-wrap: anywhere;
     }}
     .floating-popover-close {{
@@ -15475,6 +15492,78 @@ def render_workforce_section(
             """
         )
     rows_html = "".join(report_rows) or '<tr><td colspan="7">Смен по выбранным условиям пока нет.</td></tr>'
+    object_card_html = ""
+    if project_filter:
+        object_reports = [
+            report for report in month_reports
+            if report.project_code == project_filter
+        ]
+        object_label = project_labels.get(project_filter, project_filter)
+        object_people = {
+            int(worker["employee_id"])
+            for report in object_reports
+            for worker in report.workers
+        }
+        object_units = sum(float(worker["day_part"]) for report in object_reports for worker in report.workers)
+        object_days = {report.report_date for report in object_reports}
+        object_feed_rows = []
+        for report in sorted(object_reports, key=lambda item: (item.report_date, item.id), reverse=True):
+            object_worker_rows = "".join(
+                f'<li>{escape(employee_lookup.get(int(worker["employee_id"])).full_name if int(worker["employee_id"]) in employee_lookup else worker["employee_name"])} <span class="contract-table-subtle" style="display:inline;">· {escape(workforce_day_part_label(float(worker["day_part"])))}</span></li>'
+                for worker in report.workers
+            )
+            if not object_worker_rows:
+                object_worker_rows = '<li><span class="contract-table-subtle">Люди не привязаны</span></li>'
+            report_description = report.work_description or ""
+            report_files = render_workforce_report_files(owner_chat_id, report.id, report.files)
+            if report_description:
+                object_description_html = f'<div class="workforce-report-description">{escape(report_description)}</div>'
+            elif report.files:
+                object_description_html = '<span class="contract-table-subtle">Описание не заполнено</span>'
+            else:
+                object_description_html = '<div class="workforce-report-missing danger">Загрузите отчет о работе смены!</div>'
+            object_feed_rows.append(
+                f"""
+                <tr>
+                  <td class="nowrap">{format_date(report.report_date)}</td>
+                  <td>
+                    <ol class="workforce-worker-list">{object_worker_rows}</ol>
+                  </td>
+                  <td>{object_description_html}</td>
+                  <td>{report_files or '<span class="contract-table-subtle">Нет фото/видео</span>'}</td>
+                  <td>{escape(report.created_by_name or "Автор неизвестен")}<div class="contract-table-subtle">{format_date(report.created_at.astimezone(VLADIVOSTOK_TZ).date() if report.created_at.tzinfo else report.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div></td>
+                </tr>
+                """
+            )
+        object_card_html = f"""
+        <section id="workforce-object-card" class="card panel" style="margin-top:22px;">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">{escape(object_label)}</h2>
+              <div class="panel-sub">Карточка объекта: лента работ, люди и отчеты за {escape(format_month_in_label(selected_month))}.</div>
+            </div>
+            <a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}#workforce-calendar">Все объекты</a>
+          </div>
+          <section class="stats" style="margin-bottom:18px;">
+            <article class="card stat-card">
+              <div class="stat-label">Смен</div>
+              <div class="stat-value">{escape(workforce_units_label(object_units))}</div>
+            </article>
+            <article class="card stat-card">
+              <div class="stat-label">Людей</div>
+              <div class="stat-value">{len(object_people)}</div>
+            </article>
+            <article class="card stat-card">
+              <div class="stat-label">Дней</div>
+              <div class="stat-value">{len(object_days)}</div>
+            </article>
+          </section>
+          <table class="table contract-table workforce-object-feed">
+            <thead><tr><th class="nowrap">Дата</th><th>Люди</th><th>Выполненные работы</th><th>Фотоотчет</th><th>Добавил</th></tr></thead>
+            <tbody>{''.join(object_feed_rows) or '<tr><td colspan="5">По объекту пока нет записей за выбранный месяц.</td></tr>'}</tbody>
+          </table>
+        </section>
+        """
     employee_rows = "".join(
         f"""
         <tr>
@@ -15489,7 +15578,7 @@ def render_workforce_section(
     project_rows = "".join(
         f"""
         <tr>
-          <td><div class="timeline-title">{escape(item["label"])}</div></td>
+          <td><div class="timeline-title"><a class="contract-table-link workforce-object-link" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}&project={quote_plus(str(_project_key))}#workforce-object-card">{escape(item["label"])}</a></div></td>
           <td class="nowrap">{escape(workforce_units_label(float(item["units"])))}</td>
           <td class="nowrap">{len(item["people"])}</td>
           <td class="nowrap">{len(item["days"])}</td>
@@ -15542,6 +15631,7 @@ def render_workforce_section(
       </table>
     </section>
     ''' if detail_active else ''}
+    {object_card_html}
     <div class="workforce-summary-grid">
       <section class="card panel">
         <div class="panel-head">
@@ -21010,7 +21100,7 @@ def read_multipart_form_data(environ) -> tuple[dict[str, str], dict[str, list[Up
         payload = part.get_payload(decode=True) or b""
         if filename is not None:
             files.setdefault(name, []).append(UploadedFile(
-                filename=filename or name,
+                filename=filename,
                 content_type=part.get_content_type(),
                 data=payload,
             ))
