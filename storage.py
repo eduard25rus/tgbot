@@ -317,6 +317,20 @@ class PayrollRow:
 
 
 @dataclass
+class MobileWorkReportFile:
+    id: int
+    report_id: int
+    file_name: str
+    file_path: str
+    file_kind: str
+    created_by_user_id: Optional[int]
+    created_by_name: str
+    created_at: datetime
+    source_kind: str
+    source_ref: str
+
+
+@dataclass
 class MobileWorkReport:
     id: int
     owner_chat_id: int
@@ -324,11 +338,16 @@ class MobileWorkReport:
     project_code: str
     project_label: str
     comment: str
+    people_comment: str
+    work_description: str
+    source_kind: str
+    source_ref: str
     created_by_user_id: Optional[int]
     created_by_name: str
     created_at: datetime
     updated_at: datetime
     workers: list[dict]
+    files: list[MobileWorkReportFile]
 
 
 @dataclass
@@ -942,6 +961,10 @@ class Storage:
                     project_code TEXT NOT NULL DEFAULT '',
                     project_label TEXT NOT NULL DEFAULT '',
                     comment TEXT NOT NULL DEFAULT '',
+                    people_comment TEXT NOT NULL DEFAULT '',
+                    work_description TEXT NOT NULL DEFAULT '',
+                    source_kind TEXT NOT NULL DEFAULT '',
+                    source_ref TEXT NOT NULL DEFAULT '',
                     created_by_user_id INTEGER,
                     created_by_name TEXT NOT NULL DEFAULT '',
                     deleted_at TEXT,
@@ -958,6 +981,31 @@ class Storage:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(report_id) REFERENCES mobile_work_reports(id) ON DELETE CASCADE,
                     FOREIGN KEY(employee_id) REFERENCES payroll_employees(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS mobile_work_report_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    report_id INTEGER NOT NULL,
+                    file_name TEXT NOT NULL DEFAULT '',
+                    file_path TEXT NOT NULL DEFAULT '',
+                    file_kind TEXT NOT NULL DEFAULT 'image',
+                    created_by_user_id INTEGER,
+                    created_by_name TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    source_kind TEXT NOT NULL DEFAULT '',
+                    source_ref TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(report_id) REFERENCES mobile_work_reports(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS mobile_work_report_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    report_id INTEGER NOT NULL,
+                    event_type TEXT NOT NULL DEFAULT '',
+                    actor_user_id INTEGER,
+                    actor_name TEXT NOT NULL DEFAULT '',
+                    details TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(report_id) REFERENCES mobile_work_reports(id) ON DELETE CASCADE
                 );
 
                 CREATE TABLE IF NOT EXISTS payables (
@@ -1253,17 +1301,22 @@ class Storage:
                 )
             if "needs_adjustment" not in expense_columns:
                 conn.execute("ALTER TABLE expense_entries ADD COLUMN needs_adjustment INTEGER NOT NULL DEFAULT 0")
+            contract_columns_for_project_update = {
+                row["name"] for row in conn.execute("PRAGMA table_info(contracts)").fetchall()
+            }
+            contract_object_match = (
+                "(c.object_name LIKE 'Библиотека №13%' OR c.title LIKE 'Библиотека №13%')"
+                if "object_name" in contract_columns_for_project_update
+                else "c.title LIKE 'Библиотека №13%'"
+            )
             conn.execute(
-                """
+                f"""
                 UPDATE expense_entries
                 SET project_code = (
                     SELECT 'contract:' || c.id
                     FROM contracts c
                     WHERE c.chat_id = expense_entries.owner_chat_id
-                      AND (
-                        c.object_name LIKE 'Библиотека №13%'
-                        OR c.title LIKE 'Библиотека №13%'
-                      )
+                      AND {contract_object_match}
                     ORDER BY c.id ASC
                     LIMIT 1
                 )
@@ -1272,10 +1325,7 @@ class Storage:
                     SELECT 1
                     FROM contracts c
                     WHERE c.chat_id = expense_entries.owner_chat_id
-                      AND (
-                        c.object_name LIKE 'Библиотека №13%'
-                        OR c.title LIKE 'Библиотека №13%'
-                      )
+                      AND {contract_object_match}
                   )
                 """
             )
@@ -1297,6 +1347,12 @@ class Storage:
             }
             construction_report_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(construction_reports)").fetchall()
+            }
+            mobile_work_report_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(mobile_work_reports)").fetchall()
+            }
+            mobile_work_report_file_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(mobile_work_report_files)").fetchall()
             }
             task_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
@@ -1709,6 +1765,49 @@ class Storage:
             for column_name, column_def in construction_report_alters:
                 if column_name and column_name not in construction_report_columns:
                     conn.execute(f"ALTER TABLE construction_reports ADD COLUMN {column_name} {column_def}")
+            mobile_work_report_alters = [
+                ("people_comment", "TEXT NOT NULL DEFAULT ''"),
+                ("work_description", "TEXT NOT NULL DEFAULT ''"),
+                ("source_kind", "TEXT NOT NULL DEFAULT ''"),
+                ("source_ref", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in mobile_work_report_alters:
+                if column_name not in mobile_work_report_columns:
+                    conn.execute(f"ALTER TABLE mobile_work_reports ADD COLUMN {column_name} {column_def}")
+            if "work_description" not in mobile_work_report_columns:
+                conn.execute(
+                    """
+                    UPDATE mobile_work_reports
+                    SET work_description = COALESCE(NULLIF(comment, ''), '')
+                    WHERE COALESCE(work_description, '') = ''
+                      AND COALESCE(comment, '') != ''
+                    """
+                )
+            mobile_work_report_file_alters = [
+                ("file_kind", "TEXT NOT NULL DEFAULT 'image'"),
+                ("created_by_user_id", "INTEGER"),
+                ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
+                ("source_kind", "TEXT NOT NULL DEFAULT ''"),
+                ("source_ref", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in mobile_work_report_file_alters:
+                if column_name not in mobile_work_report_file_columns:
+                    conn.execute(f"ALTER TABLE mobile_work_report_files ADD COLUMN {column_name} {column_def}")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_mobile_work_report_files_source
+                ON mobile_work_report_files(source_kind, source_ref)
+                WHERE source_kind != '' AND source_ref != ''
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_mobile_work_reports_source
+                ON mobile_work_reports(owner_chat_id, source_kind, source_ref)
+                WHERE source_kind != '' AND source_ref != ''
+                """
+            )
+            self._migrate_construction_reports_to_workforce(conn)
             if "assignee_kind" not in task_columns:
                 conn.execute("ALTER TABLE tasks ADD COLUMN assignee_kind TEXT NOT NULL DEFAULT 'user'")
             if "assignee_role_code" not in task_columns:
@@ -4985,6 +5084,21 @@ class Storage:
         )
 
     @staticmethod
+    def _mobile_work_report_file_from_row(row: sqlite3.Row) -> MobileWorkReportFile:
+        return MobileWorkReportFile(
+            id=int(row["id"]),
+            report_id=int(row["report_id"]),
+            file_name=row["file_name"] or "",
+            file_path=row["file_path"] or "",
+            file_kind=row["file_kind"] or "image",
+            created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+            created_by_name=row["created_by_name"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]),
+            source_kind=row["source_kind"] or "",
+            source_ref=row["source_ref"] or "",
+        )
+
+    @staticmethod
     def _legal_letter_attachment_from_row(row: sqlite3.Row) -> LegalLetterAttachment:
         return LegalLetterAttachment(
             id=row["id"],
@@ -6057,6 +6171,9 @@ class Storage:
         comment: str,
         created_by_user_id: int | None,
         created_by_name: str,
+        source_kind: str = "",
+        source_ref: str = "",
+        allow_empty_workers: bool = False,
     ) -> int:
         cleaned_workers = []
         seen: set[int] = set()
@@ -6071,17 +6188,17 @@ class Storage:
                 "employee_name": str(item.get("employee_name", "")).strip(),
                 "day_part": day_part,
             })
-        if not cleaned_workers:
+        if not cleaned_workers and not allow_empty_workers:
             raise ValueError("Добавьте хотя бы одного сотрудника")
         with self.connection() as conn:
             now = datetime.utcnow().isoformat()
             cursor = conn.execute(
                 """
                 INSERT INTO mobile_work_reports (
-                    owner_chat_id, report_date, project_code, project_label, comment,
+                    owner_chat_id, report_date, project_code, project_label, comment, people_comment, source_kind, source_ref,
                     created_by_user_id, created_by_name, deleted_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
                 (
                     owner_chat_id,
@@ -6089,6 +6206,9 @@ class Storage:
                     project_code.strip(),
                     project_label.strip(),
                     comment.strip(),
+                    comment.strip(),
+                    source_kind.strip(),
+                    source_ref.strip(),
                     created_by_user_id,
                     created_by_name.strip(),
                     now,
@@ -6106,6 +6226,7 @@ class Storage:
                     """,
                     (report_id, item["employee_id"], item["employee_name"], item["day_part"], now),
                 )
+            self._add_mobile_work_report_event(conn, report_id, "created", created_by_user_id, created_by_name, "Создана смена")
             return report_id
 
     def update_mobile_work_report(
@@ -6117,6 +6238,8 @@ class Storage:
         project_label: str,
         worker_items: list[dict],
         comment: str,
+        actor_user_id: int | None = None,
+        actor_name: str = "",
     ) -> bool:
         cleaned_workers = []
         seen: set[int] = set()
@@ -6144,13 +6267,14 @@ class Storage:
             conn.execute(
                 """
                 UPDATE mobile_work_reports
-                SET report_date = ?, project_code = ?, project_label = ?, comment = ?, updated_at = ?
+                SET report_date = ?, project_code = ?, project_label = ?, comment = ?, people_comment = ?, updated_at = ?
                 WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
                 """,
                 (
                     report_date.strftime(DATE_FMT),
                     project_code.strip(),
                     project_label.strip(),
+                    comment.strip(),
                     comment.strip(),
                     now,
                     report_id,
@@ -6168,7 +6292,292 @@ class Storage:
                     """,
                     (report_id, item["employee_id"], item["employee_name"], item["day_part"], now),
                 )
+            self._add_mobile_work_report_event(conn, report_id, "workers_updated", actor_user_id, actor_name, "Обновлен список рабочих")
             return True
+
+    @staticmethod
+    def _add_mobile_work_report_event(
+        conn: sqlite3.Connection,
+        report_id: int,
+        event_type: str,
+        actor_user_id: int | None,
+        actor_name: str,
+        details: str = "",
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO mobile_work_report_events (
+                report_id, event_type, actor_user_id, actor_name, details, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_id,
+                event_type.strip(),
+                actor_user_id,
+                actor_name.strip(),
+                details.strip(),
+                datetime.utcnow().isoformat(),
+            ),
+        )
+
+    def _migrate_construction_reports_to_workforce(self, conn: sqlite3.Connection) -> None:
+        contract_columns = {row["name"] for row in conn.execute("PRAGMA table_info(contracts)").fetchall()}
+        object_expr = "c.object_name" if "object_name" in contract_columns else "c.title"
+        rows = conn.execute(
+            f"""
+            SELECT r.id, r.contract_id, r.report_date, r.work_description, r.day_comment,
+                   r.created_by_user_id, r.created_by_name, r.created_at, r.updated_at,
+                   c.chat_id AS owner_chat_id,
+                   COALESCE(NULLIF({object_expr}, ''), c.title, '') AS project_label
+            FROM construction_reports r
+            JOIN contracts c ON c.id = r.contract_id
+            WHERE r.report_date >= '2026-05-01'
+            ORDER BY r.report_date ASC, r.id ASC
+            """
+        ).fetchall()
+        for row in rows:
+            owner_chat_id = int(row["owner_chat_id"])
+            source_ref = str(int(row["id"]))
+            project_code = f"contract:{int(row['contract_id'])}"
+            project_label = (row["project_label"] or "").strip() or f"Контракт #{int(row['contract_id'])}"
+            description_parts = []
+            if (row["work_description"] or "").strip():
+                description_parts.append((row["work_description"] or "").strip())
+            if (row["day_comment"] or "").strip():
+                description_parts.append(f"Комментарий по дню: {(row['day_comment'] or '').strip()}")
+            work_description = "\n\n".join(description_parts)
+            existing = conn.execute(
+                """
+                SELECT id, work_description
+                FROM mobile_work_reports
+                WHERE owner_chat_id = ?
+                  AND source_kind = 'construction_report'
+                  AND source_ref = ?
+                  AND deleted_at IS NULL
+                LIMIT 1
+                """,
+                (owner_chat_id, source_ref),
+            ).fetchone()
+            if existing is None:
+                existing = conn.execute(
+                    """
+                    SELECT id, work_description
+                    FROM mobile_work_reports
+                    WHERE owner_chat_id = ?
+                      AND report_date = ?
+                      AND project_code = ?
+                      AND deleted_at IS NULL
+                    ORDER BY id ASC
+                    LIMIT 1
+                    """,
+                    (owner_chat_id, row["report_date"], project_code),
+                ).fetchone()
+            if existing is None:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO mobile_work_reports (
+                        owner_chat_id, report_date, project_code, project_label, comment,
+                        people_comment, work_description, source_kind, source_ref,
+                        created_by_user_id, created_by_name, deleted_at, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, '', '', ?, 'construction_report', ?, ?, ?, NULL, ?, ?)
+                    """,
+                    (
+                        owner_chat_id,
+                        row["report_date"],
+                        project_code,
+                        project_label,
+                        work_description,
+                        source_ref,
+                        row["created_by_user_id"],
+                        row["created_by_name"] or "",
+                        row["created_at"],
+                        row["updated_at"],
+                    ),
+                )
+                report_id = int(cursor.lastrowid)
+                self._add_mobile_work_report_event(
+                    conn,
+                    report_id,
+                    "construction_imported",
+                    int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
+                    row["created_by_name"] or "",
+                    "Импортирован строительный отчет без привязки к людям",
+                )
+            else:
+                report_id = int(existing["id"])
+                if work_description and not (existing["work_description"] or "").strip():
+                    conn.execute(
+                        """
+                        UPDATE mobile_work_reports
+                        SET work_description = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (work_description, row["updated_at"], report_id),
+                    )
+
+            photos = conn.execute(
+                """
+                SELECT id, file_name, file_path, created_at
+                FROM construction_report_photos
+                WHERE report_id = ?
+                ORDER BY id ASC
+                """,
+                (int(row["id"]),),
+            ).fetchall()
+            for photo in photos:
+                source_photo_ref = str(int(photo["id"]))
+                existing_file = conn.execute(
+                    """
+                    SELECT id
+                    FROM mobile_work_report_files
+                    WHERE source_kind = 'construction_report_photo'
+                      AND source_ref = ?
+                    """,
+                    (source_photo_ref,),
+                ).fetchone()
+                if existing_file is not None:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO mobile_work_report_files (
+                        report_id, file_name, file_path, file_kind,
+                        created_by_user_id, created_by_name, created_at, source_kind, source_ref
+                    )
+                    VALUES (?, ?, ?, 'image', ?, ?, ?, 'construction_report_photo', ?)
+                    """,
+                    (
+                        report_id,
+                        photo["file_name"] or "",
+                        photo["file_path"] or "",
+                        row["created_by_user_id"],
+                        row["created_by_name"] or "",
+                        photo["created_at"],
+                        source_photo_ref,
+                    ),
+                )
+
+    def update_mobile_work_report_description(
+        self,
+        owner_chat_id: int,
+        report_id: int,
+        work_description: str,
+        actor_user_id: int | None,
+        actor_name: str,
+    ) -> bool:
+        with self.connection() as conn:
+            now = datetime.utcnow().isoformat()
+            cursor = conn.execute(
+                """
+                UPDATE mobile_work_reports
+                SET work_description = ?, updated_at = ?
+                WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
+                """,
+                (work_description.strip(), now, report_id, owner_chat_id),
+            )
+            if cursor.rowcount <= 0:
+                return False
+            self._add_mobile_work_report_event(conn, report_id, "description_updated", actor_user_id, actor_name, "Обновлено описание работ")
+            return True
+
+    def get_mobile_work_report_file(self, owner_chat_id: int, file_id: int) -> MobileWorkReportFile | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT f.id, f.report_id, f.file_name, f.file_path, f.file_kind,
+                       f.created_by_user_id, f.created_by_name, f.created_at, f.source_kind, f.source_ref
+                FROM mobile_work_report_files f
+                JOIN mobile_work_reports r ON r.id = f.report_id
+                WHERE f.id = ? AND r.owner_chat_id = ? AND r.deleted_at IS NULL
+                """,
+                (file_id, owner_chat_id),
+            ).fetchone()
+        return self._mobile_work_report_file_from_row(row) if row else None
+
+    def list_mobile_work_report_events(self, owner_chat_id: int, report_id: int) -> list[dict]:
+        with self.connection() as conn:
+            report = conn.execute(
+                "SELECT id FROM mobile_work_reports WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL",
+                (report_id, owner_chat_id),
+            ).fetchone()
+            if report is None:
+                return []
+            rows = conn.execute(
+                """
+                SELECT id, report_id, event_type, actor_user_id, actor_name, details, created_at
+                FROM mobile_work_report_events
+                WHERE report_id = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (report_id,),
+            ).fetchall()
+        return [
+            {
+                "id": int(row["id"]),
+                "report_id": int(row["report_id"]),
+                "event_type": row["event_type"] or "",
+                "actor_user_id": int(row["actor_user_id"]) if row["actor_user_id"] is not None else None,
+                "actor_name": row["actor_name"] or "",
+                "details": row["details"] or "",
+                "created_at": datetime.fromisoformat(row["created_at"]),
+            }
+            for row in rows
+        ]
+
+    def add_mobile_work_report_file(
+        self,
+        owner_chat_id: int,
+        report_id: int,
+        file_name: str,
+        file_path: str,
+        file_kind: str,
+        actor_user_id: int | None,
+        actor_name: str,
+        source_kind: str = "",
+        source_ref: str = "",
+    ) -> int | None:
+        with self.connection() as conn:
+            report = conn.execute(
+                "SELECT id FROM mobile_work_reports WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL",
+                (report_id, owner_chat_id),
+            ).fetchone()
+            if report is None:
+                return None
+            existing = None
+            if source_kind.strip() and source_ref.strip():
+                existing = conn.execute(
+                    """
+                    SELECT id FROM mobile_work_report_files
+                    WHERE source_kind = ? AND source_ref = ?
+                    """,
+                    (source_kind.strip(), source_ref.strip()),
+                ).fetchone()
+            if existing is not None:
+                return int(existing["id"])
+            now = datetime.utcnow().isoformat()
+            cursor = conn.execute(
+                """
+                INSERT INTO mobile_work_report_files (
+                    report_id, file_name, file_path, file_kind,
+                    created_by_user_id, created_by_name, created_at, source_kind, source_ref
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report_id,
+                    file_name.strip(),
+                    file_path.strip(),
+                    file_kind.strip() or "image",
+                    actor_user_id,
+                    actor_name.strip(),
+                    now,
+                    source_kind.strip(),
+                    source_ref.strip(),
+                ),
+            )
+            self._add_mobile_work_report_event(conn, report_id, "file_added", actor_user_id, actor_name, file_name)
+            return int(cursor.lastrowid)
 
     def delete_mobile_work_report(self, owner_chat_id: int, report_id: int) -> date | None:
         with self.connection() as conn:
@@ -6195,6 +6604,7 @@ class Storage:
             report_rows = conn.execute(
                 f"""
                 SELECT id, owner_chat_id, report_date, project_code, project_label, comment,
+                       people_comment, work_description, source_kind, source_ref,
                        created_by_user_id, created_by_name, created_at, updated_at
                 FROM mobile_work_reports
                 WHERE {where}
@@ -6204,12 +6614,23 @@ class Storage:
             ).fetchall()
             report_ids = [int(row["id"]) for row in report_rows]
             worker_rows = []
+            file_rows = []
             if report_ids:
                 placeholders = ",".join("?" for _ in report_ids)
                 worker_rows = conn.execute(
                     f"""
                     SELECT id, report_id, employee_id, employee_name, day_part, created_at
                     FROM mobile_work_report_workers
+                    WHERE report_id IN ({placeholders})
+                    ORDER BY id ASC
+                    """,
+                    report_ids,
+                ).fetchall()
+                file_rows = conn.execute(
+                    f"""
+                    SELECT id, report_id, file_name, file_path, file_kind,
+                           created_by_user_id, created_by_name, created_at, source_kind, source_ref
+                    FROM mobile_work_report_files
                     WHERE report_id IN ({placeholders})
                     ORDER BY id ASC
                     """,
@@ -6224,6 +6645,9 @@ class Storage:
                 "day_part": float(row["day_part"]),
                 "created_at": datetime.fromisoformat(row["created_at"]),
             })
+        files_by_report: dict[int, list[MobileWorkReportFile]] = {}
+        for row in file_rows:
+            files_by_report.setdefault(int(row["report_id"]), []).append(self._mobile_work_report_file_from_row(row))
         return [
             MobileWorkReport(
                 id=int(row["id"]),
@@ -6232,11 +6656,16 @@ class Storage:
                 project_code=row["project_code"],
                 project_label=row["project_label"],
                 comment=row["comment"],
+                people_comment=row["people_comment"] or "",
+                work_description=row["work_description"] or "",
+                source_kind=row["source_kind"] or "",
+                source_ref=row["source_ref"] or "",
                 created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
                 created_by_name=row["created_by_name"],
                 created_at=datetime.fromisoformat(row["created_at"]),
                 updated_at=datetime.fromisoformat(row["updated_at"]),
                 workers=workers_by_report.get(int(row["id"]), []),
+                files=files_by_report.get(int(row["id"]), []),
             )
             for row in report_rows
         ]
@@ -6246,6 +6675,7 @@ class Storage:
             report_rows = conn.execute(
                 """
                 SELECT id, owner_chat_id, report_date, project_code, project_label, comment,
+                       people_comment, work_description, source_kind, source_ref,
                        created_by_user_id, created_by_name, created_at, updated_at
                 FROM mobile_work_reports
                 WHERE owner_chat_id = ?
@@ -6258,12 +6688,23 @@ class Storage:
             ).fetchall()
             report_ids = [int(row["id"]) for row in report_rows]
             worker_rows = []
+            file_rows = []
             if report_ids:
                 placeholders = ",".join("?" for _ in report_ids)
                 worker_rows = conn.execute(
                     f"""
                     SELECT id, report_id, employee_id, employee_name, day_part, created_at
                     FROM mobile_work_report_workers
+                    WHERE report_id IN ({placeholders})
+                    ORDER BY id ASC
+                    """,
+                    report_ids,
+                ).fetchall()
+                file_rows = conn.execute(
+                    f"""
+                    SELECT id, report_id, file_name, file_path, file_kind,
+                           created_by_user_id, created_by_name, created_at, source_kind, source_ref
+                    FROM mobile_work_report_files
                     WHERE report_id IN ({placeholders})
                     ORDER BY id ASC
                     """,
@@ -6278,6 +6719,9 @@ class Storage:
                 "day_part": float(row["day_part"]),
                 "created_at": datetime.fromisoformat(row["created_at"]),
             })
+        files_by_report: dict[int, list[MobileWorkReportFile]] = {}
+        for row in file_rows:
+            files_by_report.setdefault(int(row["report_id"]), []).append(self._mobile_work_report_file_from_row(row))
         return [
             MobileWorkReport(
                 id=int(row["id"]),
@@ -6286,11 +6730,16 @@ class Storage:
                 project_code=row["project_code"],
                 project_label=row["project_label"],
                 comment=row["comment"],
+                people_comment=row["people_comment"] or "",
+                work_description=row["work_description"] or "",
+                source_kind=row["source_kind"] or "",
+                source_ref=row["source_ref"] or "",
                 created_by_user_id=int(row["created_by_user_id"]) if row["created_by_user_id"] is not None else None,
                 created_by_name=row["created_by_name"],
                 created_at=datetime.fromisoformat(row["created_at"]),
                 updated_at=datetime.fromisoformat(row["updated_at"]),
                 workers=workers_by_report.get(int(row["id"]), []),
+                files=files_by_report.get(int(row["id"]), []),
             )
             for row in report_rows
         ]

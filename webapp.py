@@ -415,6 +415,17 @@ LEGAL_UPLOAD_MIME = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 CONSTRUCTION_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+WORKFORCE_REPORT_MEDIA_MIME = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".m4v": "video/x-m4v",
+    ".webm": "video/webm",
+}
+WORKFORCE_REPORT_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm"}
 
 
 @dataclass
@@ -654,6 +665,18 @@ def resolve_construction_report_photo(storage: Storage, photo) -> tuple[Path, st
     return absolute_path, safe_filename, content_type
 
 
+def resolve_workforce_report_file(storage: Storage, report_file) -> tuple[Path, str, str]:
+    upload_root = contract_upload_root(storage).resolve()
+    absolute_path = (upload_root / report_file.file_path).resolve()
+    if upload_root not in absolute_path.parents and absolute_path != upload_root:
+        raise ValueError("Forbidden")
+    fallback_name = report_file.file_name or absolute_path.name or "workforce-report-file"
+    safe_filename = secure_upload_name(fallback_name)
+    suffix = Path(safe_filename).suffix.lower()
+    content_type = WORKFORCE_REPORT_MEDIA_MIME.get(suffix, "application/octet-stream")
+    return absolute_path, safe_filename, content_type
+
+
 def render_legal_file_preview_page(file_url: str, download_url: str, safe_filename: str, content_type: str) -> str:
     if content_type == "application/pdf":
         preview_html = f'''
@@ -665,6 +688,8 @@ def render_legal_file_preview_page(file_url: str, download_url: str, safe_filena
         '''
     elif content_type.startswith("image/"):
         preview_html = f'<div style="display:flex; justify-content:center; align-items:center; min-height:100vh; background:#f7f3ec; padding:24px;"><img src="{file_url}" alt="{escape(safe_filename)}" style="max-width:100%; max-height:90vh; object-fit:contain; border-radius:16px;"></div>'
+    elif content_type.startswith("video/"):
+        preview_html = f'<div style="display:flex; justify-content:center; align-items:center; min-height:100vh; background:#111821; padding:24px;"><video src="{file_url}" controls playsinline style="max-width:100%; max-height:90vh; border-radius:16px; background:#000;"></video></div>'
     else:
         preview_html = f'''
         <div style="min-height:100vh; display:flex; align-items:center; justify-content:center; background:#f7f3ec; padding:24px;">
@@ -838,6 +863,38 @@ def save_construction_report_photos(storage: Storage, owner_chat_id: int, contra
         relative_path = file_path.relative_to(upload_root).as_posix()
         if storage.add_construction_report_photo(owner_chat_id, report_id, original_name, relative_path) is None:
             raise ValueError("Не удалось сохранить фотографию")
+
+
+def save_workforce_report_files(
+    storage: Storage,
+    owner_chat_id: int,
+    report_id: int,
+    uploads: list[UploadedFile],
+    actor_user_id: int | None,
+    actor_name: str,
+) -> None:
+    upload_root = contract_upload_root(storage)
+    files_dir = upload_root / "workforce_reports" / str(owner_chat_id) / str(report_id)
+    files_dir.mkdir(parents=True, exist_ok=True)
+    for upload in uploads:
+        original_name = upload.filename.strip()
+        lower_name = original_name.lower()
+        suffix = Path(lower_name).suffix
+        if suffix not in WORKFORCE_REPORT_MEDIA_MIME:
+            raise ValueError("В отчет можно прикреплять JPG, PNG, WEBP, MP4, MOV, M4V или WEBM")
+        file_bytes = upload.data
+        if not file_bytes:
+            raise ValueError("Один из файлов пустой")
+        if len(file_bytes) > 120 * 1024 * 1024:
+            raise ValueError("Каждый файл должен быть не больше 120 МБ")
+        safe_name = secure_upload_name(original_name)
+        final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
+        file_path = files_dir / final_name
+        file_path.write_bytes(file_bytes)
+        relative_path = file_path.relative_to(upload_root).as_posix()
+        file_kind = "video" if suffix in WORKFORCE_REPORT_VIDEO_EXTENSIONS else "image"
+        if storage.add_mobile_work_report_file(owner_chat_id, report_id, original_name, relative_path, file_kind, actor_user_id, actor_name) is None:
+            raise ValueError("Не удалось сохранить файл отчета")
 
 
 def save_cash_receipt_upload(storage: Storage, owner_chat_id: int, expense_id: int, upload: UploadedFile | None) -> None:
@@ -5480,7 +5537,8 @@ def layout(
     .construction-photo-slide.is-active {{
       display: flex;
     }}
-    .construction-photo-slide img {{
+    .construction-photo-slide img,
+    .construction-photo-slide video {{
       max-width: 100%;
       max-height: 100%;
       object-fit: contain;
@@ -6287,30 +6345,67 @@ def layout(
     }}
     .workforce-worker-picker {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: 1fr;
       gap: 10px;
       grid-column: 1 / -1;
-      max-height: 360px;
-      overflow: auto;
       padding: 4px;
     }}
-    .workforce-worker-option {{
+    .workforce-worker-row {{
       display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px) auto;
       gap: 8px;
+      align-items: center;
       padding: 12px;
       border: 1px solid var(--line);
       border-radius: 14px;
       background: var(--paper);
     }}
-    .workforce-worker-option label {{
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-weight: 700;
-      color: var(--ink);
-    }}
-    .workforce-worker-option select {{
+    .workforce-worker-row select {{
       width: 100%;
+    }}
+    .workforce-add-worker-btn {{
+      justify-self: start;
+    }}
+    .workforce-report-detail-row td {{
+      background: color-mix(in srgb, var(--soft) 54%, white 46%);
+      border-top: 0;
+    }}
+    .workforce-report-detail {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(170px, 240px) auto;
+      gap: 14px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.54);
+    }}
+    .workforce-report-description {{
+      margin-top: 6px;
+      color: var(--ink);
+      white-space: pre-line;
+      line-height: 1.45;
+    }}
+    .workforce-report-actions {{
+      display: grid;
+      gap: 8px;
+      justify-items: end;
+    }}
+    .workforce-report-events {{
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }}
+    .workforce-report-events summary {{
+      cursor: pointer;
+      text-decoration: underline;
+      text-decoration-style: dashed;
+      text-underline-offset: 3px;
+    }}
+    .workforce-report-events ul {{
+      margin: 6px 0 0;
+      padding-left: 16px;
+      text-align: left;
     }}
     .workforce-summary-grid {{
       display: grid;
@@ -8123,6 +8218,13 @@ def layout(
       .workforce-calendar-projects {{
         display: none;
       }}
+      .workforce-worker-row,
+      .workforce-report-detail {{
+        grid-template-columns: 1fr;
+      }}
+      .workforce-report-actions {{
+        justify-items: start;
+      }}
       .contract-money {{
         text-align: left;
         min-width: 0;
@@ -8493,6 +8595,39 @@ function buildContractStageFields(form, count) {{
 }}
 
 document.addEventListener("click", (event) => {{
+  const addWorkforceWorker = event.target.closest("[data-workforce-add-worker]");
+  if (addWorkforceWorker) {{
+    const picker = addWorkforceWorker.closest("[data-workforce-worker-picker]");
+    if (picker) {{
+      const row = document.createElement("div");
+      row.className = "workforce-worker-row";
+      row.innerHTML = `
+        <select name="employee_id" aria-label="Сотрудник">${{picker.dataset.employeeOptions || '<option value="">Выберите сотрудника</option>'}}</select>
+        <select name="day_part" aria-label="Длительность смены">
+          <option value="1">Полный день</option>
+          <option value="0.5">Половина дня</option>
+        </select>
+        <button class="secondary-btn mini" type="button" data-workforce-remove-worker>Удалить</button>
+      `;
+      picker.insertBefore(row, addWorkforceWorker);
+    }}
+    return;
+  }}
+  const removeWorkforceWorker = event.target.closest("[data-workforce-remove-worker]");
+  if (removeWorkforceWorker) {{
+    const row = removeWorkforceWorker.closest(".workforce-worker-row");
+    const picker = removeWorkforceWorker.closest("[data-workforce-worker-picker]");
+    if (row && picker) {{
+      const rows = picker.querySelectorAll(".workforce-worker-row");
+      if (rows.length <= 1) {{
+        row.querySelector('select[name="employee_id"]').value = "";
+        row.querySelector('select[name="day_part"]').value = "1";
+      }} else {{
+        row.remove();
+      }}
+    }}
+    return;
+  }}
   const carouselOpen = event.target.closest("[data-construction-carousel-open]");
   if (carouselOpen) {{
     const modalId = carouselOpen.dataset.constructionCarouselOpen || "";
@@ -14722,7 +14857,9 @@ def workforce_query_suffix(
 def parse_workforce_worker_items(raw_form: dict[str, list[str]], employees: list) -> list[dict]:
     employees_by_id = {employee.id: employee for employee in employees}
     worker_items = []
-    for raw_employee_id in raw_form.get("employee_id", []):
+    employee_values = raw_form.get("employee_id", [])
+    day_part_values = raw_form.get("day_part", [])
+    for index, raw_employee_id in enumerate(employee_values):
         try:
             employee_id = int(str(raw_employee_id).strip())
         except ValueError:
@@ -14730,7 +14867,11 @@ def parse_workforce_worker_items(raw_form: dict[str, list[str]], employees: list
         employee = employees_by_id.get(employee_id)
         if employee is None:
             continue
-        raw_day_part = raw_form.get(f"day_part_{employee_id}", ["1"])[0]
+        raw_day_part = (
+            day_part_values[index]
+            if index < len(day_part_values)
+            else raw_form.get(f"day_part_{employee_id}", ["1"])[0]
+        )
         day_part = 0.5 if str(raw_day_part).strip() == "0.5" else 1.0
         worker_items.append({
             "employee_id": employee.id,
@@ -14746,23 +14887,32 @@ def render_workforce_worker_picker(employees: list, selected_parts: dict[int, fl
     selected_parts = selected_parts or {}
     if not employees:
         return '<div class="contract-table-subtle" style="grid-column:1 / -1;">В справочнике пока нет активных сотрудников-строителей.</div>'
+    employee_options = '<option value="">Выберите сотрудника</option>' + "".join(
+        f'<option value="{employee.id}">{escape(employee.full_name)}{" · уволен" if not employee.is_active else ""}</option>'
+        for employee in employees
+    )
+    rows_source = list(selected_parts.items()) or [(0, 1.0)]
+    rows_html = ""
+    for employee_id, day_part in rows_source:
+        selected_employee_options = '<option value="">Выберите сотрудника</option>' + "".join(
+            f'<option value="{employee.id}"{" selected" if employee.id == employee_id else ""}>{escape(employee.full_name)}{" · уволен" if not employee.is_active else ""}</option>'
+            for employee in employees
+        )
+        rows_html += f"""
+        <div class="workforce-worker-row">
+          <select name="employee_id" aria-label="Сотрудник">{selected_employee_options}</select>
+          <select name="day_part" aria-label="Длительность смены">
+            <option value="1"{" selected" if float(day_part) > 0.5 else ""}>Полный день</option>
+            <option value="0.5"{" selected" if float(day_part) <= 0.5 else ""}>Половина дня</option>
+          </select>
+          <button class="secondary-btn mini" type="button" data-workforce-remove-worker>Удалить</button>
+        </div>
+        """
     return f"""
-    <div class="workforce-worker-picker">
-      {''.join(
-          f'''
-          <div class="workforce-worker-option">
-            <label>
-              <input type="checkbox" name="employee_id" value="{employee.id}" {'checked' if employee.id in selected_parts else ''}>
-              <span>{escape(employee.full_name)}</span>
-            </label>
-            <select name="day_part_{employee.id}">
-              <option value="1" {'selected' if selected_parts.get(employee.id, 1.0) > 0.5 else ''}>Полный день</option>
-              <option value="0.5" {'selected' if selected_parts.get(employee.id, 1.0) <= 0.5 else ''}>Половина дня</option>
-            </select>
-          </div>
-          '''
-          for employee in employees
-      )}
+    <div class="workforce-worker-picker" data-workforce-worker-picker data-employee-options="{escape(employee_options)}">
+      <div class="contract-table-subtle" style="grid-column:1 / -1;">Добавляйте только тех, кто реально вышел на объект.</div>
+      {rows_html}
+      <button class="secondary-btn mini workforce-add-worker-btn" type="button" data-workforce-add-worker>Добавить сотрудника</button>
     </div>
     """
 
@@ -14809,11 +14959,66 @@ def render_workforce_report_form(
         <select name="project_code" required>{project_options}</select>
       </div>
       <div class="field span-2">
-        <label>Комментарий</label>
-        <textarea name="comment" placeholder="Коротко, что делали на объекте">{escape(report.comment if report is not None else "")}</textarea>
+        <label>Комментарий по закрытию смены</label>
+        <textarea name="comment" placeholder="Например, кто опоздал, кого перевели, почему половина дня">{escape((report.people_comment or report.comment) if report is not None else "")}</textarea>
       </div>
       {render_workforce_worker_picker(builder_employees, selected_parts)}
       <button class="submit-btn" type="submit"{" disabled" if not builder_employees or not project_options_list else ""}>{submit_label}</button>
+    </form>
+    """
+
+
+def render_workforce_report_files(owner_chat_id: int, report_id: int, files: list) -> str:
+    if not files:
+        return ""
+    slides_html = "".join(
+        f'''
+        <figure class="construction-photo-slide{" is-active" if index == 0 else ""}" data-construction-photo-slide="1">
+          {f'<video src="/workforce/report-files/{file.id}/file?owner={owner_chat_id}" controls playsinline></video>' if file.file_kind == "video" else f'<img src="/workforce/report-files/{file.id}/file?owner={owner_chat_id}" alt="{escape(file.file_name or "Файл отчета")}">'}
+          <figcaption>{index + 1} / {len(files)}</figcaption>
+        </figure>
+        '''
+        for index, file in enumerate(files)
+    )
+    return f"""
+    <button class="secondary-btn construction-photo-view-btn" type="button" data-construction-carousel-open="workforce-report-files-{report_id}">
+      Смотреть
+      <span>{len(files)}</span>
+    </button>
+    <div class="construction-photo-modal" data-construction-carousel-modal="workforce-report-files-{report_id}" aria-hidden="true">
+      <div class="construction-photo-backdrop" data-construction-carousel-close="1"></div>
+      <div class="construction-photo-dialog" role="dialog" aria-modal="true" aria-label="Фото и видео отчета">
+        <button class="construction-photo-close" type="button" data-construction-carousel-close="1" aria-label="Закрыть">×</button>
+        <button class="construction-photo-arrow construction-photo-arrow-left" type="button" data-construction-carousel-prev="1" aria-label="Предыдущий файл">←</button>
+        <div class="construction-photo-stage" data-construction-carousel-stage="1">
+          {slides_html}
+        </div>
+        <button class="construction-photo-arrow construction-photo-arrow-right" type="button" data-construction-carousel-next="1" aria-label="Следующий файл">→</button>
+      </div>
+    </div>
+    """
+
+
+def render_workforce_work_report_form(
+    owner_chat_id: int,
+    selected_month: date,
+    report,
+    project_filter: str = "",
+    employee_filter: int = 0,
+    selected_day: date | None = None,
+) -> str:
+    action = f"/workforce/reports/{report.id}/description{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)}"
+    return f"""
+    <form class="form-grid" method="post" action="{action}" enctype="multipart/form-data">
+      <div class="field span-2">
+        <label>Выполненные работы на объекте</label>
+        <textarea name="work_description" placeholder="Что сделали за день на этом объекте">{escape(report.work_description or report.comment)}</textarea>
+      </div>
+      <div class="field span-2">
+        <label>Фото / видео отчет</label>
+        <input type="file" name="work_report_files" accept="image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp,video/mp4,.mp4,video/quicktime,.mov,video/webm,.webm,.m4v" multiple>
+      </div>
+      <button class="submit-btn" type="submit">Сохранить отчет</button>
     </form>
     """
 
@@ -15067,17 +15272,52 @@ def render_workforce_section(
             f'<li>{escape(employee_lookup.get(int(worker["employee_id"])).full_name if int(worker["employee_id"]) in employee_lookup else worker["employee_name"])} <span class="contract-table-subtle" style="display:inline;">· {escape(workforce_day_part_label(float(worker["day_part"])))}</span></li>'
             for worker in report.workers
         )
+        if not worker_rows:
+            worker_rows = (
+                '<li><span class="chip">Отчет из строительного раздела · люди не привязаны</span></li>'
+                if report.source_kind == "construction_report"
+                else '<li><span class="chip danger">Люди не закрыты</span></li>'
+            )
         report_units = sum(float(worker["day_part"]) for worker in report.workers)
+        people_comment = report.people_comment or ""
+        work_description = report.work_description or ""
+        report_files_html = render_workforce_report_files(owner_chat_id, report.id, report.files)
+        description_status = (
+            f'<div class="workforce-report-description">{escape(work_description)}</div>'
+            if work_description
+            else '<span class="chip danger">Описание не заполнено</span>'
+        )
+        files_status = report_files_html or '<span class="chip danger">Фото/видео не приложены</span>'
+        events = storage.list_mobile_work_report_events(owner_chat_id, report.id)
+        event_rows = "".join(
+            f'<li>{escape(event["actor_name"] or "Автор неизвестен")} · {escape(event["details"] or event["event_type"])} · {format_datetime(event["created_at"])}</li>'
+            for event in events[:5]
+        )
+        event_log = f"""
+        <details class="workforce-report-events">
+          <summary>Технический лог</summary>
+          <ul>{event_rows or '<li>Событий пока нет.</li>'}</ul>
+        </details>
+        """
         edit_control = ""
+        report_control = ""
         if has_permission(current_user, "workforce", "edit"):
             edit_control = f"""
             <details class="status-menu">
-              <summary><span class="secondary-btn mini">Изменить</span></summary>
-              <div class="status-popover align-right" data-modal-title="Редактирование смены · {escape(format_date(report.report_date))}" style="min-width:min(760px, 92vw);">
+              <summary><span class="secondary-btn mini">Изменить людей</span></summary>
+              <div class="status-popover align-right" data-modal-title="Редактирование закрытия смены · {escape(format_date(report.report_date))}" style="min-width:min(760px, 92vw);">
                 {render_workforce_report_form(owner_chat_id, selected_month, project_options_list, all_builder_employees, current_user, report, project_filter, employee_filter, selected_day)}
                 <form method="post" action="/workforce/reports/{report.id}/delete{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)}" onsubmit="return confirm('Удалить смену из учета рабочей силы?');" style="margin-top:12px;">
                   <button class="secondary-btn danger" type="submit">Удалить смену</button>
                 </form>
+              </div>
+            </details>
+            """
+            report_control = f"""
+            <details class="status-menu">
+              <summary><span class="secondary-btn mini">{"Редактировать отчет" if work_description or report.files else "Добавить отчет"}</span></summary>
+              <div class="status-popover align-right" data-modal-title="Отчет о работе · {escape(format_date(report.report_date))}" style="min-width:min(760px, 92vw);">
+                {render_workforce_work_report_form(owner_chat_id, selected_month, report, project_filter, employee_filter, selected_day)}
               </div>
             </details>
             """
@@ -15088,13 +15328,32 @@ def render_workforce_section(
               <td>
                 <div class="timeline-title">{escape(workforce_report_project_label(report))}</div>
                 <ol class="workforce-worker-list">{worker_rows}</ol>
-                {f'<div class="contract-table-subtle" style="white-space:pre-line;">{escape(report.comment)}</div>' if report.comment else ''}
+                {f'<div class="contract-table-subtle" style="white-space:pre-line;">{escape(people_comment)}</div>' if people_comment else ''}
               </td>
               <td class="nowrap">{format_date(report.report_date)}</td>
               <td class="nowrap">{len(report.workers)}</td>
               <td class="nowrap"><span class="payroll-amount">{escape(workforce_units_label(report_units))}</span></td>
               <td>{escape(report.created_by_name or "Автор неизвестен")}<div class="contract-table-subtle">{format_date(report.created_at.astimezone(VLADIVOSTOK_TZ).date() if report.created_at.tzinfo else report.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div></td>
               <td>{edit_control}</td>
+            </tr>
+            <tr class="workforce-report-detail-row">
+              <td></td>
+              <td colspan="6">
+                <div class="workforce-report-detail">
+                  <div>
+                    <div class="contract-table-subtle">Выполненные работы</div>
+                    {description_status}
+                  </div>
+                  <div>
+                    <div class="contract-table-subtle">Фото / видео</div>
+                    {files_status}
+                  </div>
+                  <div class="workforce-report-actions">
+                    {report_control}
+                    {event_log}
+                  </div>
+                </div>
+              </td>
             </tr>
             """
         )
@@ -21684,6 +21943,7 @@ self.addEventListener("notificationclick", (event) => {
             if not worker_items:
                 raise ValueError("Выберите хотя бы одного работягу")
             raw_report_id = form.get("report_id", "").strip()
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             if raw_report_id:
                 try:
                     report_id = int(raw_report_id)
@@ -21697,17 +21957,32 @@ self.addEventListener("notificationclick", (event) => {
                     project_labels[project_code],
                     worker_items,
                     form.get("comment", "").strip(),
+                    (current_user or {}).get("id"),
+                    actor_name,
                 ):
                     raise ValueError("Смена не найдена")
+                storage.update_mobile_work_report_description(
+                    current_owner,
+                    report_id,
+                    form.get("comment", "").strip(),
+                    (current_user or {}).get("id"),
+                    actor_name,
+                )
                 flash = "Смена обновлена."
             else:
-                actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
-                storage.add_mobile_work_report(
+                report_id = storage.add_mobile_work_report(
                     current_owner,
                     report_date,
                     project_code,
                     project_labels[project_code],
                     worker_items,
+                    form.get("comment", "").strip(),
+                    (current_user or {}).get("id"),
+                    actor_name,
+                )
+                storage.update_mobile_work_report_description(
+                    current_owner,
+                    report_id,
                     form.get("comment", "").strip(),
                     (current_user or {}).get("id"),
                     actor_name,
@@ -25013,6 +25288,7 @@ self.addEventListener("notificationclick", (event) => {
                 if (employee.employee_group or "admin") == "builders"
             ]
             worker_items = parse_workforce_worker_items(raw_form, builder_employees)
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             if not storage.update_mobile_work_report(
                 current_owner,
                 report_id,
@@ -25021,12 +25297,49 @@ self.addEventListener("notificationclick", (event) => {
                 project_labels[project_code],
                 worker_items,
                 form.get("comment", "").strip(),
+                (current_user or {}).get("id"),
+                actor_name,
             ):
                 raise ValueError("Смена не найдена")
             target_month = report_date.replace(day=1)
             return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, target_month, project_filter, employee_filter, selected_day)}&ok=1&flash={quote_plus('Смена обновлена.')}")
         except Exception as exc:
             return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&flash={quote_plus(f'Не удалось обновить смену: {exc}')}")
+
+    if path.startswith("/workforce/reports/") and path.endswith("/description") and method == "POST":
+        denied = guard("workforce", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        selected_month = parse_month_key(query.get("month", [""])[0]) or datetime.now(VLADIVOSTOK_TZ).date().replace(day=1)
+        project_filter = query.get("project", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        try:
+            selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        except ValueError:
+            selected_day = None
+        try:
+            employee_filter = int(query.get("employee", ["0"])[0] or "0")
+        except ValueError:
+            employee_filter = 0
+        try:
+            report_id = int(path.split("/")[3])
+            form, files = read_multipart_form_data(environ)
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+            if not storage.update_mobile_work_report_description(
+                current_owner,
+                report_id,
+                form.get("work_description", "").strip(),
+                (current_user or {}).get("id"),
+                actor_name,
+            ):
+                raise ValueError("Смена не найдена")
+            uploads = [upload for upload in files.get("work_report_files", []) if upload.filename.strip()]
+            if uploads:
+                save_workforce_report_files(storage, current_owner, report_id, uploads, (current_user or {}).get("id"), actor_name)
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&ok=1&flash={quote_plus('Отчет сохранен.')}")
+        except Exception as exc:
+            return redirect(start_response, f"/workforce{workforce_query_suffix(current_owner, selected_month, project_filter, employee_filter, selected_day)}&flash={quote_plus(f'Не удалось сохранить отчет: {exc}')}")
 
     if path.startswith("/workforce/reports/") and path.endswith("/delete") and method == "POST":
         denied = guard("workforce", "edit")
@@ -26065,6 +26378,75 @@ self.addEventListener("notificationclick", (event) => {
                 return [b"File not found"]
             start_response("200 OK", [("Content-Type", content_type)])
             return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
+    if path.startswith("/workforce/report-files/") and path.endswith("/file") and method == "GET":
+        denied = guard("workforce", "view")
+        if denied:
+            return denied
+        try:
+            file_id = int(path.split("/")[3])
+            report_file = storage.get_mobile_work_report_file(current_owner, file_id)
+            if report_file is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            absolute_path, _, content_type = resolve_workforce_report_file(storage, report_file)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            start_response("200 OK", [("Content-Type", content_type)])
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
+    if path.startswith("/workforce/report-files/") and path.endswith("/download") and method == "GET":
+        denied = guard("workforce", "view")
+        if denied:
+            return denied
+        try:
+            file_id = int(path.split("/")[3])
+            report_file = storage.get_mobile_work_report_file(current_owner, file_id)
+            if report_file is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            absolute_path, safe_filename, content_type = resolve_workforce_report_file(storage, report_file)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            start_response(
+                "200 OK",
+                [
+                    ("Content-Type", content_type),
+                    ("Content-Disposition", attachment_content_disposition(safe_filename)),
+                ],
+            )
+            return [absolute_path.read_bytes()]
+        except Exception:
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"Not found"]
+
+    if path.startswith("/workforce/report-files/") and path.endswith("/preview") and method == "GET":
+        denied = guard("workforce", "view")
+        if denied:
+            return denied
+        try:
+            file_id = int(path.split("/")[3])
+            report_file = storage.get_mobile_work_report_file(current_owner, file_id)
+            if report_file is None:
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            absolute_path, safe_filename, content_type = resolve_workforce_report_file(storage, report_file)
+            if not absolute_path.exists():
+                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+                return [b"File not found"]
+            file_url = f"/workforce/report-files/{report_file.id}/file?owner={current_owner}"
+            download_url = f"/workforce/report-files/{report_file.id}/download?owner={current_owner}"
+            html = render_legal_file_preview_page(file_url, download_url, safe_filename, content_type)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
