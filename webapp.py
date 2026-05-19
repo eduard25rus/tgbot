@@ -6336,6 +6336,9 @@ def layout(
     .workforce-table td:not(:nth-child(2)) {{
       text-align: center;
     }}
+    .workforce-table th:not(:nth-child(2)) {{
+      text-align: center;
+    }}
     .workforce-main-row.has-report-detail td {{
       border-bottom: 0;
       padding-bottom: 8px;
@@ -15417,7 +15420,7 @@ def render_workforce_section(
             report_added_html = f"""
             <div class="workforce-report-meta">
               {escape(report_added_name)}
-              <div class="contract-table-subtle">{format_datetime(report_added_at)}</div>
+              <div class="contract-table-subtle">{format_date(report_added_at.astimezone(VLADIVOSTOK_TZ).date() if report_added_at.tzinfo else report_added_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date())}</div>
             </div>
             """
         edit_control = ""
