@@ -1104,15 +1104,17 @@ def notify_legal_letter_created(storage: Storage, owner_chat_id: int, direction:
     return send_cash_push(storage, owner_chat_id, safe_payload, detailed_payload, push_group="letters")
 
 
-def notify_work_report_created(storage: Storage, owner_chat_id: int, report_date: date) -> tuple[int, int]:
+def notify_work_report_created(storage: Storage, owner_chat_id: int, report_id: int, report_date: date, project_label: str) -> tuple[int, int]:
     date_label = f"{report_date.day} {RU_MONTH_GENITIVE_NAMES[report_date.month]}"
+    project_text = project_label.strip() or "объект не указан"
     payload = {
-        "title": f"Закрыта смена за {date_label}",
-        "body": "Откройте приложение для проверки",
-        "tag": f"work-report-{report_date.isoformat()}",
+        "title": f"Закрыта смена, {date_label}",
+        "body": f"Объект: {project_text}",
+        "tag": f"work-report-{report_date.isoformat()}-{report_id}",
         "url": f"/cashoperations?screen=work&work_date={report_date.isoformat()}",
         "data": {
             "kind": "work_report",
+            "report_id": report_id,
         },
     }
     return send_cash_push(storage, owner_chat_id, payload, payload, push_group="work")
@@ -22276,7 +22278,7 @@ self.addEventListener("notificationclick", (event) => {
                     (current_user or {}).get("id"),
                     actor_name,
                 )
-                notify_work_report_created(storage, current_owner, report_date)
+                notify_work_report_created(storage, current_owner, report_id, report_date, project_labels[project_code])
                 flash = "Отчет о работе сохранен."
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
