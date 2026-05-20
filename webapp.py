@@ -6166,10 +6166,10 @@ def layout(
       margin-bottom: 10px;
     }}
     .stat-value {{
-      font-size: clamp(1.85rem, 2vw, 2.75rem);
+      font-size: clamp(1.45rem, 1.35vw, 2.1rem);
       font-weight: 700;
-      line-height: 1.02;
-      letter-spacing: -0.03em;
+      line-height: 1.08;
+      letter-spacing: 0;
       margin-bottom: 6px;
       white-space: nowrap;
       font-variant-numeric: tabular-nums;
