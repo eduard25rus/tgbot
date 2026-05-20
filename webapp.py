@@ -5440,6 +5440,7 @@ def layout(
     }}
     .expenses-day-card-bottom.is-empty {{
       color: var(--ink);
+      font-weight: 400;
     }}
     .expenses-day-card-meta {{
       font-size: 12px;
