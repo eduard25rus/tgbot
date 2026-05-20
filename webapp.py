@@ -5445,7 +5445,7 @@ def layout(
       font-size: 12px;
       line-height: 1.22;
       color: var(--muted);
-      font-weight: 600;
+      font-weight: 400;
     }}
     .dds-filter-panel {{
       margin-top: 14px;
