@@ -21706,20 +21706,6 @@ def render_expenses_section(
             ]
         ).casefold()
         return query_filter.casefold() in haystack
-    filtered_entries = [
-        entry
-        for entry in source_entries
-        if (not project_filter or entry.project_code == project_filter)
-        and (not category_filter or entry.category_code == category_filter)
-        and (adjustment_filter != "needs" or entry.needs_adjustment)
-        and (not source_filter or (entry.payment_source or "bank") == source_filter)
-        and (not cashbox_filter or cashbox_code_from_entry(entry, cashboxes) == cashbox_filter)
-        and entry_matches_query(entry)
-        and (date_from is None or entry.expense_date >= date_from)
-        and (date_to is None or entry.expense_date <= date_to)
-    ]
-    if selected_day is not None and date_from is None and date_to is None:
-        filtered_entries = [entry for entry in filtered_entries if entry.expense_date == selected_day]
     def is_cash_income_display(entry) -> bool:
         return entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
     def is_bank_cash_transfer(entry) -> bool:
@@ -21741,6 +21727,33 @@ def render_expenses_section(
                 and source_match.group(1).strip().casefold().startswith("касса ")
             )
         )
+    def entry_matches_source_filter(entry) -> bool:
+        if not source_filter:
+            return True
+        payment_source = entry.payment_source or "bank"
+        if source_filter == "bank":
+            if is_cashbox_internal_transfer(entry):
+                return False
+            if is_cash_income_display(entry) and not entry.import_source:
+                return False
+            return payment_source == "bank"
+        if source_filter == "cash":
+            return payment_source == "cash" or is_cash_income_display(entry) or is_cashbox_internal_transfer(entry)
+        return True
+    filtered_entries = [
+        entry
+        for entry in source_entries
+        if (not project_filter or entry.project_code == project_filter)
+        and (not category_filter or entry.category_code == category_filter)
+        and (adjustment_filter != "needs" or entry.needs_adjustment)
+        and entry_matches_source_filter(entry)
+        and (not cashbox_filter or cashbox_code_from_entry(entry, cashboxes) == cashbox_filter)
+        and entry_matches_query(entry)
+        and (date_from is None or entry.expense_date >= date_from)
+        and (date_to is None or entry.expense_date <= date_to)
+    ]
+    if selected_day is not None and date_from is None and date_to is None:
+        filtered_entries = [entry for entry in filtered_entries if entry.expense_date == selected_day]
     def is_income_display(entry) -> bool:
         return not is_cashbox_internal_transfer(entry) and (
             (entry.operation_type or "expense") == "income" or is_cash_income_display(entry)
