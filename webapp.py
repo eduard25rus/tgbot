@@ -5570,6 +5570,29 @@ def layout(
       font-size: 12px;
       line-height: 1.25;
     }}
+    .dds-money-stats {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }}
+    .dds-money-breakdown {{
+      display: grid;
+      gap: 3px;
+      margin-top: 3px;
+    }}
+    .dds-money-line {{
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      line-height: 1.25;
+    }}
+    .dds-money-line span {{
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }}
+    .dds-money-line strong {{
+      white-space: nowrap;
+      font-weight: 700;
+    }}
     .dds-filter-panel {{
       margin-top: 14px;
       padding: 16px;
@@ -8697,6 +8720,7 @@ def layout(
       }}
     }}
     @media (max-width: 960px) {{
+      .dds-money-stats,
       .stats-contracts {{
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       }}
@@ -21856,60 +21880,73 @@ def render_expenses_section(
         <div class="dds-filter-summary">{escape(filter_summary)}</div>
       </form>
     """
-    cashbox_stat_cards = "".join(
+    cashbox_balance_lines = "".join(
         f"""
-      <article class="card stat-card">
-        <div class="stat-label">{escape(item["label"])}</div>
-        <div class="stat-value">{format_amount(cashbox_balances.get(item["code"], 0))}</div>
-        <div class="stat-note">Расчетный остаток по кассовым операциям</div>
-      </article>
+        <div class="dds-money-line">
+          <span>{escape(item["label"])}</span>
+          <strong>{format_amount(cashbox_balances.get(item["code"], 0))}</strong>
+        </div>
         """
         for item in cashboxes
-    )
+    ) or """
+        <div class="dds-money-line">
+          <span>Кассы</span>
+          <strong>—</strong>
+        </div>
+    """
     bank_account_lines = "".join(
         f"""
-        <div class="bank-account-balance-line">
+        <div class="dds-money-line bank-account-balance-line">
           <span>{escape(bank_account_display_label(index, item))}</span>
           <strong>{format_amount(item["closing_balance"])}</strong>
         </div>
         """
-        for index, item in enumerate(bank_account_balances[:2])
+        for index, item in enumerate(bank_account_balances)
     )
     if len(bank_account_balances) == 1:
         bank_account_lines += """
-        <div class="bank-account-balance-line">
+        <div class="dds-money-line bank-account-balance-line">
           <span>Резерв Сбербанк</span>
           <strong>—</strong>
         </div>
         """
     elif not bank_account_balances:
         bank_account_lines = """
-        <div class="bank-account-balance-line">
+        <div class="dds-money-line bank-account-balance-line">
           <span>Фелис Сбербанк</span>
           <strong>—</strong>
         </div>
-        <div class="bank-account-balance-line">
+        <div class="dds-money-line bank-account-balance-line">
           <span>Резерв Сбербанк</span>
           <strong>—</strong>
         </div>
         """
     bank_accounts_note = (
-        f'<div class="bank-account-balance-list">{bank_account_lines}</div>'
+        f'<div class="dds-money-breakdown bank-account-balance-list">{bank_account_lines}</div>'
         if bank_account_lines
         else "Загрузите выписки 1С с остатками"
     )
     return f"""
-    <section class="stats">
+    <section class="stats dds-money-stats">
       <article class="card stat-card">
         <div class="stat-label">Остатки по счетам</div>
         <div class="stat-value">{format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}</div>
         <div class="stat-note">{bank_accounts_note}</div>
       </article>
-      {cashbox_stat_cards}
+      <article class="card stat-card">
+        <div class="stat-label">Кассы</div>
+        <div class="stat-value">{format_amount(cashbox_total_balance)}</div>
+        <div class="stat-note"><div class="dds-money-breakdown">{cashbox_balance_lines}</div></div>
+      </article>
       <article class="card stat-card">
         <div class="stat-label">Итого денег</div>
         <div class="stat-value">{format_amount(company_money_total) if company_money_total is not None else "—"}</div>
-        <div class="stat-note">Счет {format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}<br>Кассы {format_amount(cashbox_total_balance)}</div>
+        <div class="stat-note">
+          <div class="dds-money-breakdown">
+            <div class="dds-money-line"><span>Счета</span><strong>{format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}</strong></div>
+            <div class="dds-money-line"><span>Кассы</span><strong>{format_amount(cashbox_total_balance)}</strong></div>
+          </div>
+        </div>
       </article>
     </section>
     <section class="card panel" style="margin-top:22px;">
