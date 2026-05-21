@@ -7335,6 +7335,9 @@ def layout(
     .contract-upcoming-title {{
       font-weight: 400;
     }}
+    .shell .timeline-title.contract-upcoming-title {{
+      font-weight: 400;
+    }}
     .calendar-shell {{
       display: grid;
       gap: 10px;
