@@ -5246,17 +5246,34 @@ def layout(
       --warn: #b7791f;
       --danger: #b83232;
       --card-shadow: 0 20px 45px rgba(22, 35, 47, 0.08);
+      --font-ui: "Avenir Next", "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      --font-weight-regular: 400;
+      --font-weight-medium: 600;
+      --font-weight-bold: 700;
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
-      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      font-family: var(--font-ui);
+      font-weight: var(--font-weight-regular);
       color: var(--ink);
       overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
       background:
         radial-gradient(circle at top left, rgba(217, 119, 6, 0.16), transparent 22%),
         radial-gradient(circle at top right, rgba(29, 92, 99, 0.18), transparent 28%),
         linear-gradient(180deg, #f6f0e8 0%, #efe8de 100%);
+    }}
+    button,
+    input,
+    select,
+    textarea {{
+      font-family: inherit;
+    }}
+    b,
+    strong {{
+      font-weight: var(--font-weight-bold);
     }}
     a {{ color: inherit; text-decoration: none; }}
     .shell {{
@@ -5685,7 +5702,7 @@ def layout(
     }}
     .dds-import-source-title {{
       color: var(--ink);
-      font-weight: 800;
+      font-weight: var(--font-weight-bold);
       line-height: 1.18;
     }}
     .dds-import-meta-row,
@@ -5704,7 +5721,7 @@ def layout(
       white-space: nowrap;
     }}
     .dds-import-counts strong {{
-      font-weight: 800;
+      font-weight: var(--font-weight-bold);
     }}
     .dds-import-log-message {{
       color: var(--muted);
@@ -8790,6 +8807,31 @@ def layout(
       }}
     }}
     {theme_css}
+    /* CRM typography contract: desktop CRM uses one UI font and caps accents at 700. */
+    .shell,
+    .shell button,
+    .shell input,
+    .shell select,
+    .shell textarea {{
+      font-family: var(--font-ui);
+    }}
+    .shell :is(
+      b,
+      strong,
+      h1,
+      h2,
+      h3,
+      h4,
+      .panel-title,
+      .timeline-title,
+      .stat-value,
+      .money-big,
+      .contract-name,
+      .dds-import-source-title,
+      .dds-import-counts strong
+    ) {{
+      font-weight: var(--font-weight-bold);
+    }}
   </style>
 </head>
 <body class="{body_theme_class.strip()}">
