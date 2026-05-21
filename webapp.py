@@ -734,18 +734,19 @@ def serve_resolved_upload_file(start_response, resolved: ResolvedUploadFile, *, 
 
 
 def render_legal_file_preview_page(file_url: str, download_url: str, safe_filename: str, content_type: str) -> str:
+    named_file_url = file_url_with_name(file_url, safe_filename)
     if content_type == "application/pdf":
         preview_html = f'''
-        <object data="{file_url}" type="application/pdf" style="width:100%; height:100vh; border:none; background:#f7f3ec;">
+        <object data="{named_file_url}" type="application/pdf" style="width:100%; height:100vh; border:none; background:#f7f3ec;">
           <div style="padding:24px; font-family:inherit;">
             Предпросмотр PDF не загрузился.
           </div>
         </object>
         '''
     elif content_type.startswith("image/"):
-        preview_html = f'<div style="display:flex; justify-content:center; align-items:center; min-height:100vh; background:#f7f3ec; padding:24px;"><img src="{file_url}" alt="{escape(safe_filename)}" style="max-width:100%; max-height:90vh; object-fit:contain; border-radius:16px;"></div>'
+        preview_html = f'<div style="display:flex; justify-content:center; align-items:center; min-height:100vh; background:#f7f3ec; padding:24px;"><img src="{named_file_url}" alt="{escape(safe_filename)}" style="max-width:100%; max-height:90vh; object-fit:contain; border-radius:16px;"></div>'
     elif content_type.startswith("video/"):
-        preview_html = f'<div style="display:flex; justify-content:center; align-items:center; min-height:100vh; background:#111821; padding:24px;"><video src="{file_url}" controls playsinline style="max-width:100%; max-height:90vh; border-radius:16px; background:#000;"></video></div>'
+        preview_html = f'<div style="display:flex; justify-content:center; align-items:center; min-height:100vh; background:#111821; padding:24px;"><video src="{named_file_url}" controls playsinline style="max-width:100%; max-height:90vh; border-radius:16px; background:#000;"></video></div>'
     else:
         preview_html = f'''
         <div style="min-height:100vh; display:flex; align-items:center; justify-content:center; background:#f7f3ec; padding:24px;">
@@ -874,7 +875,7 @@ def render_cash_work_report_files_preview_page(report, owner_chat_id: int) -> st
     slides_html = "".join(
         f"""
         <figure class="cash-work-preview-slide{' active' if index == 0 else ''}" data-cash-work-preview-slide>
-          {'<video src="/cashoperations/work-report-files/%d/file" controls playsinline></video>' % file.id if file.file_kind == 'video' else f'<img src="/cashoperations/work-report-files/{file.id}/file" alt="{escape(file.file_name or "Фотоотчет")}">'}
+          {'<video src="%s" controls playsinline></video>' % file_url_with_name(f"/cashoperations/work-report-files/{file.id}/file", secure_upload_name(file.file_name or "video.mp4")) if file.file_kind == 'video' else f'<img src="{file_url_with_name(f"/cashoperations/work-report-files/{file.id}/file", secure_upload_name(file.file_name or "photo.jpg"))}" alt="{escape(file.file_name or "Фотоотчет")}">'}
           <figcaption>{index + 1} / {len(files)}</figcaption>
         </figure>
         """
@@ -1057,6 +1058,16 @@ def render_cash_work_report_files_preview_page(report, owner_chat_id: int) -> st
 def attachment_content_disposition(filename: str) -> str:
     ascii_fallback = secure_upload_name(filename or "file")
     return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quote(filename or ascii_fallback, safe="")}'
+
+
+def file_url_with_name(file_url: str, safe_filename: str) -> str:
+    if not safe_filename:
+        return file_url
+    path_part, separator, query_part = file_url.partition("?")
+    if not path_part.endswith("/file"):
+        return file_url
+    named_path = f"{path_part}/{quote(safe_filename, safe='')}"
+    return f"{named_path}{separator}{query_part}" if separator else named_path
 
 
 def save_legal_letter_uploads(storage: Storage, owner_chat_id: int, contract_id: int | None, letter_id: int, uploads: list[UploadedFile]) -> None:
@@ -23468,7 +23479,9 @@ self.addEventListener("notificationclick", (event) => {
             start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Forbidden"]
         try:
-            file_id = int(path.split("/")[3])
+            path_parts = path.strip("/").split("/")
+            file_id = int(path_parts[2])
+            action = path_parts[3] if len(path_parts) > 3 else ""
             report_file = storage.get_mobile_work_report_file(current_owner, file_id)
             if report_file is None:
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
@@ -23477,15 +23490,15 @@ self.addEventListener("notificationclick", (event) => {
             if not resolved_file.storage.file_exists(resolved_file.key):
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
-            if path.endswith("/preview"):
+            if action == "preview":
                 file_url = f"/cashoperations/work-report-files/{report_file.id}/file"
                 download_url = f"/cashoperations/work-report-files/{report_file.id}/download"
                 html = render_legal_file_preview_page(file_url, download_url, resolved_file.safe_filename, resolved_file.content_type)
                 start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
                 return [html.encode("utf-8")]
-            if path.endswith("/download"):
+            if action == "download":
                 return serve_resolved_upload_file(start_response, resolved_file, download=True)
-            if path.endswith("/file"):
+            if action == "file":
                 return serve_resolved_upload_file(start_response, resolved_file)
         except Exception:
             pass
@@ -27903,7 +27916,7 @@ self.addEventListener("notificationclick", (event) => {
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
 
-    if path.startswith("/contracts/construction-photos/") and path.endswith("/file") and method == "GET":
+    if path.startswith("/contracts/construction-photos/") and "/file" in path and method == "GET":
         denied = guard("contracts", "view")
         if denied:
             return denied
@@ -27924,7 +27937,7 @@ self.addEventListener("notificationclick", (event) => {
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
 
-    if path.startswith("/workforce/report-files/") and path.endswith("/file") and method == "GET":
+    if path.startswith("/workforce/report-files/") and "/file" in path and method == "GET":
         denied = guard("workforce", "view")
         if denied:
             return denied

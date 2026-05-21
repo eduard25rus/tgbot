@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 
 @dataclass(frozen=True)
@@ -199,7 +200,10 @@ class S3FileStorage(FileStorage):
         if content_type:
             params["ResponseContentType"] = content_type
         if filename:
-            params["ResponseContentDisposition"] = f'{disposition}; filename="{filename}"'
+            ascii_filename = "".join(ch if ord(ch) < 128 and ch not in {'"', "\\"} else "_" for ch in filename) or "file"
+            params["ResponseContentDisposition"] = (
+                f'{disposition}; filename="{ascii_filename}"; filename*=UTF-8\'\'{quote(filename, safe="")}'
+            )
         return self._client.generate_presigned_url("get_object", Params=params, ExpiresIn=self.presigned_ttl)
 
 
