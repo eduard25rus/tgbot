@@ -17258,6 +17258,8 @@ def bank_account_display_label(index: int, balance: dict) -> str:
             account, label = item.split("=", 1)
             if account.strip() == account_number and label.strip():
                 return label.strip()
+    if account_number.endswith("1806"):
+        return "Резерв Сбербанк"
     if index == 0:
         return "Фелис Сбербанк"
     if index == 1:
