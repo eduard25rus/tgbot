@@ -16251,6 +16251,13 @@ def render_workforce_section(
     today = datetime.now(VLADIVOSTOK_TZ).date()
     selected_month = selected_month or today.replace(day=1)
     next_month = month_add(selected_month, 1)
+    if (
+        selected_day is None
+        and not project_filter
+        and not employee_filter
+        and selected_month == today.replace(day=1)
+    ):
+        selected_day = today
     entries = storage.list_expense_entries(owner_chat_id)
     project_options_list = expense_project_options(storage, owner_chat_id, entries, include_legacy_entries=False)
     project_labels = dict(project_options_list)
@@ -16473,8 +16480,8 @@ def render_workforce_section(
             day_classes.append("is-selected")
         if day_stats:
             project_lines = "".join(
-                f'<span>{escape(project_label)} · {len(project_data["people"])} чел. · {escape(workforce_units_label(float(project_data["units"])))} см.</span>'
-                for project_label, project_data in sorted(day_stats["projects"].items())[:2]
+                f'<span>{escape(project_label)}</span>'
+                for project_label in sorted(day_stats["projects"])[:2]
             )
             more_projects = len(day_stats["projects"]) - 2
             if more_projects > 0:
@@ -16698,19 +16705,7 @@ def render_workforce_section(
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     return f"""
     {stats}
-    <section id="workforce-calendar" class="card panel workforce-calendar-panel" style="margin-top:22px;">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">Календарь смен</h2>
-          <div class="panel-sub">Краткая сводка по каждому дню месяца: люди, смены и объекты.</div>
-        </div>
-        <div class="action-row" style="gap:10px;">{registry_filter}{add_form}</div>
-      </div>
       {flash_html}
-      {f'<div class="contract-table-subtle" style="margin-bottom:12px;">{escape(detail_filter_caption)}</div>' if detail_filter_caption else ''}
-      {month_form}
-      {workforce_calendar_html}
-    </section>
     {f'''
     <section id="workforce-detail" class="card panel workforce-detail-panel" style="margin-top:22px;">
       <div class="panel-head">
@@ -16740,6 +16735,18 @@ def render_workforce_section(
       </table>
     </section>
     ''' if detail_active else ''}
+    <section id="workforce-calendar" class="card panel workforce-calendar-panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Календарь смен</h2>
+          <div class="panel-sub">Краткая сводка по каждому дню месяца: люди, смены и объекты.</div>
+        </div>
+        <div class="action-row" style="gap:10px;">{registry_filter}{add_form}</div>
+      </div>
+      {f'<div class="contract-table-subtle" style="margin-bottom:12px;">{escape(detail_filter_caption)}</div>' if detail_filter_caption else ''}
+      {month_form}
+      {workforce_calendar_html}
+    </section>
     {object_card_html}
     <div class="workforce-summary-grid">
       <section class="card panel">
