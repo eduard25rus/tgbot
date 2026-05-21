@@ -5630,14 +5630,24 @@ def layout(
       border-color: rgba(189,199,211,0.92);
       box-shadow: none;
     }}
+    .dds-source-detail-field select.is-hidden {{
+      display: none;
+    }}
     .dds-filter-actions {{
       display: flex;
       gap: 8px;
       align-items: center;
+      align-self: end;
       flex-wrap: wrap;
     }}
-    .dds-filter-actions .secondary-btn {{
+    .dds-filter-actions .secondary-btn,
+    .dds-filter-actions button.secondary-btn {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       min-height: 46px;
+      padding-top: 0;
+      padding-bottom: 0;
     }}
     .dds-filter-summary {{
       grid-column: 1 / -1;
@@ -10507,6 +10517,31 @@ function initAutoSubmitForms() {{
   }});
 }}
 
+function syncDdsSourceDetail(form) {{
+  if (!form) {{
+    return;
+  }}
+  const sourceSelect = form.querySelector("[data-dds-source-filter]");
+  const label = form.querySelector("[data-dds-source-detail-label]");
+  const source = sourceSelect ? sourceSelect.value : "";
+  form.querySelectorAll("[data-dds-source-detail]").forEach((select) => {{
+    const mode = select.dataset.ddsSourceDetail || "all";
+    const isActive = (source === "bank" && mode === "bank") || (source === "cash" && mode === "cash") || (!source && mode === "all");
+    select.classList.toggle("is-hidden", !isActive);
+    select.disabled = !isActive;
+    if (!isActive && (mode === "bank" || mode === "cash")) {{
+      select.value = "";
+    }}
+  }});
+  if (label) {{
+    label.textContent = source === "bank" ? "Расчетный счет" : source === "cash" ? "Касса" : "Детализация";
+  }}
+}}
+
+function initDdsFilterForms() {{
+  document.querySelectorAll('[data-dds-filter-form="1"]').forEach(syncDdsSourceDetail);
+}}
+
 function syncDdsExpenseForm(form) {{
   if (!form) {{
     return;
@@ -10567,6 +10602,11 @@ function initDdsExpenseForms() {{
 }}
 
 document.addEventListener("change", (event) => {{
+  const sourceFilter = event.target.closest("[data-dds-source-filter]");
+  if (sourceFilter) {{
+    syncDdsSourceDetail(sourceFilter.closest('[data-dds-filter-form="1"]'));
+    return;
+  }}
   const ddsControl = event.target.closest("[data-dds-category-select], [data-dds-expense-form='1'] select[name='payment_source']");
   if (!ddsControl) {{
     return;
@@ -10615,6 +10655,7 @@ window.addEventListener("load", () => {{
   initSidebarNavGroups();
   initExpensesDayCarousel();
   initAutoSubmitForms();
+  initDdsFilterForms();
   initDdsExpenseForms();
   document.querySelectorAll('.contract-create-form').forEach((form) => {{
     const stageCountInput = form.querySelector('[data-stage-count-input]');
@@ -16818,6 +16859,7 @@ def expenses_filter_args_from_query(query: dict[str, list[str]]) -> dict:
             date_to = parsed
     return {
         "source_filter": query.get("source", [""])[0].strip(),
+        "account_filter": query.get("account", [""])[0].strip(),
         "cashbox_filter": query.get("cashbox", [""])[0].strip(),
         "query_filter": query.get("q", [""])[0].strip(),
         "date_from": date_from,
@@ -16828,6 +16870,7 @@ def expenses_filter_args_from_query(query: dict[str, list[str]]) -> dict:
 def expenses_extra_query_from_filters(filters: dict) -> str:
     parts = [
         ("source", filters.get("source_filter", "")),
+        ("account", filters.get("account_filter", "")),
         ("cashbox", filters.get("cashbox_filter", "")),
         ("q", filters.get("query_filter", "")),
         ("date_from", filters["date_from"].isoformat() if filters.get("date_from") else ""),
@@ -17265,6 +17308,21 @@ def bank_account_display_label(index: int, balance: dict) -> str:
     if index == 1:
         return "Резерв Сбербанк"
     return f"Счет *{account_number[-4:]}" if account_number else f"Счет {index + 1}"
+
+
+def bank_account_number_from_expense_entry(entry) -> str:
+    raw_text = entry.raw_import_text or ""
+    if not raw_text:
+        return ""
+    values = {}
+    for line in raw_text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    if (entry.operation_type or "expense") == "income":
+        return values.get("ПолучательСчет", "") or values.get("ПолучательРасчСчет", "")
+    return values.get("ПлательщикСчет", "") or values.get("ПлательщикРасчСчет", "")
 
 
 def mobile_cash_can_modify_cashbox(cash_access: dict | None, cashbox_code: str) -> bool:
@@ -21660,6 +21718,7 @@ def render_expenses_section(
     selected_day: date | None = None,
     day_anchor: date | None = None,
     source_filter: str = "",
+    account_filter: str = "",
     cashbox_filter: str = "",
     query_filter: str = "",
     date_from: date | None = None,
@@ -21675,6 +21734,8 @@ def render_expenses_section(
     category_labels = dict(category_options_list)
     project_colors = expense_project_color_map(storage, owner_chat_id)
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
+    bank_account_balances = storage.list_latest_bank_account_balances(owner_chat_id)
+    bank_account_numbers = {str(item.get("account_number", "")).strip() for item in bank_account_balances}
     if project_filter and project_filter not in project_labels:
         project_filter = ""
     if category_filter and category_filter not in category_labels:
@@ -21683,7 +21744,9 @@ def render_expenses_section(
         adjustment_filter = ""
     if source_filter not in {"", "bank", "cash"}:
         source_filter = ""
-    if cashbox_filter not in {str(item.get("code", "")) for item in cashboxes}:
+    if source_filter != "bank" or account_filter not in bank_account_numbers:
+        account_filter = ""
+    if source_filter != "cash" or cashbox_filter not in {str(item.get("code", "")) for item in cashboxes}:
         cashbox_filter = ""
     query_filter = " ".join(query_filter.split())
     if date_from and date_to and date_from > date_to:
@@ -21740,6 +21803,10 @@ def render_expenses_section(
         if source_filter == "cash":
             return payment_source == "cash" or is_cash_income_display(entry) or is_cashbox_internal_transfer(entry)
         return True
+    def entry_matches_account_filter(entry) -> bool:
+        if not account_filter:
+            return True
+        return bank_account_number_from_expense_entry(entry) == account_filter
     filtered_entries = [
         entry
         for entry in source_entries
@@ -21747,6 +21814,7 @@ def render_expenses_section(
         and (not category_filter or entry.category_code == category_filter)
         and (adjustment_filter != "needs" or entry.needs_adjustment)
         and entry_matches_source_filter(entry)
+        and entry_matches_account_filter(entry)
         and (not cashbox_filter or cashbox_code_from_entry(entry, cashboxes) == cashbox_filter)
         and entry_matches_query(entry)
         and (date_from is None or entry.expense_date >= date_from)
@@ -21793,7 +21861,6 @@ def render_expenses_section(
           <div class="expenses-day-card-meta">Расход: {escape(format_amount(expense_total))}</div>
         """
     today = datetime.now(VLADIVOSTOK_TZ).date()
-    bank_account_balances = storage.list_latest_bank_account_balances(owner_chat_id)
     cashbox_balances = {
         item["code"]: cashbox_balance_for_code(active_entries, cashboxes, item["code"])
         for item in cashboxes
@@ -21840,6 +21907,15 @@ def render_expenses_section(
         f'<option value="{code}"{" selected" if code == source_filter else ""}>{escape(label)}</option>'
         for code, label in [("", "Все источники"), ("bank", "Расчетный счет"), ("cash", "Касса")]
     )
+    account_options = "".join(
+        f'<option value="{escape(str(item.get("account_number", "")))}"{" selected" if str(item.get("account_number", "")).strip() == account_filter else ""}>{escape(bank_account_display_label(index, item))}</option>'
+        for index, item in enumerate(bank_account_balances)
+        if str(item.get("account_number", "")).strip()
+    )
+    if account_options:
+        account_options = '<option value="">Все расчетные счета</option>' + account_options
+    else:
+        account_options = '<option value="">Счета появятся после выписки</option>'
     cashbox_options = "".join(
         f'<option value="{code}"{" selected" if code == cashbox_filter else ""}>{escape(label)}</option>'
         for code, label in [("", "Все кассы"), *[(str(item["code"]), str(item["label"])) for item in cashboxes]]
@@ -21852,12 +21928,13 @@ def render_expenses_section(
     )
     active_filter_count = sum(
         1
-        for value in [project_filter, category_filter, adjustment_filter, source_filter, cashbox_filter, query_filter, date_from, date_to]
+        for value in [project_filter, category_filter, adjustment_filter, source_filter, account_filter, cashbox_filter, query_filter, date_from, date_to]
         if value
     )
     def build_extra_filter_query(*, include_dates: bool = True) -> str:
         parts = [
             ("source", source_filter),
+            ("account", account_filter),
             ("cashbox", cashbox_filter),
             ("q", query_filter),
         ]
@@ -22084,10 +22161,11 @@ def render_expenses_section(
         else "Поиск смотрит контрагента, назначение, номер документа, автора, объект и группу."
     )
     dds_filters_html = f"""
-      <form class="dds-filter-panel" method="get" action="/expenses" data-auto-submit-form="1">
+      <form class="dds-filter-panel" method="get" action="/expenses" data-dds-filter-form="1">
         <input type="hidden" name="owner" value="{owner_chat_id}">
         <input type="hidden" name="tab" value="{escape(active_tab)}">
         <input type="hidden" name="day" value="{escape(selected_day_input)}">
+        {f'<input type="hidden" name="adjustment" value="{escape(adjustment_filter)}">' if adjustment_filter else ''}
         <div class="field">
           <label>Поиск</label>
           <input type="search" name="q" value="{escape(query_filter)}" placeholder="Связь, контрагент, номер, автор">
@@ -22102,11 +22180,15 @@ def render_expenses_section(
         </div>
         <div class="field">
           <label>Источник</label>
-          <select name="source">{source_options}</select>
+          <select name="source" data-dds-source-filter>{source_options}</select>
         </div>
-        <div class="field">
-          <label>Касса</label>
-          <select name="cashbox">{cashbox_options}</select>
+        <div class="field dds-source-detail-field" data-dds-source-detail-field>
+          <label data-dds-source-detail-label>Детализация</label>
+          <select name="account" data-dds-source-detail="bank">{account_options}</select>
+          <select name="cashbox" data-dds-source-detail="cash">{cashbox_options}</select>
+          <select data-dds-source-detail="all">
+            <option>Выберите источник</option>
+          </select>
         </div>
         <div class="field">
           <label>Объект</label>
@@ -22115,10 +22197,6 @@ def render_expenses_section(
         <div class="field">
           <label>Группа</label>
           <select name="category">{filter_category_options}</select>
-        </div>
-        <div class="field">
-          <label>Корректировка</label>
-          <select name="adjustment">{adjustment_options}</select>
         </div>
         <div class="dds-filter-actions">
           <button class="secondary-btn mini" type="submit">Найти</button>
