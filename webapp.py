@@ -7024,16 +7024,28 @@ def layout(
     .workforce-summary-grid {{
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 22px;
-      margin-top: 22px;
+      gap: 0;
+      margin-top: 18px;
+      border-top: 1px solid var(--line);
     }}
     .workforce-summary-toolbar {{
       display: flex;
       align-items: flex-end;
       justify-content: space-between;
       gap: 12px;
-      margin-top: 22px;
       flex-wrap: wrap;
+    }}
+    .workforce-summary-section {{
+      min-width: 0;
+      padding-top: 18px;
+    }}
+    .workforce-summary-section + .workforce-summary-section {{
+      padding-left: 22px;
+      margin-left: 22px;
+      border-left: 1px solid var(--line);
+    }}
+    .workforce-summary-section .panel-head {{
+      margin-bottom: 12px;
     }}
     .workforce-summary-period-switch {{
       display: flex;
@@ -8894,6 +8906,14 @@ def layout(
       }}
       .workforce-summary-grid {{
         grid-template-columns: 1fr;
+      }}
+      .workforce-summary-section + .workforce-summary-section {{
+        padding-left: 0;
+        margin-left: 0;
+        margin-top: 18px;
+        padding-top: 18px;
+        border-left: 0;
+        border-top: 1px solid var(--line);
       }}
       .workforce-calendar {{
         gap: 6px;
@@ -16795,39 +16815,41 @@ def render_workforce_section(
       {workforce_calendar_html}
     </section>
     {object_card_html}
-    <div id="workforce-summary" class="workforce-summary-toolbar">
-      <div>
-        <h2 class="panel-title">Сводка рабочей силы</h2>
-        <div class="panel-sub">Период: {escape(summary_period_label)}.</div>
+    <section id="workforce-summary" class="card panel workforce-summary-panel" style="margin-top:22px;">
+      <div class="workforce-summary-toolbar">
+        <div>
+          <h2 class="panel-title">Сводка рабочей силы</h2>
+          <div class="panel-sub">Период: {escape(summary_period_label)}.</div>
+        </div>
+        <div class="workforce-summary-period-switch">{summary_period_switch}</div>
       </div>
-      <div class="workforce-summary-period-switch">{summary_period_switch}</div>
-    </div>
-    <div class="workforce-summary-grid">
-      <section class="card panel">
-        <div class="panel-head">
-          <div>
-            <h2 class="panel-title">По сотрудникам</h2>
-            <div class="panel-sub">Сумма смен, рабочие дни и объекты за {escape(summary_period_label)}.</div>
+      <div class="workforce-summary-grid">
+        <section class="workforce-summary-section">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">По сотрудникам</h2>
+              <div class="panel-sub">Сумма смен, рабочие дни и объекты за {escape(summary_period_label)}.</div>
+            </div>
           </div>
-        </div>
-        <table class="table contract-table">
-          <thead><tr><th>Сотрудник</th><th class="nowrap">Смен</th><th class="nowrap">Дней</th><th>Объекты</th></tr></thead>
-          <tbody>{employee_rows}</tbody>
-        </table>
-      </section>
-      <section class="card panel">
-        <div class="panel-head">
-          <div>
-            <h2 class="panel-title">По объектам</h2>
-            <div class="panel-sub">Нагрузка рабочей силы по объектам за {escape(summary_period_label)}.</div>
+          <table class="table contract-table">
+            <thead><tr><th>Сотрудник</th><th class="nowrap">Смен</th><th class="nowrap">Дней</th><th>Объекты</th></tr></thead>
+            <tbody>{employee_rows}</tbody>
+          </table>
+        </section>
+        <section class="workforce-summary-section">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">По объектам</h2>
+              <div class="panel-sub">Нагрузка рабочей силы по объектам за {escape(summary_period_label)}.</div>
+            </div>
           </div>
-        </div>
-        <table class="table contract-table">
-          <thead><tr><th>Объект</th><th class="nowrap">Смен</th><th class="nowrap">Людей</th><th class="nowrap">Дней</th></tr></thead>
-          <tbody>{project_rows}</tbody>
-        </table>
-      </section>
-    </div>
+          <table class="table contract-table">
+            <thead><tr><th>Объект</th><th class="nowrap">Смен</th><th class="nowrap">Людей</th><th class="nowrap">Дней</th></tr></thead>
+            <tbody>{project_rows}</tbody>
+          </table>
+        </section>
+      </div>
+    </section>
     """
 
 
