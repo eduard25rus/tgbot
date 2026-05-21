@@ -761,7 +761,7 @@ def render_legal_file_preview_page(file_url: str, download_url: str, safe_filena
 <html lang="ru">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <title>{escape(f"CRM - {safe_filename}")}</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico?v=20260420b">
     <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico?v=20260420b">
@@ -886,7 +886,7 @@ def render_cash_work_report_files_preview_page(report, owner_chat_id: int) -> st
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>Фотоотчет</title>
   <style>
@@ -906,11 +906,13 @@ def render_cash_work_report_files_preview_page(report, owner_chat_id: int) -> st
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     }}
     .cash-work-preview {{
-      min-height: 100vh;
+      position: fixed;
+      inset: 0;
       display: grid;
-      grid-template-rows: auto 1fr auto;
+      grid-template-rows: auto minmax(0, 1fr) auto;
       padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
       gap: 10px;
+      overflow: hidden;
     }}
     .cash-work-preview-head {{
       display: flex;
@@ -938,6 +940,7 @@ def render_cash_work_report_files_preview_page(report, owner_chat_id: int) -> st
     .cash-work-preview-stage {{
       position: relative;
       min-height: 0;
+      height: 100%;
       overflow: hidden;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -979,6 +982,10 @@ def render_cash_work_report_files_preview_page(report, owner_chat_id: int) -> st
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 10px;
+      position: sticky;
+      bottom: calc(12px + env(safe-area-inset-bottom));
+      z-index: 2;
+      background: var(--bg);
     }}
     .cash-work-preview-controls button {{
       min-height: 48px;
@@ -1408,6 +1415,22 @@ def notify_work_report_created(storage: Storage, owner_chat_id: int, report_id: 
         "url": f"/cashoperations?screen=work&work_date={report_date.isoformat()}",
         "data": {
             "kind": "work_report",
+            "report_id": report_id,
+        },
+    }
+    return send_cash_push(storage, owner_chat_id, payload, payload, push_group="work")
+
+
+def notify_work_description_created(storage: Storage, owner_chat_id: int, report_id: int, report_date: date, project_label: str) -> tuple[int, int]:
+    date_label = f"{report_date.day} {RU_MONTH_GENITIVE_NAMES[report_date.month]}"
+    project_text = project_label.strip() or "объект не указан"
+    payload = {
+        "title": f"Добавлен отчет о работе, {date_label}",
+        "body": f"Объект: {project_text}",
+        "tag": f"work-description-{report_date.isoformat()}-{report_id}",
+        "url": f"/cashoperations?screen=work&work_date={report_date.isoformat()}",
+        "data": {
+            "kind": "work_description",
             "report_id": report_id,
         },
     }
@@ -18075,17 +18098,26 @@ def render_cashoperations_body(
         comment_html = f'<span class="cash-mobile-op-comment">{escape(report.comment)}</span>' if report.comment else ""
         work_description = (report.work_description or "").strip()
         files_count = len(report.files)
-        if work_description:
-            work_report_html = f'<button class="cash-work-description" type="button" data-edit-work-description>{escape(work_description)}</button>'
-        elif files_count:
-            work_report_html = ""
+        if work_description or files_count:
+            report_description_html = (
+                f'<button class="cash-work-description" type="button" data-edit-work-description>{escape(work_description)}</button>'
+                if work_description
+                else '<button class="cash-work-description empty" type="button" data-edit-work-description>Добавить описание работ</button>'
+            )
+            report_files_html = (
+                f'<div class="cash-work-file-row"><a href="/cashoperations/work-reports/{report.id}/preview">Фотоотчет: {files_count}</a></div>'
+                if files_count
+                else ""
+            )
+            work_report_html = f"""
+            <details class="cash-work-report-details">
+              <summary>Смотреть отчет</summary>
+              {report_description_html}
+              {report_files_html}
+            </details>
+            """
         else:
             work_report_html = '<button class="cash-work-missing" type="button" data-edit-work-description>Нужно приложить отчет о работе</button>'
-        files_html = (
-            f'<div class="cash-work-file-row"><a href="/cashoperations/work-reports/{report.id}/preview">Фотоотчет: {files_count}</a></div>'
-            if files_count
-            else ""
-        )
         return f"""
         <article class="cash-mobile-op cash-work-report-card editable" role="button" tabindex="0"
           data-edit-work-report="1"
@@ -18100,7 +18132,6 @@ def render_cashoperations_body(
             <ol class="cash-work-worker-list">{worker_rows}</ol>
             {comment_html}
             {work_report_html}
-            {files_html}
           </div>
           <div class="cash-mobile-op-side">
             <b class="income">{escape(work_units_label(report_units))}</b>
@@ -18836,6 +18867,30 @@ def render_cashoperations_body(
         grid-template-columns: 1fr;
         margin-top: 8px;
       }}
+      .cash-work-report-details {{
+        margin-top: 8px;
+      }}
+      .cash-work-report-details summary {{
+        display: inline-grid;
+        min-height: 32px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 10px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        list-style: none;
+      }}
+      .cash-work-report-details summary::-webkit-details-marker {{
+        display: none;
+      }}
+      .cash-work-report-details[open] summary {{
+        color: #186844;
+        background: #e3f2e9;
+        border-color: rgba(24, 104, 68, .16);
+      }}
       .cash-work-description {{
         display: block;
         width: 100%;
@@ -18846,9 +18901,14 @@ def render_cashoperations_body(
         color: var(--ink);
         font-size: 12px;
         line-height: 1.4;
-        font: inherit;
+        font-family: inherit;
+        font-weight: 400;
         text-align: left;
         white-space: pre-line;
+      }}
+      .cash-work-description.empty {{
+        color: #9b2f2f;
+        font-weight: 800;
       }}
       .cash-work-missing {{
         display: block;
@@ -20034,7 +20094,7 @@ def render_cashoperations_body(
               editWorkDescription(card);
               return;
             }}
-            if (event.target.closest("form, button, a, input, select, textarea, label")) return;
+            if (event.target.closest("form, button, a, input, select, textarea, label, details, summary")) return;
             editWorkReport(card);
           }});
           card.addEventListener("keydown", (event) => {{
@@ -20244,7 +20304,7 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Касса">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -20352,7 +20412,7 @@ def render_cashoperations_login_page(error: str = "", login_hint: str = "") -> s
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Касса">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -21710,7 +21770,7 @@ def render_access_section(
                       <label><input type="checkbox" name="can_receive_push" value="1" {"checked" if user_access["can_receive_push"] else ""}> Разрешить пуши</label>
                       <label><input type="checkbox" name="can_receive_cash_push" value="1" {"checked" if user_access.get("can_receive_cash_push") else ""}> Касса</label>
                       <label><input type="checkbox" name="can_receive_letter_push" value="1" {"checked" if user_access.get("can_receive_letter_push") else ""}> Письма</label>
-                      <label><input type="checkbox" name="can_receive_work_push" value="1" {"checked" if user_access.get("can_receive_work_push") else ""}> Работа</label>
+                      <label><input type="checkbox" name="can_receive_work_push" value="1" {"checked" if user_access.get("can_receive_work_push") else ""}> Работа: смены и отчеты</label>
                     </div>
                     <div class="field-hint">Сначала включаем пуши в целом, потом выбираем группы событий, которые будут приходить этому пользователю.</div>
                   </div>
@@ -24039,6 +24099,7 @@ self.addEventListener("notificationclick", (event) => {
             )
             if uploads:
                 save_workforce_report_files(storage, current_owner, report_id, uploads, (current_user or {}).get("id"), actor_name)
+            notify_work_description_created(storage, current_owner, report_id, report_date, project_labels[project_code])
             flash = "Отчет о работе сохранен."
             return redirect(start_response, f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}&work_date={report_date.isoformat()}&ok=1&flash={quote_plus(flash)}")
         except Exception as exc:
