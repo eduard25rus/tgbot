@@ -14,6 +14,7 @@ from wsgiref.simple_server import make_server
 from telegram import Update
 
 from bot import build_application
+from scripts.backup_sqlite_to_s3 import backup_sqlite_to_storage
 from scripts.import_bank_mail import run_bank_mail_import
 from webapp import app as web_app
 
@@ -135,6 +136,53 @@ def start_bank_mail_import_thread() -> None:
     LOGGER.info("Bank statement mail auto-import thread started")
 
 
+def resolve_db_backup_interval_seconds() -> int:
+    raw = os.getenv("DB_BACKUP_INTERVAL_HOURS", "2").strip() or "2"
+    try:
+        hours = float(raw)
+    except ValueError:
+        LOGGER.warning("Invalid DB_BACKUP_INTERVAL_HOURS=%r, using 2 hours", raw)
+        hours = 2.0
+    return max(900, int(hours * 3600))
+
+
+def run_db_backup_once(reason: str) -> None:
+    try:
+        manifest = backup_sqlite_to_storage("hourly")
+        LOGGER.info(
+            "SQLite backup %s uploaded: key=%s bytes=%s sha256=%s",
+            reason,
+            manifest["backup_key"],
+            manifest["gzip_size_bytes"],
+            manifest["sha256"],
+        )
+    except Exception:
+        LOGGER.exception("SQLite backup %s failed", reason)
+
+
+def db_backup_loop() -> None:
+    if env_truthy("DB_BACKUP_RUN_ON_STARTUP", True):
+        time.sleep(int(os.getenv("DB_BACKUP_STARTUP_DELAY_SECONDS", "120")))
+        run_db_backup_once("startup")
+    interval_seconds = resolve_db_backup_interval_seconds()
+    while True:
+        LOGGER.info("Next SQLite backup in %.0f seconds", interval_seconds)
+        time.sleep(interval_seconds)
+        run_db_backup_once("interval")
+
+
+def start_db_backup_thread() -> None:
+    if not env_truthy("DB_BACKUP_ENABLED", False):
+        LOGGER.info("SQLite backup thread is disabled")
+        return
+    if os.getenv("FILE_STORAGE_PROVIDER", "local").strip().lower() not in {"s3", "yandex"}:
+        LOGGER.warning("SQLite backup is enabled but FILE_STORAGE_PROVIDER is not s3/yandex")
+        return
+    thread = threading.Thread(target=db_backup_loop, name="sqlite-backup", daemon=True)
+    thread.start()
+    LOGGER.info("SQLite backup thread started")
+
+
 def main() -> None:
     host, port = resolve_web_bind()
     server = make_server(host, port, web_app, server_class=ThreadingWSGIServer)
@@ -143,6 +191,7 @@ def main() -> None:
     web_thread = threading.Thread(target=server.serve_forever, name="crm-web-server", daemon=True)
     web_thread.start()
     start_bank_mail_import_thread()
+    start_db_backup_thread()
 
     application = build_application()
     LOGGER.info("Telegram bot and CRM web are starting")
