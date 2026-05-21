@@ -7027,6 +7027,25 @@ def layout(
       gap: 22px;
       margin-top: 22px;
     }}
+    .workforce-summary-toolbar {{
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 22px;
+      flex-wrap: wrap;
+    }}
+    .workforce-summary-period-switch {{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }}
+    .workforce-summary-period-switch .is-active {{
+      background: linear-gradient(135deg, #2a313a, #151b22);
+      border-color: transparent;
+      color: #fff;
+    }}
     .workforce-calendar-toolbar {{
       display: flex;
       justify-content: space-between;
@@ -16244,6 +16263,7 @@ def render_workforce_section(
     project_filter: str = "",
     employee_filter: int = 0,
     selected_day: date | None = None,
+    summary_scope: str = "day",
     flash_message: str = "",
     success: bool = False,
 ) -> str:
@@ -16258,6 +16278,10 @@ def render_workforce_section(
         and selected_month == today.replace(day=1)
     ):
         selected_day = today
+    if summary_scope not in {"day", "month", "year"}:
+        summary_scope = "day"
+    if summary_scope == "day" and selected_day is None:
+        summary_scope = "month"
     entries = storage.list_expense_entries(owner_chat_id)
     project_options_list = expense_project_options(storage, owner_chat_id, entries, include_legacy_entries=False)
     project_labels = dict(project_options_list)
@@ -16320,17 +16344,25 @@ def render_workforce_section(
     calendar_total_units = sum(float(worker["day_part"]) for report in calendar_reports for worker in report.workers)
     calendar_active_days = {report.report_date for report in calendar_reports}
     calendar_active_projects = {workforce_report_project_label(report) for report in calendar_reports}
-    unique_people = {
-        int(worker["employee_id"])
-        for report in reports
-        for worker in report.workers
-    }
-    total_units = sum(float(worker["day_part"]) for report in reports for worker in report.workers)
-    active_days = {report.report_date for report in reports}
-    active_projects = {workforce_report_project_label(report) for report in reports}
+    if summary_scope == "year":
+        summary_start = date(selected_month.year, 1, 1)
+        summary_end = date(selected_month.year + 1, 1, 1)
+        summary_source_reports = storage.list_mobile_work_reports_for_period(owner_chat_id, summary_start, summary_end)
+        summary_reports = [
+            report for report in summary_source_reports
+            if (not project_filter or report.project_code == project_filter)
+            and (not employee_filter or any(int(worker["employee_id"]) == employee_filter for worker in report.workers))
+        ]
+        summary_period_label = f"{selected_month.year} год"
+    elif summary_scope == "month" or selected_day is None:
+        summary_reports = calendar_reports
+        summary_period_label = format_month_label(selected_month)
+    else:
+        summary_reports = reports
+        summary_period_label = format_date(selected_day)
     employee_summary: dict[int, dict] = {}
     project_summary: dict[str, dict] = {}
-    for report in reports:
+    for report in summary_reports:
         project_key = report.project_code or workforce_report_project_label(report)
         project_label = workforce_report_project_label(report)
         project_bucket = project_summary.setdefault(project_key, {"label": project_label, "units": 0.0, "people": set(), "days": set()})
@@ -16418,6 +16450,7 @@ def render_workforce_section(
       <input type="hidden" name="owner" value="{owner_chat_id}">
       <input type="hidden" name="project" value="{escape(project_filter)}">
       <input type="hidden" name="employee" value="{employee_filter if employee_filter else ''}">
+      <input type="hidden" name="summary" value="{escape(summary_scope)}">
       <div class="field">
         <label>Месяц</label>
         <select name="month">{''.join(month_options)}</select>
@@ -16435,6 +16468,7 @@ def render_workforce_section(
         <form class="form-grid" method="get" action="/workforce#workforce-detail">
           <input type="hidden" name="owner" value="{owner_chat_id}">
           <input type="hidden" name="month" value="{selected_month.strftime('%Y-%m')}">
+          <input type="hidden" name="summary" value="{escape(summary_scope)}">
           <div class="field">
             <label>Объект</label>
             <select name="project">
@@ -16472,7 +16506,10 @@ def render_workforce_section(
     for day_number in range(1, days_in_month + 1):
         day_value = date(selected_month.year, selected_month.month, day_number)
         day_stats = daily_stats.get(day_value)
-        day_href = f"/workforce{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, day_value)}#workforce-detail"
+        day_query = workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, day_value)
+        if summary_scope != "day":
+            day_query += f"&summary={summary_scope}"
+        day_href = f"/workforce{day_query}#workforce-detail"
         day_classes = ["workforce-calendar-day"]
         if day_value == today:
             day_classes.append("is-today")
@@ -16702,6 +16739,16 @@ def render_workforce_section(
         """
         for _project_key, item in sorted(project_summary.items(), key=lambda pair: (-float(pair[1]["units"]), pair[1]["label"].casefold()))
     ) or '<tr><td colspan="4">Нет данных по объектам.</td></tr>'
+    def summary_scope_link(scope: str, label: str) -> str:
+        query_suffix = workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, selected_day)
+        query_suffix += f"&summary={scope}"
+        active_class = " is-active" if summary_scope == scope else ""
+        return f'<a class="secondary-btn mini{active_class}" href="/workforce{query_suffix}#workforce-summary">{escape(label)}</a>'
+    summary_period_switch = "".join((
+        summary_scope_link("day", "День"),
+        summary_scope_link("month", "Месяц"),
+        summary_scope_link("year", "Год"),
+    ))
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     return f"""
     {stats}
@@ -16748,12 +16795,19 @@ def render_workforce_section(
       {workforce_calendar_html}
     </section>
     {object_card_html}
+    <div id="workforce-summary" class="workforce-summary-toolbar">
+      <div>
+        <h2 class="panel-title">Сводка рабочей силы</h2>
+        <div class="panel-sub">Период: {escape(summary_period_label)}.</div>
+      </div>
+      <div class="workforce-summary-period-switch">{summary_period_switch}</div>
+    </div>
     <div class="workforce-summary-grid">
       <section class="card panel">
         <div class="panel-head">
           <div>
             <h2 class="panel-title">По сотрудникам</h2>
-            <div class="panel-sub">Сумма смен, рабочие дни и объекты.</div>
+            <div class="panel-sub">Сумма смен, рабочие дни и объекты за {escape(summary_period_label)}.</div>
           </div>
         </div>
         <table class="table contract-table">
@@ -16765,7 +16819,7 @@ def render_workforce_section(
         <div class="panel-head">
           <div>
             <h2 class="panel-title">По объектам</h2>
-            <div class="panel-sub">Нагрузка рабочей силы по объектам.</div>
+            <div class="panel-sub">Нагрузка рабочей силы по объектам за {escape(summary_period_label)}.</div>
           </div>
         </div>
         <table class="table contract-table">
@@ -29510,6 +29564,7 @@ self.addEventListener("notificationclick", (event) => {
             selected_day = parse_date(selected_day_raw) if selected_day_raw else None
         except ValueError:
             selected_day = None
+        summary_scope = query.get("summary", ["day"])[0].strip()
         flash_message = query.get("flash", [""])[0].strip()
         success = query.get("ok", ["0"])[0] == "1"
         body = render_workforce_section(
@@ -29520,6 +29575,7 @@ self.addEventListener("notificationclick", (event) => {
             project_filter,
             employee_filter,
             selected_day,
+            summary_scope,
             flash_message,
             success,
         )
