@@ -1070,6 +1070,17 @@ def file_url_with_name(file_url: str, safe_filename: str) -> str:
     return f"{named_path}{separator}{query_part}" if separator else named_path
 
 
+def redirect_legacy_file_url_to_named(start_response, path: str, query_string: str, safe_filename: str):
+    if not path.endswith("/file") or not safe_filename:
+        return None
+    file_url = f"{path}?{query_string}" if query_string else path
+    named_url = file_url_with_name(file_url, safe_filename)
+    if named_url == file_url:
+        return None
+    start_response("302 Found", [("Location", named_url), ("Cache-Control", "private, max-age=60")])
+    return [b""]
+
+
 def save_legal_letter_uploads(storage: Storage, owner_chat_id: int, contract_id: int | None, letter_id: int, uploads: list[UploadedFile]) -> None:
     upload_root = contract_upload_root(storage)
     target_scope = f"contract_{contract_id}" if contract_id else "general"
@@ -3667,7 +3678,7 @@ def render_construction_report_photos(owner_chat_id: int, contract_id: int, repo
         slides_html = "".join(
             f'''
             <figure class="construction-photo-slide{" is-active" if index == 0 else ""}" data-construction-photo-slide="1">
-              <img src="/contracts/construction-photos/{photo.id}/file?owner={owner_chat_id}" alt="{escape(photo.file_name or 'Фото отчета')}">
+              <img src="{file_url_with_name(f"/contracts/construction-photos/{photo.id}/file?owner={owner_chat_id}", secure_upload_name(photo.file_name or "photo.jpg"))}" alt="{escape(photo.file_name or 'Фото отчета')}">
               <figcaption>{index + 1} / {len(photos)}</figcaption>
             </figure>
             '''
@@ -15744,7 +15755,7 @@ def render_workforce_report_files(owner_chat_id: int, report_id: int, files: lis
     slides_html = "".join(
         f'''
         <figure class="construction-photo-slide{" is-active" if index == 0 else ""}" data-construction-photo-slide="1">
-          {f'<video src="/workforce/report-files/{file.id}/file?owner={owner_chat_id}" controls playsinline></video>' if file.file_kind == "video" else f'<img src="/workforce/report-files/{file.id}/file?owner={owner_chat_id}" alt="{escape(file.file_name or "Файл отчета")}">'}
+          {f'<video src="{file_url_with_name(f"/workforce/report-files/{file.id}/file?owner={owner_chat_id}", secure_upload_name(file.file_name or "video.mp4"))}" controls playsinline></video>' if file.file_kind == "video" else f'<img src="{file_url_with_name(f"/workforce/report-files/{file.id}/file?owner={owner_chat_id}", secure_upload_name(file.file_name or "photo.jpg"))}" alt="{escape(file.file_name or "Файл отчета")}">'}
           <figcaption>{index + 1} / {len(files)}</figcaption>
         </figure>
         '''
@@ -23499,6 +23510,11 @@ self.addEventListener("notificationclick", (event) => {
             if action == "download":
                 return serve_resolved_upload_file(start_response, resolved_file, download=True)
             if action == "file":
+                named_redirect = redirect_legacy_file_url_to_named(
+                    start_response, path, environ.get("QUERY_STRING", ""), resolved_file.safe_filename
+                )
+                if named_redirect is not None:
+                    return named_redirect
                 return serve_resolved_upload_file(start_response, resolved_file)
         except Exception:
             pass
@@ -27932,6 +27948,11 @@ self.addEventListener("notificationclick", (event) => {
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"Photo not found"]
             resolved_file = resolve_construction_report_photo(storage, photo)
+            named_redirect = redirect_legacy_file_url_to_named(
+                start_response, path, environ.get("QUERY_STRING", ""), resolved_file.safe_filename
+            )
+            if named_redirect is not None:
+                return named_redirect
             return serve_resolved_upload_file(start_response, resolved_file)
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
@@ -27948,6 +27969,11 @@ self.addEventListener("notificationclick", (event) => {
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
             resolved_file = resolve_workforce_report_file(storage, report_file)
+            named_redirect = redirect_legacy_file_url_to_named(
+                start_response, path, environ.get("QUERY_STRING", ""), resolved_file.safe_filename
+            )
+            if named_redirect is not None:
+                return named_redirect
             return serve_resolved_upload_file(start_response, resolved_file)
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
