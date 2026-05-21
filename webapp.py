@@ -18104,17 +18104,15 @@ def render_cashoperations_body(
                 if work_description
                 else '<button class="cash-work-description empty" type="button" data-edit-work-description>Добавить описание работ</button>'
             )
-            report_files_html = (
-                f'<div class="cash-work-file-row"><a href="/cashoperations/work-reports/{report.id}/preview">Фотоотчет: {files_count}</a></div>'
-                if files_count
-                else ""
-            )
+            report_files_html = f'<a class="cash-work-file-link" href="/cashoperations/work-reports/{report.id}/preview">Фотоотчет: {files_count}</a>' if files_count else ""
             work_report_html = f"""
-            <details class="cash-work-report-details">
-              <summary>Смотреть отчет</summary>
-              {report_description_html}
+            <div class="cash-work-report-actions">
+              <details class="cash-work-report-details">
+                <summary>Смотреть отчет</summary>
+                {report_description_html}
+              </details>
               {report_files_html}
-            </details>
+            </div>
             """
         else:
             work_report_html = '<button class="cash-work-missing" type="button" data-edit-work-description>Нужно приложить отчет о работе</button>'
@@ -18867,8 +18865,15 @@ def render_cashoperations_body(
         grid-template-columns: 1fr;
         margin-top: 8px;
       }}
-      .cash-work-report-details {{
+      .cash-work-report-actions {{
+        display: flex;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 8px;
         margin-top: 8px;
+      }}
+      .cash-work-report-details {{
+        min-width: 0;
       }}
       .cash-work-report-details summary {{
         display: inline-grid;
@@ -18924,10 +18929,7 @@ def render_cashoperations_body(
         font-family: inherit;
         text-align: left;
       }}
-      .cash-work-file-row {{
-        margin-top: 8px;
-      }}
-      .cash-work-file-row a {{
+      .cash-work-file-link {{
         display: inline-grid;
         min-height: 32px;
         align-items: center;
