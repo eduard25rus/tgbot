@@ -7332,6 +7332,9 @@ def layout(
       font-weight: 700;
       margin-bottom: 4px;
     }}
+    .contract-upcoming-title {{
+      font-weight: 400;
+    }}
     .calendar-shell {{
       display: grid;
       gap: 10px;
@@ -10878,7 +10881,7 @@ def render_dashboard(storage: Storage, owner_chat_id: int) -> str:
             <div class="timeline-item">
               <div class="timeline-date">{format_date(item["end_date"])}</div>
               <div>
-                <div class="timeline-title">{label}: {escape(item["title"])}</div>
+                <div class="timeline-title contract-upcoming-title">{label}: {escape(item["title"])}</div>
                 <div class="contract-meta">{escape(due_label)}</div>
               </div>
             </div>
