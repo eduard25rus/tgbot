@@ -5558,6 +5558,18 @@ def layout(
       color: var(--muted);
       font-weight: 400;
     }}
+    .bank-account-balance-list {{
+      display: grid;
+      gap: 3px;
+      margin-top: 3px;
+    }}
+    .bank-account-balance-line {{
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      line-height: 1.25;
+    }}
     .dds-filter-panel {{
       margin-top: 14px;
       padding: 16px;
@@ -16980,6 +16992,23 @@ def cashbox_transfer_category_code(category_options_list: list[tuple[str, str]],
     return fallback
 
 
+def bank_account_display_label(index: int, balance: dict) -> str:
+    account_number = str(balance.get("account_number", "")).strip()
+    configured_labels = os.getenv("BANK_ACCOUNT_LABELS", "").strip()
+    if configured_labels:
+        for item in configured_labels.split(";"):
+            if "=" not in item:
+                continue
+            account, label = item.split("=", 1)
+            if account.strip() == account_number and label.strip():
+                return label.strip()
+    if index == 0:
+        return "Фелис Сбербанк"
+    if index == 1:
+        return "Резерв Сбербанк"
+    return f"Счет *{account_number[-4:]}" if account_number else f"Счет {index + 1}"
+
+
 def mobile_cash_can_modify_cashbox(cash_access: dict | None, cashbox_code: str) -> bool:
     if not cash_access or not cash_access.get("enabled") or not cash_access.get("can_add_expense"):
         return False
@@ -21493,13 +21522,13 @@ def render_expenses_section(
           <div class="expenses-day-card-meta">Расход: {escape(format_amount(expense_total))}</div>
         """
     today = datetime.now(VLADIVOSTOK_TZ).date()
-    latest_bank_balance = storage.latest_bank_account_balance(owner_chat_id)
+    bank_account_balances = storage.list_latest_bank_account_balances(owner_chat_id)
     cashbox_balances = {
         item["code"]: cashbox_balance_for_code(active_entries, cashboxes, item["code"])
         for item in cashboxes
     }
     cashbox_total_balance = sum(cashbox_balances.values())
-    bank_cash_balance = latest_bank_balance["closing_balance"] if latest_bank_balance else None
+    bank_cash_balance = sum(item["closing_balance"] for item in bank_account_balances) if bank_account_balances else None
     company_money_total = (bank_cash_balance + cashbox_total_balance) if bank_cash_balance is not None else None
     anchor_day = today
     day_window = [anchor_day - timedelta(days=offset) for offset in range(20, -1, -1)]
@@ -21837,12 +21866,44 @@ def render_expenses_section(
         """
         for item in cashboxes
     )
+    bank_account_lines = "".join(
+        f"""
+        <div class="bank-account-balance-line">
+          <span>{escape(bank_account_display_label(index, item))}</span>
+          <strong>{format_amount(item["closing_balance"])}</strong>
+        </div>
+        """
+        for index, item in enumerate(bank_account_balances[:2])
+    )
+    if len(bank_account_balances) == 1:
+        bank_account_lines += """
+        <div class="bank-account-balance-line">
+          <span>Резерв Сбербанк</span>
+          <strong>—</strong>
+        </div>
+        """
+    elif not bank_account_balances:
+        bank_account_lines = """
+        <div class="bank-account-balance-line">
+          <span>Фелис Сбербанк</span>
+          <strong>—</strong>
+        </div>
+        <div class="bank-account-balance-line">
+          <span>Резерв Сбербанк</span>
+          <strong>—</strong>
+        </div>
+        """
+    bank_accounts_note = (
+        f'<div class="bank-account-balance-list">{bank_account_lines}</div>'
+        if bank_account_lines
+        else "Загрузите выписки 1С с остатками"
+    )
     return f"""
     <section class="stats">
       <article class="card stat-card">
-        <div class="stat-label">Остаток на счете</div>
-        <div class="stat-value">{format_amount(latest_bank_balance["closing_balance"]) if latest_bank_balance else "—"}</div>
-        <div class="stat-note">{f'На {escape(format_date(latest_bank_balance["balance_date"]))}' if latest_bank_balance else 'Загрузите выписку 1С с остатками'}</div>
+        <div class="stat-label">Остатки по счетам</div>
+        <div class="stat-value">{format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}</div>
+        <div class="stat-note">{bank_accounts_note}</div>
       </article>
       {cashbox_stat_cards}
       <article class="card stat-card">

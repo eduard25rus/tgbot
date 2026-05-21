@@ -7853,6 +7853,58 @@ class Storage:
             "updated_at": datetime.fromisoformat(row["updated_at"]),
         }
 
+    def list_latest_bank_account_balances(self, owner_chat_id: int) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT b.id, b.owner_chat_id, b.account_number, b.balance_date, b.opening_balance,
+                       b.total_expense, b.total_income, b.closing_balance, b.import_source,
+                       b.created_at, b.updated_at
+                FROM bank_account_balances b
+                JOIN (
+                    SELECT owner_chat_id, account_number, MAX(balance_date) AS max_balance_date
+                    FROM bank_account_balances
+                    WHERE owner_chat_id = ?
+                    GROUP BY owner_chat_id, account_number
+                ) latest
+                  ON latest.owner_chat_id = b.owner_chat_id
+                 AND latest.account_number = b.account_number
+                 AND latest.max_balance_date = b.balance_date
+                JOIN (
+                    SELECT owner_chat_id, account_number, MIN(id) AS first_balance_id
+                    FROM bank_account_balances
+                    WHERE owner_chat_id = ?
+                    GROUP BY owner_chat_id, account_number
+                ) first_seen
+                  ON first_seen.owner_chat_id = b.owner_chat_id
+                 AND first_seen.account_number = b.account_number
+                WHERE b.owner_chat_id = ?
+                ORDER BY first_seen.first_balance_id ASC, b.balance_date DESC, b.updated_at DESC, b.id DESC
+                """,
+                (owner_chat_id, owner_chat_id, owner_chat_id),
+            ).fetchall()
+        balances = []
+        seen_accounts = set()
+        for row in rows:
+            account_number = row["account_number"] or ""
+            if account_number in seen_accounts:
+                continue
+            seen_accounts.add(account_number)
+            balances.append({
+                "id": int(row["id"]),
+                "owner_chat_id": int(row["owner_chat_id"]),
+                "account_number": account_number,
+                "balance_date": date.fromisoformat(row["balance_date"]),
+                "opening_balance": float(row["opening_balance"]),
+                "total_expense": float(row["total_expense"]),
+                "total_income": float(row["total_income"]),
+                "closing_balance": float(row["closing_balance"]),
+                "import_source": row["import_source"] or "",
+                "created_at": datetime.fromisoformat(row["created_at"]),
+                "updated_at": datetime.fromisoformat(row["updated_at"]),
+            })
+        return balances
+
     def bank_statement_mail_attachment_exists(self, owner_chat_id: int, attachment_hash: str) -> bool:
         cleaned_hash = attachment_hash.strip()
         if not cleaned_hash:
