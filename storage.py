@@ -5157,12 +5157,6 @@ class Storage:
             created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],
-            storage_provider=row["storage_provider"] or "local",
-            storage_key=row["storage_key"] or row["file_path"] or "",
-            original_filename=row["original_filename"] or row["file_name"] or "",
-            content_type=row["content_type"] or "",
-            size_bytes=int(row["size_bytes"] or 0),
-            checksum_sha256=row["checksum_sha256"] or "",
         )
 
     @staticmethod
@@ -5184,6 +5178,12 @@ class Storage:
             created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],
+            storage_provider=row["storage_provider"] or "local",
+            storage_key=row["storage_key"] or row["file_path"] or "",
+            original_filename=row["original_filename"] or row["file_name"] or "",
+            content_type=row["content_type"] or "",
+            size_bytes=int(row["size_bytes"] or 0),
+            checksum_sha256=row["checksum_sha256"] or "",
         )
 
     @staticmethod
