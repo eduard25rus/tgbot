@@ -5567,8 +5567,8 @@ def layout(
       display: flex;
       justify-content: space-between;
       gap: 8px;
-      font-size: 12px;
-      line-height: 1.25;
+      font-size: 13px;
+      line-height: 1.28;
     }}
     .dds-money-stats {{
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5582,8 +5582,8 @@ def layout(
       display: flex;
       justify-content: space-between;
       gap: 8px;
-      font-size: 12px;
-      line-height: 1.25;
+      font-size: 13px;
+      line-height: 1.28;
     }}
     .dds-money-line span {{
       min-width: 0;
@@ -21929,7 +21929,7 @@ def render_expenses_section(
     return f"""
     <section class="stats dds-money-stats">
       <article class="card stat-card">
-        <div class="stat-label">Остатки по счетам</div>
+        <div class="stat-label">Расчетные счета</div>
         <div class="stat-value">{format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}</div>
         <div class="stat-note">{bank_accounts_note}</div>
       </article>
