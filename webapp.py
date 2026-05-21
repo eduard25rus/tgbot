@@ -6945,8 +6945,7 @@ def layout(
       margin: 0;
     }}
     .workforce-description-menu[open] {{
-      display: block;
-      width: 100%;
+      display: contents;
     }}
     .workforce-description-menu summary {{
       display: inline-flex;
@@ -6958,6 +6957,8 @@ def layout(
       display: none;
     }}
     .workforce-description-text {{
+      order: 3;
+      flex: 0 0 100%;
       margin-top: 8px;
       color: var(--muted);
       white-space: pre-line;
@@ -6990,6 +6991,7 @@ def layout(
       margin-top: 0;
       display: inline-flex;
       align-items: center;
+      order: 1;
     }}
     .workforce-report-pill {{
       min-height: 36px;
