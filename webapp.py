@@ -5630,6 +5630,18 @@ def layout(
       border-color: rgba(189,199,211,0.92);
       box-shadow: none;
     }}
+    .dds-filter-panel select {{
+      color: var(--ink);
+    }}
+    .dds-filter-panel select.is-filter-default {{
+      color: var(--muted);
+    }}
+    .dds-filter-panel select option {{
+      color: var(--ink);
+    }}
+    .dds-filter-panel select option[value=""] {{
+      color: var(--muted);
+    }}
     .dds-source-detail-field select.is-hidden {{
       display: none;
     }}
@@ -10517,6 +10529,15 @@ function initAutoSubmitForms() {{
   }});
 }}
 
+function syncDdsFilterDefaults(form) {{
+  if (!form) {{
+    return;
+  }}
+  form.querySelectorAll("select").forEach((select) => {{
+    select.classList.toggle("is-filter-default", !select.value);
+  }});
+}}
+
 function syncDdsSourceDetail(form) {{
   if (!form) {{
     return;
@@ -10536,10 +10557,14 @@ function syncDdsSourceDetail(form) {{
   if (label) {{
     label.textContent = source === "bank" ? "Расчетный счет" : source === "cash" ? "Касса" : "Детализация";
   }}
+  syncDdsFilterDefaults(form);
 }}
 
 function initDdsFilterForms() {{
-  document.querySelectorAll('[data-dds-filter-form="1"]').forEach(syncDdsSourceDetail);
+  document.querySelectorAll('[data-dds-filter-form="1"]').forEach((form) => {{
+    syncDdsSourceDetail(form);
+    syncDdsFilterDefaults(form);
+  }});
 }}
 
 function syncDdsExpenseForm(form) {{
@@ -10602,6 +10627,10 @@ function initDdsExpenseForms() {{
 }}
 
 document.addEventListener("change", (event) => {{
+  const ddsFilterForm = event.target.closest('[data-dds-filter-form="1"]');
+  if (ddsFilterForm) {{
+    syncDdsFilterDefaults(ddsFilterForm);
+  }}
   const sourceFilter = event.target.closest("[data-dds-source-filter]");
   if (sourceFilter) {{
     syncDdsSourceDetail(sourceFilter.closest('[data-dds-filter-form="1"]'));
@@ -22160,6 +22189,8 @@ def render_expenses_section(
         if active_filter_count
         else "Поиск смотрит контрагента, назначение, номер документа, автора, объект и группу."
     )
+    def dds_filter_select_class(value: str) -> str:
+        return "dds-filter-control" + (" is-filter-default" if not value else "")
     dds_filters_html = f"""
       <form class="dds-filter-panel" method="get" action="/expenses" data-dds-filter-form="1">
         <input type="hidden" name="owner" value="{owner_chat_id}">
@@ -22180,23 +22211,23 @@ def render_expenses_section(
         </div>
         <div class="field">
           <label>Источник</label>
-          <select name="source" data-dds-source-filter>{source_options}</select>
+          <select class="{dds_filter_select_class(source_filter)}" name="source" data-dds-source-filter>{source_options}</select>
         </div>
         <div class="field dds-source-detail-field" data-dds-source-detail-field>
           <label data-dds-source-detail-label>Детализация</label>
-          <select name="account" data-dds-source-detail="bank">{account_options}</select>
-          <select name="cashbox" data-dds-source-detail="cash">{cashbox_options}</select>
-          <select data-dds-source-detail="all">
-            <option>Выберите источник</option>
+          <select class="{dds_filter_select_class(account_filter)}" name="account" data-dds-source-detail="bank">{account_options}</select>
+          <select class="{dds_filter_select_class(cashbox_filter)}" name="cashbox" data-dds-source-detail="cash">{cashbox_options}</select>
+          <select class="dds-filter-control is-filter-default" data-dds-source-detail="all">
+            <option value="">Выберите источник</option>
           </select>
         </div>
         <div class="field">
           <label>Объект</label>
-          <select name="project">{filter_project_options}</select>
+          <select class="{dds_filter_select_class(project_filter)}" name="project">{filter_project_options}</select>
         </div>
         <div class="field">
           <label>Группа</label>
-          <select name="category">{filter_category_options}</select>
+          <select class="{dds_filter_select_class(category_filter)}" name="category">{filter_category_options}</select>
         </div>
         <div class="dds-filter-actions">
           <button class="secondary-btn mini" type="submit">Найти</button>
