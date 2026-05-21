@@ -9307,6 +9307,41 @@ function buildContractStageFields(form, count) {{
   container.innerHTML = html;
 }}
 
+function pauseMediaIn(container) {{
+  if (!container) {{
+    return;
+  }}
+  container.querySelectorAll("video, audio").forEach((media) => {{
+    media.pause();
+    media.currentTime = 0;
+  }});
+}}
+
+function updateConstructionPhotoSlide(modal, nextIndex) {{
+  const slides = modal ? Array.from(modal.querySelectorAll("[data-construction-photo-slide]")) : [];
+  if (!slides.length) {{
+    return;
+  }}
+  slides.forEach((slide, index) => {{
+    if (index !== nextIndex) {{
+      pauseMediaIn(slide);
+    }}
+    slide.classList.toggle("is-active", index === nextIndex);
+  }});
+}}
+
+function closeConstructionPhotoModal(modal) {{
+  if (!modal) {{
+    return;
+  }}
+  pauseMediaIn(modal);
+  modal.classList.remove("is-open");
+  modal.setAttribute("aria-hidden", "true");
+  if (!document.querySelector(".construction-photo-modal.is-open")) {{
+    document.body.style.overflow = "";
+  }}
+}}
+
 document.addEventListener("click", (event) => {{
   const addWorkforceWorker = event.target.closest("[data-workforce-add-worker]");
   if (addWorkforceWorker) {{
@@ -9355,13 +9390,7 @@ document.addEventListener("click", (event) => {{
   const carouselClose = event.target.closest("[data-construction-carousel-close]");
   if (carouselClose) {{
     const modal = carouselClose.closest("[data-construction-carousel-modal]");
-    if (modal) {{
-      modal.classList.remove("is-open");
-      modal.setAttribute("aria-hidden", "true");
-      if (!document.querySelector(".construction-photo-modal.is-open")) {{
-        document.body.style.overflow = "";
-      }}
-    }}
+    closeConstructionPhotoModal(modal);
     return;
   }}
   const carouselStep = event.target.closest("[data-construction-carousel-prev], [data-construction-carousel-next]");
@@ -9372,7 +9401,7 @@ document.addEventListener("click", (event) => {{
       const activeIndex = Math.max(0, slides.findIndex((slide) => slide.classList.contains("is-active")));
       const direction = carouselStep.hasAttribute("data-construction-carousel-prev") ? -1 : 1;
       const nextIndex = (activeIndex + direction + slides.length) % slides.length;
-      slides.forEach((slide, index) => slide.classList.toggle("is-active", index === nextIndex));
+      updateConstructionPhotoSlide(modal, nextIndex);
     }}
     return;
   }}
@@ -9587,9 +9616,7 @@ document.addEventListener("keydown", (event) => {{
     return;
   }}
   if (event.key === "Escape") {{
-    modal.classList.remove("is-open");
-    modal.setAttribute("aria-hidden", "true");
-    document.body.style.overflow = "";
+    closeConstructionPhotoModal(modal);
     return;
   }}
   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {{
@@ -9602,7 +9629,7 @@ document.addEventListener("keydown", (event) => {{
   const activeIndex = Math.max(0, slides.findIndex((slide) => slide.classList.contains("is-active")));
   const direction = event.key === "ArrowLeft" ? -1 : 1;
   const nextIndex = (activeIndex + direction + slides.length) % slides.length;
-  slides.forEach((slide, index) => slide.classList.toggle("is-active", index === nextIndex));
+  updateConstructionPhotoSlide(modal, nextIndex);
 }});
 
 document.addEventListener("click", (event) => {{
