@@ -61,12 +61,13 @@ def create_sqlite_backup(db_path: Path, target_path: Path) -> None:
 
 
 def gzip_file(source_path: Path, target_path: Path) -> None:
-    with source_path.open("rb") as source, gzip.open(target_path, "wb", compresslevel=6, mtime=0) as target:
-        while True:
-            chunk = source.read(1024 * 1024)
-            if not chunk:
-                break
-            target.write(chunk)
+    with source_path.open("rb") as source, target_path.open("wb") as raw_target:
+        with gzip.GzipFile(fileobj=raw_target, mode="wb", compresslevel=6, mtime=0) as target:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                target.write(chunk)
 
 
 def backup_sqlite_to_storage(kind: str = "hourly") -> dict:
