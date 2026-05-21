@@ -5646,14 +5646,34 @@ def layout(
       line-height: 1.35;
     }}
     .dds-import-actions {{
-      display: grid;
-      grid-template-columns: minmax(260px, 1.2fr) minmax(260px, 1fr);
-      gap: 16px;
-      align-items: start;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
       margin-top: 18px;
     }}
-    .dds-import-actions .mini-card {{
-      height: 100%;
+    .dds-import-action-form {{
+      margin: 0;
+    }}
+    .dds-import-action-btn {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 46px;
+      padding: 0 18px;
+      border-radius: 14px;
+      line-height: 1.15;
+      white-space: nowrap;
+    }}
+    .dds-import-file-input {{
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }}
+    .dds-import-file-label {{
+      cursor: pointer;
     }}
     .dds-import-day-filter {{
       display: flex;
@@ -5764,7 +5784,11 @@ def layout(
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }}
       .dds-import-actions {{
-        grid-template-columns: 1fr;
+        align-items: stretch;
+      }}
+      .dds-import-action-form,
+      .dds-import-action-btn {{
+        width: 100%;
       }}
     }}
     @media (max-width: 720px) {{
@@ -8929,6 +8953,26 @@ document.addEventListener("click", (event) => {{
     item.hidden = !isOpening;
   }});
   settingsToggle.textContent = isOpening ? "Скрыть настройки" : "Показать настройки";
+}});
+
+document.addEventListener("change", (event) => {{
+  const input = event.target.closest("[data-dds-manual-import-input]");
+  if (!input || !input.files || !input.files.length) {{
+    return;
+  }}
+  const form = input.closest("[data-dds-manual-import-form]");
+  if (form) {{
+    form.submit();
+  }}
+}});
+
+document.addEventListener("keydown", (event) => {{
+  const label = event.target.closest(".dds-import-file-label");
+  if (!label || !["Enter", " "].includes(event.key)) {{
+    return;
+  }}
+  event.preventDefault();
+  label.click();
 }});
 
 document.addEventListener("click", (event) => {{
@@ -22160,31 +22204,17 @@ def render_expense_imports_section(
     manual_import_card = ""
     check_mail_card = ""
     if can_edit:
+        manual_input_id = f"dds-import-file-{owner_chat_id}"
         manual_import_card = f"""
-        <section class="card mini-card">
-          <div>
-            <h3 class="panel-title">Загрузить вручную</h3>
-            <div class="panel-sub">TXT выгрузка Клиент-Банк для 1С: формат 1.03, кодировка WIN.</div>
-          </div>
-          <form class="form-grid" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&return=imports{import_day_query}">
-            <div class="field span-2">
-              <label>TXT выписка</label>
-              <input type="file" name="bank_statement" accept=".txt,text/plain" required>
-            </div>
-            <button class="submit-btn" type="submit">Импортировать выписку</button>
-          </form>
-        </section>
+        <form class="dds-import-action-form" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&return=imports{import_day_query}" data-dds-manual-import-form>
+          <input class="dds-import-file-input" id="{manual_input_id}" type="file" name="bank_statement" accept=".txt,text/plain" required data-dds-manual-import-input>
+          <label class="submit-btn dds-import-action-btn dds-import-file-label" for="{manual_input_id}" role="button" tabindex="0">Загрузить вручную</label>
+        </form>
         """
         check_mail_card = f"""
-        <section class="card mini-card">
-          <div>
-            <h3 class="panel-title">Почтовый автоимпорт</h3>
-            <div class="panel-sub">Проверить ящик сейчас и забрать новые письма со ссылками или TXT-вложениями.</div>
-          </div>
-          <form method="post" action="/expenses/mail-import?owner={owner_chat_id}&return=imports{import_day_query}">
-            <button class="submit-btn" type="submit">Проверить почту сейчас</button>
-          </form>
-        </section>
+        <form class="dds-import-action-form" method="post" action="/expenses/mail-import?owner={owner_chat_id}&return=imports{import_day_query}">
+          <button class="submit-btn dds-import-action-btn" type="submit">Загрузить из почты сейчас</button>
+        </form>
         """
     mail_imports = storage.list_bank_statement_mail_imports(owner_chat_id, 80, import_day_from, import_day_to)
     def render_mail_import_row(item) -> str:
