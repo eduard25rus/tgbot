@@ -6907,15 +6907,39 @@ def layout(
       color: var(--muted);
       font-size: 13px;
       line-height: 1.45;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 8px 10px;
     }}
     .workforce-report-description {{
       margin-top: 2px;
       color: var(--muted);
       white-space: pre-line;
     }}
+    .workforce-description-menu {{
+      display: inline-block;
+    }}
+    .workforce-description-menu[open] {{
+      display: block;
+      width: 100%;
+    }}
+    .workforce-description-menu summary {{
+      list-style: none;
+    }}
+    .workforce-description-menu summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .workforce-description-text {{
+      margin-top: 8px;
+      color: var(--muted);
+      white-space: pre-line;
+      overflow-wrap: anywhere;
+    }}
     .workforce-report-missing {{
       color: var(--muted);
       margin-top: 2px;
+      flex-basis: 100%;
     }}
     .workforce-report-missing.danger {{
       color: var(--danger);
@@ -6936,7 +6960,7 @@ def layout(
       font-weight: 800;
     }}
     .workforce-report-files {{
-      margin-top: 8px;
+      margin-top: 0;
     }}
     .workforce-existing-files {{
       grid-column: 1 / -1;
@@ -15994,6 +16018,17 @@ def render_workforce_report_form(
     """
 
 
+def render_workforce_report_description(description: str) -> str:
+    if not description:
+        return ""
+    return f"""
+    <details class="workforce-description-menu">
+      <summary class="secondary-btn mini">Отчет о работе</summary>
+      <div class="workforce-description-text">{escape(description)}</div>
+    </details>
+    """
+
+
 def render_workforce_report_files(owner_chat_id: int, report_id: int, files: list) -> str:
     if not files:
         return ""
@@ -16386,7 +16421,7 @@ def render_workforce_section(
         report_files_html = render_workforce_report_files(owner_chat_id, report.id, report.files)
         missing_full_report = not work_description and not report.files
         description_status = (
-            f'<div class="workforce-report-description">{escape(work_description)}</div>'
+            render_workforce_report_description(work_description)
             if work_description
             else '<div class="workforce-report-missing">Описание не заполнено</div>'
         )
@@ -16462,7 +16497,6 @@ def render_workforce_section(
               <td></td>
               <td colspan="4">
                 <div class="workforce-report-detail">
-                  <div class="workforce-report-label">Выполненные работы:</div>
                   {description_status}
                   {f'<div class="workforce-report-files">{files_status}</div>' if files_status else ''}
                 </div>
@@ -16498,7 +16532,7 @@ def render_workforce_section(
             report_description = report.work_description or ""
             report_files = render_workforce_report_files(owner_chat_id, report.id, report.files)
             if report_description:
-                object_description_html = f'<div class="workforce-report-description">{escape(report_description)}</div>'
+                object_description_html = render_workforce_report_description(report_description)
             elif report.files:
                 object_description_html = '<span class="contract-table-subtle">Описание не заполнено</span>'
             else:
