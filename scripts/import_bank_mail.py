@@ -629,6 +629,48 @@ def add_mail_import_log(
     return True
 
 
+def add_mail_import_duplicate(
+    storage: Storage,
+    owner_chat_id: int,
+    login: str,
+    folder: str,
+    uid_text: str,
+    subject: str,
+    message_from: str,
+    message: Message,
+    filename: str,
+) -> bool:
+    error_message = "Эта выписка уже была обработана ранее."
+    if storage.bank_statement_mail_import_log_exists(
+        owner_chat_id,
+        login,
+        folder,
+        uid_text,
+        filename,
+        "duplicate",
+        error_message,
+    ):
+        return False
+    storage.add_bank_statement_mail_import(
+        owner_chat_id,
+        login,
+        folder,
+        uid_text,
+        subject,
+        message_from,
+        message_date(message),
+        filename,
+        "",
+        "duplicate",
+        0,
+        1,
+        0,
+        0,
+        error_message,
+    )
+    return True
+
+
 def imap_ok(response) -> bool:
     return bool(response) and response[0] == "OK"
 
@@ -746,6 +788,15 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                     link_count += 1
                     message_had_statement = True
                     link_ref = short_source_ref(link)
+                    if storage.bank_statement_mail_link_seen(
+                        owner_chat_id,
+                        login,
+                        folder,
+                        uid_text,
+                        link_ref,
+                    ):
+                        skipped_files += 1
+                        continue
                     try:
                         filename, payload = download_statement_link(link)
                         statement_sources.append(StatementSource(filename, payload, "Ссылка Сбера", link_ref))
@@ -788,27 +839,27 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                     statement_source.source_kind,
                     statement_source.source_ref,
                 )
+                if (
+                    statement_source.source_kind == "Ссылка Сбера"
+                    and storage.bank_statement_mail_source_seen(owner_chat_id, login, folder, uid_text, filename)
+                ):
+                    skipped_files += 1
+                    continue
                 payload = statement_source.payload
                 attachment_hash = hashlib.sha256(payload).hexdigest()
                 if storage.bank_statement_mail_attachment_exists(owner_chat_id, attachment_hash):
-                    storage.add_bank_statement_mail_import(
+                    if add_mail_import_duplicate(
+                        storage,
                         owner_chat_id,
                         login,
                         folder,
                         uid_text,
                         subject,
                         message_from,
-                        message_date(message),
+                        message,
                         filename,
-                        "",
-                        "duplicate",
-                        0,
-                        1,
-                        0,
-                        0,
-                        "Эта выписка уже была обработана ранее.",
-                    )
-                    skipped_files += 1
+                    ):
+                        skipped_files += 1
                     continue
                 try:
                     result = import_bank_1c_statement(

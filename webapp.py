@@ -5655,6 +5655,33 @@ def layout(
     .dds-import-actions .mini-card {{
       height: 100%;
     }}
+    .dds-import-day-filter {{
+      display: flex;
+      align-items: end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }}
+    .dds-import-day-filter label {{
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: var(--font-weight-bold);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .dds-import-day-filter input {{
+      width: 160px;
+      min-height: 38px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--ink);
+      background: #fff;
+      font: inherit;
+      letter-spacing: 0;
+      text-transform: none;
+    }}
     .dds-import-log-table {{
       table-layout: fixed;
       width: 100%;
@@ -5704,6 +5731,10 @@ def layout(
       color: var(--ink);
       font-weight: var(--font-weight-bold);
       line-height: 1.18;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: help;
     }}
     .dds-import-meta-row,
     .dds-import-subject {{
@@ -5726,6 +5757,7 @@ def layout(
     .dds-import-log-message {{
       color: var(--muted);
       line-height: 1.25;
+      cursor: help;
     }}
     @media (max-width: 1180px) {{
       .dds-filter-panel {{
@@ -22103,14 +22135,27 @@ def format_mail_import_message_date(raw_value: str) -> str:
     return format_datetime(parsed)
 
 
+def local_day_utc_bounds(value: date) -> tuple[datetime, datetime]:
+    start_local = datetime.combine(value, datetime.min.time()).replace(tzinfo=VLADIVOSTOK_TZ)
+    end_local = start_local + timedelta(days=1)
+    return (
+        start_local.astimezone(timezone.utc).replace(tzinfo=None),
+        end_local.astimezone(timezone.utc).replace(tzinfo=None),
+    )
+
+
 def render_expense_imports_section(
     storage: Storage,
     owner_chat_id: int,
     current_user: dict | None,
     flash_message: str = "",
     success: bool = False,
+    selected_import_day: date | None = None,
 ) -> str:
     can_edit = has_permission(current_user, "expenses", "edit")
+    selected_import_day = selected_import_day or datetime.now(VLADIVOSTOK_TZ).date()
+    import_day_from, import_day_to = local_day_utc_bounds(selected_import_day)
+    import_day_query = f"&import_day={quote_plus(selected_import_day.isoformat())}"
     flash_html = f'<div class="flash{" ok" if success else ""}">{escape(flash_message)}</div>' if flash_message else ""
     manual_import_card = ""
     check_mail_card = ""
@@ -22121,7 +22166,7 @@ def render_expense_imports_section(
             <h3 class="panel-title">Загрузить вручную</h3>
             <div class="panel-sub">TXT выгрузка Клиент-Банк для 1С: формат 1.03, кодировка WIN.</div>
           </div>
-          <form class="form-grid" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&return=imports">
+          <form class="form-grid" method="post" enctype="multipart/form-data" action="/expenses/import?owner={owner_chat_id}&return=imports{import_day_query}">
             <div class="field span-2">
               <label>TXT выписка</label>
               <input type="file" name="bank_statement" accept=".txt,text/plain" required>
@@ -22136,31 +22181,37 @@ def render_expense_imports_section(
             <h3 class="panel-title">Почтовый автоимпорт</h3>
             <div class="panel-sub">Проверить ящик сейчас и забрать новые письма со ссылками или TXT-вложениями.</div>
           </div>
-          <form method="post" action="/expenses/mail-import?owner={owner_chat_id}&return=imports">
+          <form method="post" action="/expenses/mail-import?owner={owner_chat_id}&return=imports{import_day_query}">
             <button class="submit-btn" type="submit">Проверить почту сейчас</button>
           </form>
         </section>
         """
-    mail_imports = storage.list_bank_statement_mail_imports(owner_chat_id, 50)
-    rows_html = "".join(
-        f"""
+    mail_imports = storage.list_bank_statement_mail_imports(owner_chat_id, 80, import_day_from, import_day_to)
+    def render_mail_import_row(item) -> str:
+        source_title = item.attachment_filename or item.message_subject or "Выписка из почты"
+        message_date_text = format_mail_import_message_date(item.message_date) if item.message_date else ""
+        meta_text = f"{item.mailbox} · {item.mailbox_folder or 'Почта'} · UID {item.message_uid or '—'}"
+        if message_date_text:
+            meta_text += f" · письмо {message_date_text}"
+        result_text = item.error_message if item.error_message else "Без ошибок"
+        source_tooltip = "\n".join(part for part in (source_title, meta_text, f"Тема: {item.message_subject}" if item.message_subject else "") if part)
+        return f"""
         <tr>
           <td class="nowrap">{escape(format_datetime(item.processed_at.astimezone(VLADIVOSTOK_TZ)))}</td>
           <td>
-            <div class="dds-import-source-title">{escape(item.attachment_filename or item.message_subject or 'Выписка из почты')}</div>
-            <div class="dds-import-meta-row">{escape(item.mailbox)} · {escape(item.mailbox_folder or 'Почта')} · UID {escape(item.message_uid or '—')}{f' · письмо {escape(format_mail_import_message_date(item.message_date))}' if item.message_date else ''}</div>
-            {f'<div class="dds-import-subject">Тема: {escape(item.message_subject)}</div>' if item.message_subject and item.message_subject != (item.attachment_filename or item.message_subject) else ''}
+            <div class="dds-import-source-title" title="{escape(source_tooltip)}">{escape(source_title)}</div>
+            <div class="dds-import-meta-row" title="{escape(meta_text)}">{escape(meta_text)}</div>
+            {f'<div class="dds-import-subject" title="{escape(item.message_subject)}">Тема: {escape(item.message_subject)}</div>' if item.message_subject and item.message_subject != source_title else ''}
           </td>
           <td>{bank_mail_import_status_chip(item)}</td>
           <td class="nowrap">
             <div class="dds-import-counts"><strong>{item.imported_count}</strong> новых · <strong>{item.duplicate_count}</strong> дублей · <strong>{item.skipped_count}</strong> пропусков</div>
           </td>
           <td class="nowrap">{item.balance_count}</td>
-          <td><div class="dds-import-log-message">{escape(item.error_message) if item.error_message else "Без ошибок"}</div></td>
+          <td><div class="dds-import-log-message" title="{escape(result_text)}">{escape(result_text)}</div></td>
         </tr>
         """
-        for item in mail_imports
-    ) or '<tr><td colspan="6">Журнал загрузок пока пуст.</td></tr>'
+    rows_html = "".join(render_mail_import_row(item) for item in mail_imports) or '<tr><td colspan="6">За выбранный день загрузок пока нет.</td></tr>'
     return f"""
     <section class="card panel">
       <div class="panel-head">
@@ -22179,8 +22230,17 @@ def render_expense_imports_section(
         <div class="panel-head" style="margin-bottom:10px;">
           <div>
             <h3 class="panel-title">Журнал загрузок</h3>
-            <div class="panel-sub">Последние 50 файлов из почты: новые операции, дубли, пропущенные строки и ошибки чтения.</div>
+            <div class="panel-sub">Загрузки за выбранный день: новые операции, дубли, пропущенные строки и ошибки чтения.</div>
           </div>
+          <form class="dds-import-day-filter" method="get" action="/expenses/imports" data-auto-submit-form="1">
+            <input type="hidden" name="owner" value="{owner_chat_id}">
+            <label>
+              <span>День</span>
+              <input type="date" name="import_day" value="{escape(selected_import_day.isoformat())}">
+            </label>
+            <a class="secondary-btn mini" href="/expenses/imports?owner={owner_chat_id}&import_day={quote_plus((selected_import_day - timedelta(days=1)).isoformat())}">← Вчера</a>
+            <a class="secondary-btn mini" href="/expenses/imports?owner={owner_chat_id}&import_day={quote_plus(datetime.now(VLADIVOSTOK_TZ).date().isoformat())}">Сегодня</a>
+          </form>
         </div>
         <div class="expenses-table-wrap">
           <table class="table contract-table dds-import-log-table">
@@ -28728,7 +28788,9 @@ self.addEventListener("notificationclick", (event) => {
         query = parse_qs(environ.get("QUERY_STRING", ""))
         flash_message = query.get("flash", [""])[0].strip()
         success = query.get("ok", ["0"])[0] == "1"
-        body = render_expense_imports_section(storage, current_owner, current_user, flash_message, success)
+        import_day_raw = query.get("import_day", [""])[0].strip()
+        selected_import_day = parse_date(import_day_raw) if import_day_raw else datetime.now(VLADIVOSTOK_TZ).date()
+        body = render_expense_imports_section(storage, current_owner, current_user, flash_message, success, selected_import_day)
         html = layout(
             "Импорт выписок",
             body,
@@ -28755,6 +28817,8 @@ self.addEventListener("notificationclick", (event) => {
         adjustment_filter = query.get("adjustment", ["needs"])[0].strip() or "needs"
         selected_day_raw = query.get("day", [""])[0].strip()
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        import_day_raw = query.get("import_day", [""])[0].strip()
+        import_day_query = f"&import_day={quote_plus(import_day_raw)}" if import_day_raw else ""
         extra_filters = expenses_filter_args_from_query(query)
         extra_query = expenses_extra_query_from_filters(extra_filters)
         try:
@@ -28766,7 +28830,7 @@ self.addEventListener("notificationclick", (event) => {
             success = False
             flash = f"Не удалось проверить почту: {exc}"
         if return_to_imports:
-            return redirect(start_response, f"/expenses/imports?owner={current_owner}&ok={1 if success else 0}&flash={quote_plus(flash)}")
+            return redirect(start_response, f"/expenses/imports?owner={current_owner}{import_day_query}&ok={1 if success else 0}&flash={quote_plus(flash)}")
         if not success:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, flash, False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
@@ -28786,6 +28850,8 @@ self.addEventListener("notificationclick", (event) => {
         adjustment_filter = query.get("adjustment", ["needs"])[0].strip() or "needs"
         selected_day_raw = query.get("day", [""])[0].strip()
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        import_day_raw = query.get("import_day", [""])[0].strip()
+        import_day_query = f"&import_day={quote_plus(import_day_raw)}" if import_day_raw else ""
         extra_filters = expenses_filter_args_from_query(query)
         extra_query = expenses_extra_query_from_filters(extra_filters)
         try:
@@ -28804,13 +28870,13 @@ self.addEventListener("notificationclick", (event) => {
             flash = f"Импортировано операций: {result.imported_count}. Остатков обновлено: {result.balance_count}. Дублей пропущено: {result.duplicate_count}. Не распознано как ДДС: {result.skipped_count}."
         except ValueError as exc:
             if return_to_imports:
-                return redirect(start_response, f"/expenses/imports?owner={current_owner}&ok=0&flash={quote_plus(str(exc))}")
+                return redirect(start_response, f"/expenses/imports?owner={current_owner}{import_day_query}&ok=0&flash={quote_plus(str(exc))}")
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         if return_to_imports:
-            return redirect(start_response, f"/expenses/imports?owner={current_owner}&ok=1&flash={quote_plus(flash)}")
+            return redirect(start_response, f"/expenses/imports?owner={current_owner}{import_day_query}&ok=1&flash={quote_plus(flash)}")
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}&flash={quote_plus(flash)}")
 
     if path == "/expenses/new" and method == "POST":

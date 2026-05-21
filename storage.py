@@ -7957,6 +7957,74 @@ class Storage:
             ).fetchone()
         return row is not None
 
+    def bank_statement_mail_source_seen(
+        self,
+        owner_chat_id: int,
+        mailbox: str,
+        mailbox_folder: str,
+        message_uid: str,
+        attachment_filename: str,
+    ) -> bool:
+        cleaned_filename = attachment_filename.strip()
+        if not cleaned_filename:
+            return False
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM bank_statement_mail_imports
+                WHERE owner_chat_id = ?
+                  AND mailbox = ?
+                  AND mailbox_folder = ?
+                  AND message_uid = ?
+                  AND attachment_filename = ?
+                  AND status IN ('processed', 'duplicate')
+                LIMIT 1
+                """,
+                (
+                    owner_chat_id,
+                    mailbox.strip(),
+                    mailbox_folder.strip(),
+                    message_uid.strip(),
+                    cleaned_filename,
+                ),
+            ).fetchone()
+        return row is not None
+
+    def bank_statement_mail_link_seen(
+        self,
+        owner_chat_id: int,
+        mailbox: str,
+        mailbox_folder: str,
+        message_uid: str,
+        source_ref: str,
+    ) -> bool:
+        cleaned_ref = source_ref.strip()
+        if not cleaned_ref:
+            return False
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM bank_statement_mail_imports
+                WHERE owner_chat_id = ?
+                  AND mailbox = ?
+                  AND mailbox_folder = ?
+                  AND message_uid = ?
+                  AND attachment_filename LIKE ?
+                  AND status IN ('processed', 'duplicate')
+                LIMIT 1
+                """,
+                (
+                    owner_chat_id,
+                    mailbox.strip(),
+                    mailbox_folder.strip(),
+                    message_uid.strip(),
+                    f"%· Ссылка Сбера #{cleaned_ref}",
+                ),
+            ).fetchone()
+        return row is not None
+
     def add_bank_statement_mail_import(
         self,
         owner_chat_id: int,
@@ -8009,20 +8077,35 @@ class Storage:
             )
             return int(cursor.lastrowid)
 
-    def list_bank_statement_mail_imports(self, owner_chat_id: int, limit: int = 10) -> list[BankStatementMailImport]:
+    def list_bank_statement_mail_imports(
+        self,
+        owner_chat_id: int,
+        limit: int = 10,
+        processed_from: datetime | None = None,
+        processed_to: datetime | None = None,
+    ) -> list[BankStatementMailImport]:
+        filters = ["owner_chat_id = ?"]
+        params: list[object] = [owner_chat_id]
+        if processed_from is not None:
+            filters.append("processed_at >= ?")
+            params.append(processed_from.isoformat())
+        if processed_to is not None:
+            filters.append("processed_at < ?")
+            params.append(processed_to.isoformat())
+        params.append(max(1, int(limit)))
         with self.connection() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, owner_chat_id, mailbox, mailbox_folder, message_uid, message_subject,
                        message_from, message_date, attachment_filename, attachment_hash, status,
                        imported_count, duplicate_count, skipped_count, balance_count,
                        error_message, processed_at, created_at
                 FROM bank_statement_mail_imports
-                WHERE owner_chat_id = ?
+                WHERE {" AND ".join(filters)}
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?
                 """,
-                (owner_chat_id, max(1, int(limit))),
+                tuple(params),
             ).fetchall()
         return [
             BankStatementMailImport(
