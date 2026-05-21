@@ -6909,7 +6909,7 @@ def layout(
       line-height: 1.45;
       display: flex;
       flex-wrap: wrap;
-      align-items: flex-start;
+      align-items: center;
       gap: 8px 10px;
     }}
     .workforce-report-description {{
@@ -6918,13 +6918,18 @@ def layout(
       white-space: pre-line;
     }}
     .workforce-description-menu {{
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      margin: 0;
     }}
     .workforce-description-menu[open] {{
       display: block;
       width: 100%;
     }}
     .workforce-description-menu summary {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       list-style: none;
     }}
     .workforce-description-menu summary::-webkit-details-marker {{
@@ -6961,6 +6966,14 @@ def layout(
     }}
     .workforce-report-files {{
       margin-top: 0;
+      display: inline-flex;
+      align-items: center;
+    }}
+    .workforce-report-pill {{
+      min-height: 36px;
+      padding: 9px 14px;
+      border-radius: 16px;
+      line-height: 1.15;
     }}
     .workforce-existing-files {{
       grid-column: 1 / -1;
@@ -16023,7 +16036,7 @@ def render_workforce_report_description(description: str) -> str:
         return ""
     return f"""
     <details class="workforce-description-menu">
-      <summary class="secondary-btn mini">Отчет о работе</summary>
+      <summary class="secondary-btn mini construction-photo-view-btn workforce-report-pill">Отчет о работе</summary>
       <div class="workforce-description-text">{escape(description)}</div>
     </details>
     """
@@ -16042,7 +16055,7 @@ def render_workforce_report_files(owner_chat_id: int, report_id: int, files: lis
         for index, file in enumerate(files)
     )
     return f"""
-    <button class="secondary-btn mini construction-photo-view-btn" type="button" data-construction-carousel-open="workforce-report-files-{report_id}">
+    <button class="secondary-btn mini construction-photo-view-btn workforce-report-pill" type="button" data-construction-carousel-open="workforce-report-files-{report_id}">
       Фотоотчет
       <span>{len(files)}</span>
     </button>
