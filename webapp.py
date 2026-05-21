@@ -18107,11 +18107,11 @@ def render_cashoperations_body(
             report_files_html = f'<a class="cash-work-file-link" href="/cashoperations/work-reports/{report.id}/preview">Фотоотчет: {files_count}</a>' if files_count else ""
             work_report_html = f"""
             <div class="cash-work-report-actions">
-              <details class="cash-work-report-details">
-                <summary>Смотреть отчет</summary>
-                {report_description_html}
-              </details>
+              <button class="cash-work-report-toggle" type="button" data-toggle-work-description>Смотреть отчет</button>
               {report_files_html}
+              <div class="cash-work-description-panel is-hidden" data-work-description-panel-inline>
+                {report_description_html}
+              </div>
             </div>
             """
         else:
@@ -18872,10 +18872,7 @@ def render_cashoperations_body(
         gap: 8px;
         margin-top: 8px;
       }}
-      .cash-work-report-details {{
-        min-width: 0;
-      }}
-      .cash-work-report-details summary {{
+      .cash-work-report-toggle {{
         display: inline-grid;
         min-height: 32px;
         align-items: center;
@@ -18886,15 +18883,16 @@ def render_cashoperations_body(
         color: var(--muted);
         font-size: 12px;
         font-weight: 800;
-        list-style: none;
+        font-family: inherit;
       }}
-      .cash-work-report-details summary::-webkit-details-marker {{
-        display: none;
-      }}
-      .cash-work-report-details[open] summary {{
+      .cash-work-report-toggle.active {{
         color: #186844;
         background: #e3f2e9;
         border-color: rgba(24, 104, 68, .16);
+      }}
+      .cash-work-description-panel {{
+        flex: 1 0 100%;
+        min-width: 0;
       }}
       .cash-work-description {{
         display: block;
@@ -20090,13 +20088,25 @@ def render_cashoperations_body(
         }});
         document.querySelectorAll("[data-edit-work-report]").forEach((card) => {{
           card.addEventListener("click", (event) => {{
+            const toggle = event.target.closest("[data-toggle-work-description]");
+            if (toggle) {{
+              event.preventDefault();
+              event.stopPropagation();
+              const panel = card.querySelector("[data-work-description-panel-inline]");
+              if (panel) {{
+                const shouldOpen = panel.classList.contains("is-hidden");
+                panel.classList.toggle("is-hidden", !shouldOpen);
+                toggle.classList.toggle("active", shouldOpen);
+              }}
+              return;
+            }}
             if (event.target.closest("[data-edit-work-description]")) {{
               event.preventDefault();
               event.stopPropagation();
               editWorkDescription(card);
               return;
             }}
-            if (event.target.closest("form, button, a, input, select, textarea, label, details, summary")) return;
+            if (event.target.closest("form, button, a, input, select, textarea, label")) return;
             editWorkReport(card);
           }});
           card.addEventListener("keydown", (event) => {{
