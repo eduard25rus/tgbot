@@ -6939,22 +6939,11 @@ def layout(
       color: var(--muted);
       white-space: pre-line;
     }}
-    .workforce-description-menu {{
-      display: inline-flex;
-      align-items: center;
-      margin: 0;
-    }}
-    .workforce-description-menu[open] {{
-      display: contents;
-    }}
-    .workforce-description-menu summary {{
+    .workforce-description-toggle {{
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      list-style: none;
-    }}
-    .workforce-description-menu summary::-webkit-details-marker {{
-      display: none;
+      order: 0;
     }}
     .workforce-description-text {{
       order: 3;
@@ -6963,6 +6952,9 @@ def layout(
       color: var(--muted);
       white-space: pre-line;
       overflow-wrap: anywhere;
+    }}
+    .workforce-description-text[hidden] {{
+      display: none !important;
     }}
     .workforce-report-missing {{
       color: var(--muted);
@@ -9017,6 +9009,21 @@ document.addEventListener("click", (event) => {{
     item.hidden = !isOpening;
   }});
   settingsToggle.textContent = isOpening ? "Скрыть настройки" : "Показать настройки";
+}});
+
+document.addEventListener("click", (event) => {{
+  const toggle = event.target.closest("[data-workforce-description-toggle]");
+  if (!toggle) {{
+    return;
+  }}
+  const targetId = toggle.getAttribute("aria-controls") || "";
+  const target = targetId ? document.getElementById(targetId) : null;
+  if (!target) {{
+    return;
+  }}
+  const isOpening = target.hidden;
+  target.hidden = !isOpening;
+  toggle.setAttribute("aria-expanded", isOpening ? "true" : "false");
 }});
 
 document.addEventListener("change", (event) => {{
@@ -16106,14 +16113,13 @@ def render_workforce_report_form(
     """
 
 
-def render_workforce_report_description(description: str) -> str:
+def render_workforce_report_description(description: str, description_key: str) -> str:
     if not description:
         return ""
+    description_id = f"workforce-description-{description_key}"
     return f"""
-    <details class="workforce-description-menu">
-      <summary class="secondary-btn mini construction-photo-view-btn workforce-report-pill">Отчет о работе</summary>
-      <div class="workforce-description-text">{escape(description)}</div>
-    </details>
+    <button class="secondary-btn mini construction-photo-view-btn workforce-report-pill workforce-description-toggle" type="button" data-workforce-description-toggle aria-expanded="false" aria-controls="{description_id}">Отчет о работе</button>
+    <div class="workforce-description-text" id="{description_id}" hidden>{escape(description)}</div>
     """
 
 
@@ -16509,7 +16515,7 @@ def render_workforce_section(
         report_files_html = render_workforce_report_files(owner_chat_id, report.id, report.files)
         missing_full_report = not work_description and not report.files
         description_status = (
-            render_workforce_report_description(work_description)
+            render_workforce_report_description(work_description, f"detail-{report.id}")
             if work_description
             else '<div class="workforce-report-missing">Описание не заполнено</div>'
         )
@@ -16620,7 +16626,7 @@ def render_workforce_section(
             report_description = report.work_description or ""
             report_files = render_workforce_report_files(owner_chat_id, report.id, report.files)
             if report_description:
-                object_description_html = render_workforce_report_description(report_description)
+                object_description_html = render_workforce_report_description(report_description, f"object-{report.id}")
             elif report.files:
                 object_description_html = '<span class="contract-table-subtle">Описание не заполнено</span>'
             else:
