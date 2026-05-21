@@ -208,6 +208,12 @@ class ConstructionReportPhoto:
     created_at: datetime
     contract_title: str
     chat_id: int
+    storage_provider: str = "local"
+    storage_key: str = ""
+    original_filename: str = ""
+    content_type: str = ""
+    size_bytes: int = 0
+    checksum_sha256: str = ""
 
 
 @dataclass
@@ -328,6 +334,12 @@ class MobileWorkReportFile:
     created_at: datetime
     source_kind: str
     source_ref: str
+    storage_provider: str = "local"
+    storage_key: str = ""
+    original_filename: str = ""
+    content_type: str = ""
+    size_bytes: int = 0
+    checksum_sha256: str = ""
 
 
 @dataclass
@@ -726,6 +738,12 @@ class Storage:
                     report_id INTEGER NOT NULL,
                     file_name TEXT NOT NULL DEFAULT '',
                     file_path TEXT NOT NULL DEFAULT '',
+                    storage_provider TEXT NOT NULL DEFAULT 'local',
+                    storage_key TEXT NOT NULL DEFAULT '',
+                    original_filename TEXT NOT NULL DEFAULT '',
+                    content_type TEXT NOT NULL DEFAULT '',
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    checksum_sha256 TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(report_id) REFERENCES construction_reports(id) ON DELETE CASCADE
                 );
@@ -989,6 +1007,12 @@ class Storage:
                     file_name TEXT NOT NULL DEFAULT '',
                     file_path TEXT NOT NULL DEFAULT '',
                     file_kind TEXT NOT NULL DEFAULT 'image',
+                    storage_provider TEXT NOT NULL DEFAULT 'local',
+                    storage_key TEXT NOT NULL DEFAULT '',
+                    original_filename TEXT NOT NULL DEFAULT '',
+                    content_type TEXT NOT NULL DEFAULT '',
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    checksum_sha256 TEXT NOT NULL DEFAULT '',
                     created_by_user_id INTEGER,
                     created_by_name TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -1362,6 +1386,9 @@ class Storage:
             }
             construction_report_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(construction_reports)").fetchall()
+            }
+            construction_report_photo_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(construction_report_photos)").fetchall()
             }
             mobile_work_report_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(mobile_work_reports)").fetchall()
@@ -1780,6 +1807,40 @@ class Storage:
             for column_name, column_def in construction_report_alters:
                 if column_name and column_name not in construction_report_columns:
                     conn.execute(f"ALTER TABLE construction_reports ADD COLUMN {column_name} {column_def}")
+            file_storage_metadata_alters = [
+                ("storage_provider", "TEXT NOT NULL DEFAULT 'local'"),
+                ("storage_key", "TEXT NOT NULL DEFAULT ''"),
+                ("original_filename", "TEXT NOT NULL DEFAULT ''"),
+                ("content_type", "TEXT NOT NULL DEFAULT ''"),
+                ("size_bytes", "INTEGER NOT NULL DEFAULT 0"),
+                ("checksum_sha256", "TEXT NOT NULL DEFAULT ''"),
+            ]
+            for column_name, column_def in file_storage_metadata_alters:
+                if column_name not in construction_report_photo_columns:
+                    conn.execute(f"ALTER TABLE construction_report_photos ADD COLUMN {column_name} {column_def}")
+            conn.execute(
+                """
+                UPDATE construction_report_photos
+                SET storage_provider = 'local'
+                WHERE COALESCE(storage_provider, '') = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE construction_report_photos
+                SET storage_key = COALESCE(NULLIF(file_path, ''), storage_key)
+                WHERE COALESCE(storage_key, '') = ''
+                  AND COALESCE(file_path, '') != ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE construction_report_photos
+                SET original_filename = COALESCE(NULLIF(file_name, ''), original_filename)
+                WHERE COALESCE(original_filename, '') = ''
+                  AND COALESCE(file_name, '') != ''
+                """
+            )
             mobile_work_report_alters = [
                 ("people_comment", "TEXT NOT NULL DEFAULT ''"),
                 ("work_description", "TEXT NOT NULL DEFAULT ''"),
@@ -1800,6 +1861,12 @@ class Storage:
                 )
             mobile_work_report_file_alters = [
                 ("file_kind", "TEXT NOT NULL DEFAULT 'image'"),
+                ("storage_provider", "TEXT NOT NULL DEFAULT 'local'"),
+                ("storage_key", "TEXT NOT NULL DEFAULT ''"),
+                ("original_filename", "TEXT NOT NULL DEFAULT ''"),
+                ("content_type", "TEXT NOT NULL DEFAULT ''"),
+                ("size_bytes", "INTEGER NOT NULL DEFAULT 0"),
+                ("checksum_sha256", "TEXT NOT NULL DEFAULT ''"),
                 ("created_by_user_id", "INTEGER"),
                 ("created_by_name", "TEXT NOT NULL DEFAULT ''"),
                 ("source_kind", "TEXT NOT NULL DEFAULT ''"),
@@ -1808,6 +1875,29 @@ class Storage:
             for column_name, column_def in mobile_work_report_file_alters:
                 if column_name not in mobile_work_report_file_columns:
                     conn.execute(f"ALTER TABLE mobile_work_report_files ADD COLUMN {column_name} {column_def}")
+            conn.execute(
+                """
+                UPDATE mobile_work_report_files
+                SET storage_provider = 'local'
+                WHERE COALESCE(storage_provider, '') = ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE mobile_work_report_files
+                SET storage_key = COALESCE(NULLIF(file_path, ''), storage_key)
+                WHERE COALESCE(storage_key, '') = ''
+                  AND COALESCE(file_path, '') != ''
+                """
+            )
+            conn.execute(
+                """
+                UPDATE mobile_work_report_files
+                SET original_filename = COALESCE(NULLIF(file_name, ''), original_filename)
+                WHERE COALESCE(original_filename, '') = ''
+                  AND COALESCE(file_name, '') != ''
+                """
+            )
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_mobile_work_report_files_source
@@ -4387,7 +4477,19 @@ class Storage:
             )
             return cursor.rowcount > 0
 
-    def add_construction_report_photo(self, chat_id: int, report_id: int, file_name: str, file_path: str) -> int | None:
+    def add_construction_report_photo(
+        self,
+        chat_id: int,
+        report_id: int,
+        file_name: str,
+        file_path: str,
+        storage_provider: str = "local",
+        storage_key: str = "",
+        original_filename: str = "",
+        content_type: str = "",
+        size_bytes: int = 0,
+        checksum_sha256: str = "",
+    ) -> int | None:
         with self.connection() as conn:
             report = conn.execute(
                 """
@@ -4402,10 +4504,24 @@ class Storage:
                 return None
             cursor = conn.execute(
                 """
-                INSERT INTO construction_report_photos (report_id, file_name, file_path, created_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO construction_report_photos (
+                    report_id, file_name, file_path, storage_provider, storage_key,
+                    original_filename, content_type, size_bytes, checksum_sha256, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (report_id, file_name.strip(), file_path.strip(), datetime.utcnow().isoformat()),
+                (
+                    report_id,
+                    file_name.strip(),
+                    file_path.strip(),
+                    storage_provider.strip() or "local",
+                    storage_key.strip() or file_path.strip(),
+                    original_filename.strip() or file_name.strip(),
+                    content_type.strip(),
+                    max(0, int(size_bytes or 0)),
+                    checksum_sha256.strip(),
+                    datetime.utcnow().isoformat(),
+                ),
             )
             return int(cursor.lastrowid)
 
@@ -4487,7 +4603,9 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT p.id, p.report_id, r.contract_id, p.file_name, p.file_path, p.created_at,
+                SELECT p.id, p.report_id, r.contract_id, p.file_name, p.file_path,
+                       p.storage_provider, p.storage_key, p.original_filename, p.content_type, p.size_bytes, p.checksum_sha256,
+                       p.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM construction_report_photos p
                 JOIN construction_reports r ON r.id = p.report_id
@@ -4696,7 +4814,9 @@ class Storage:
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT p.id, p.report_id, r.contract_id, p.file_name, p.file_path, p.created_at,
+                SELECT p.id, p.report_id, r.contract_id, p.file_name, p.file_path,
+                       p.storage_provider, p.storage_key, p.original_filename, p.content_type, p.size_bytes, p.checksum_sha256,
+                       p.created_at,
                        c.title AS contract_title, c.chat_id AS chat_id
                 FROM construction_report_photos p
                 JOIN construction_reports r ON r.id = p.report_id
@@ -5037,6 +5157,12 @@ class Storage:
             created_at=datetime.fromisoformat(row["created_at"]),
             contract_title=row["contract_title"],
             chat_id=row["chat_id"],
+            storage_provider=row["storage_provider"] or "local",
+            storage_key=row["storage_key"] or row["file_path"] or "",
+            original_filename=row["original_filename"] or row["file_name"] or "",
+            content_type=row["content_type"] or "",
+            size_bytes=int(row["size_bytes"] or 0),
+            checksum_sha256=row["checksum_sha256"] or "",
         )
 
     @staticmethod
@@ -5135,6 +5261,12 @@ class Storage:
             created_at=datetime.fromisoformat(row["created_at"]),
             source_kind=row["source_kind"] or "",
             source_ref=row["source_ref"] or "",
+            storage_provider=row["storage_provider"] or "local",
+            storage_key=row["storage_key"] or row["file_path"] or "",
+            original_filename=row["original_filename"] or row["file_name"] or "",
+            content_type=row["content_type"] or "",
+            size_bytes=int(row["size_bytes"] or 0),
+            checksum_sha256=row["checksum_sha256"] or "",
         )
 
     @staticmethod
@@ -6458,7 +6590,8 @@ class Storage:
 
             photos = conn.execute(
                 """
-                SELECT id, file_name, file_path, created_at
+                SELECT id, file_name, file_path, storage_provider, storage_key,
+                       original_filename, content_type, size_bytes, checksum_sha256, created_at
                 FROM construction_report_photos
                 WHERE report_id = ?
                 ORDER BY id ASC
@@ -6495,14 +6628,21 @@ class Storage:
                     """
                     INSERT INTO mobile_work_report_files (
                         report_id, file_name, file_path, file_kind,
+                        storage_provider, storage_key, original_filename, content_type, size_bytes, checksum_sha256,
                         created_by_user_id, created_by_name, created_at, source_kind, source_ref
                     )
-                    VALUES (?, ?, ?, 'image', ?, ?, ?, 'construction_report_photo', ?)
+                    VALUES (?, ?, ?, 'image', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'construction_report_photo', ?)
                     """,
                     (
                         report_id,
                         photo["file_name"] or "",
                         photo["file_path"] or "",
+                        photo["storage_provider"] or "local",
+                        photo["storage_key"] or photo["file_path"] or "",
+                        photo["original_filename"] or photo["file_name"] or "",
+                        photo["content_type"] or "",
+                        int(photo["size_bytes"] or 0),
+                        photo["checksum_sha256"] or "",
                         row["created_by_user_id"],
                         row["created_by_name"] or "",
                         photo["created_at"],
@@ -6538,6 +6678,7 @@ class Storage:
             row = conn.execute(
                 """
                 SELECT f.id, f.report_id, f.file_name, f.file_path, f.file_kind,
+                       f.storage_provider, f.storage_key, f.original_filename, f.content_type, f.size_bytes, f.checksum_sha256,
                        f.created_by_user_id, f.created_by_name, f.created_at, f.source_kind, f.source_ref
                 FROM mobile_work_report_files f
                 JOIN mobile_work_reports r ON r.id = f.report_id
@@ -6588,6 +6729,12 @@ class Storage:
         actor_name: str,
         source_kind: str = "",
         source_ref: str = "",
+        storage_provider: str = "local",
+        storage_key: str = "",
+        original_filename: str = "",
+        content_type: str = "",
+        size_bytes: int = 0,
+        checksum_sha256: str = "",
     ) -> int | None:
         with self.connection() as conn:
             report = conn.execute(
@@ -6612,15 +6759,22 @@ class Storage:
                 """
                 INSERT INTO mobile_work_report_files (
                     report_id, file_name, file_path, file_kind,
+                    storage_provider, storage_key, original_filename, content_type, size_bytes, checksum_sha256,
                     created_by_user_id, created_by_name, created_at, source_kind, source_ref
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     report_id,
                     file_name.strip(),
                     file_path.strip(),
                     file_kind.strip() or "image",
+                    storage_provider.strip() or "local",
+                    storage_key.strip() or file_path.strip(),
+                    original_filename.strip() or file_name.strip(),
+                    content_type.strip(),
+                    max(0, int(size_bytes or 0)),
+                    checksum_sha256.strip(),
                     actor_user_id,
                     actor_name.strip(),
                     now,
@@ -6712,6 +6866,7 @@ class Storage:
                 file_rows = conn.execute(
                     f"""
                     SELECT id, report_id, file_name, file_path, file_kind,
+                           storage_provider, storage_key, original_filename, content_type, size_bytes, checksum_sha256,
                            created_by_user_id, created_by_name, created_at, source_kind, source_ref
                     FROM mobile_work_report_files
                     WHERE report_id IN ({placeholders})
@@ -6786,6 +6941,7 @@ class Storage:
                 file_rows = conn.execute(
                     f"""
                     SELECT id, report_id, file_name, file_path, file_kind,
+                           storage_provider, storage_key, original_filename, content_type, size_bytes, checksum_sha256,
                            created_by_user_id, created_by_name, created_at, source_kind, source_ref
                     FROM mobile_work_report_files
                     WHERE report_id IN ({placeholders})

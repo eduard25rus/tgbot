@@ -27,6 +27,7 @@ from urllib.parse import quote
 from urllib.parse import quote_plus
 from wsgiref.simple_server import make_server
 
+from file_storage import FileStorage, create_file_storage
 from storage import DEFAULT_EXPENSE_CATEGORIES, Storage, WEB_SECTION_IDS
 
 
@@ -435,6 +436,14 @@ class UploadedFile:
     data: bytes
 
 
+@dataclass
+class ResolvedUploadFile:
+    storage: FileStorage
+    key: str
+    safe_filename: str
+    content_type: str
+
+
 def format_amount(amount: float) -> str:
     whole, frac = f"{amount:.2f}".split(".")
     parts = []
@@ -598,9 +607,11 @@ def local_date_to_utc_naive(value: date) -> datetime:
 
 
 def contract_upload_root(storage: Storage) -> Path:
-    explicit = os.getenv("UPLOAD_DIR", "").strip()
+    explicit = os.getenv("UPLOAD_DIR", "").strip() or os.getenv("FILE_STORAGE_LOCAL_ROOT", "").strip()
     if explicit:
         root = Path(explicit).expanduser()
+        if not root.is_absolute():
+            root = storage.db_path.parent / root
     else:
         root = storage.db_path.parent / "uploads"
     root.mkdir(parents=True, exist_ok=True)
@@ -645,6 +656,10 @@ def detect_legal_file_type(file_path: Path, fallback_name: str) -> tuple[str, st
     return safe_filename, LEGAL_UPLOAD_MIME.get(suffix, "application/octet-stream")
 
 
+def upload_file_storage(storage: Storage, provider: str | None = None) -> FileStorage:
+    return create_file_storage(contract_upload_root(storage), provider=provider)
+
+
 def resolve_legal_letter_file(storage: Storage, letter) -> tuple[Path, str, str]:
     upload_root = contract_upload_root(storage).resolve()
     absolute_path = (upload_root / letter.file_path).resolve()
@@ -654,27 +669,68 @@ def resolve_legal_letter_file(storage: Storage, letter) -> tuple[Path, str, str]
     return absolute_path, safe_filename, content_type
 
 
-def resolve_construction_report_photo(storage: Storage, photo) -> tuple[Path, str, str]:
-    upload_root = contract_upload_root(storage).resolve()
-    absolute_path = (upload_root / photo.file_path).resolve()
-    if upload_root not in absolute_path.parents and absolute_path != upload_root:
-        raise ValueError("Forbidden")
-    safe_filename, content_type = detect_legal_file_type(absolute_path, photo.file_name or absolute_path.name or "photo")
+def resolve_stored_upload_file(storage: Storage, item, fallback_name: str, mime_by_suffix: dict[str, str]) -> ResolvedUploadFile:
+    provider = (getattr(item, "storage_provider", "") or "local").strip() or "local"
+    key = (getattr(item, "storage_key", "") or getattr(item, "file_path", "") or "").strip()
+    if not key:
+        raise ValueError("File key is empty")
+    file_storage = upload_file_storage(storage, provider)
+    safe_filename = secure_upload_name(
+        getattr(item, "original_filename", "") or getattr(item, "file_name", "") or fallback_name
+    )
+    suffix = Path(safe_filename).suffix.lower()
+    content_type = (getattr(item, "content_type", "") or mime_by_suffix.get(suffix, "")).strip()
+    local_path = getattr(file_storage, "local_path", None)
+    if callable(local_path):
+        path = local_path(key)
+        detected_name, detected_type = detect_legal_file_type(path, safe_filename)
+        safe_filename = detected_name
+        if detected_type != "application/octet-stream":
+            content_type = detected_type
+    content_type = content_type or mime_by_suffix.get(Path(safe_filename).suffix.lower(), "application/octet-stream")
+    return ResolvedUploadFile(file_storage, key, safe_filename, content_type)
+
+
+def resolve_construction_report_photo(storage: Storage, photo) -> ResolvedUploadFile:
+    resolved = resolve_stored_upload_file(storage, photo, "photo", LEGAL_UPLOAD_MIME)
+    content_type = resolved.content_type
     if not content_type.startswith("image/"):
         raise ValueError("Construction report attachment is not an image")
-    return absolute_path, safe_filename, content_type
+    return resolved
 
 
-def resolve_workforce_report_file(storage: Storage, report_file) -> tuple[Path, str, str]:
-    upload_root = contract_upload_root(storage).resolve()
-    absolute_path = (upload_root / report_file.file_path).resolve()
-    if upload_root not in absolute_path.parents and absolute_path != upload_root:
-        raise ValueError("Forbidden")
-    fallback_name = report_file.file_name or absolute_path.name or "workforce-report-file"
-    safe_filename = secure_upload_name(fallback_name)
-    suffix = Path(safe_filename).suffix.lower()
-    content_type = WORKFORCE_REPORT_MEDIA_MIME.get(suffix, "application/octet-stream")
-    return absolute_path, safe_filename, content_type
+def resolve_workforce_report_file(storage: Storage, report_file) -> ResolvedUploadFile:
+    return resolve_stored_upload_file(storage, report_file, "workforce-report-file", WORKFORCE_REPORT_MEDIA_MIME)
+
+
+def file_storage_redirects_enabled() -> bool:
+    return os.getenv("FILE_STORAGE_REDIRECT_SIGNED_URL", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def serve_resolved_upload_file(start_response, resolved: ResolvedUploadFile, *, download: bool = False):
+    try:
+        if not resolved.storage.file_exists(resolved.key):
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"File not found"]
+        disposition = "attachment" if download else "inline"
+        if file_storage_redirects_enabled():
+            signed_url = resolved.storage.get_file_url(
+                resolved.key,
+                filename=resolved.safe_filename,
+                content_type=resolved.content_type,
+                disposition=disposition,
+            )
+            if signed_url:
+                start_response("302 Found", [("Location", signed_url), ("Cache-Control", "private, max-age=60")])
+                return [b""]
+        headers = [("Content-Type", resolved.content_type)]
+        if download:
+            headers.append(("Content-Disposition", attachment_content_disposition(resolved.safe_filename)))
+        start_response("200 OK", headers)
+        return [resolved.storage.read_bytes(resolved.key)]
+    except Exception:
+        start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+        return [b"Not found"]
 
 
 def render_legal_file_preview_page(file_url: str, download_url: str, safe_filename: str, content_type: str) -> str:
@@ -1028,9 +1084,7 @@ def save_legal_letter_uploads(storage: Storage, owner_chat_id: int, contract_id:
 
 
 def save_construction_report_photos(storage: Storage, owner_chat_id: int, contract_id: int, report_id: int, uploads: list[UploadedFile]) -> None:
-    upload_root = contract_upload_root(storage)
-    photos_dir = upload_root / "construction_reports" / str(owner_chat_id) / str(contract_id)
-    photos_dir.mkdir(parents=True, exist_ok=True)
+    file_storage = upload_file_storage(storage)
     for upload in uploads:
         original_name = upload.filename.strip()
         lower_name = original_name.lower()
@@ -1043,10 +1097,26 @@ def save_construction_report_photos(storage: Storage, owner_chat_id: int, contra
             raise ValueError("Каждая фотография должна быть не больше 20 МБ")
         safe_name = secure_upload_name(original_name)
         final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
-        file_path = photos_dir / final_name
-        file_path.write_bytes(file_bytes)
-        relative_path = file_path.relative_to(upload_root).as_posix()
-        if storage.add_construction_report_photo(owner_chat_id, report_id, original_name, relative_path) is None:
+        storage_key = f"construction_reports/{owner_chat_id}/{contract_id}/{final_name}"
+        content_type = LEGAL_UPLOAD_MIME.get(Path(safe_name).suffix.lower(), upload.content_type or "application/octet-stream")
+        stored_file = file_storage.save_bytes(
+            storage_key,
+            file_bytes,
+            original_filename=original_name,
+            content_type=content_type,
+        )
+        if storage.add_construction_report_photo(
+            owner_chat_id,
+            report_id,
+            original_name,
+            stored_file.key,
+            storage_provider=stored_file.provider,
+            storage_key=stored_file.key,
+            original_filename=stored_file.original_filename,
+            content_type=stored_file.content_type,
+            size_bytes=stored_file.size_bytes,
+            checksum_sha256=stored_file.checksum_sha256,
+        ) is None:
             raise ValueError("Не удалось сохранить фотографию")
 
 
@@ -1058,9 +1128,7 @@ def save_workforce_report_files(
     actor_user_id: int | None,
     actor_name: str,
 ) -> None:
-    upload_root = contract_upload_root(storage)
-    files_dir = upload_root / "workforce_reports" / str(owner_chat_id) / str(report_id)
-    files_dir.mkdir(parents=True, exist_ok=True)
+    file_storage = upload_file_storage(storage)
     for upload in uploads:
         original_name = upload.filename.strip()
         lower_name = original_name.lower()
@@ -1074,11 +1142,30 @@ def save_workforce_report_files(
             raise ValueError("Каждый файл должен быть не больше 120 МБ")
         safe_name = secure_upload_name(original_name)
         final_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}_{safe_name}"
-        file_path = files_dir / final_name
-        file_path.write_bytes(file_bytes)
-        relative_path = file_path.relative_to(upload_root).as_posix()
+        storage_key = f"workforce_reports/{owner_chat_id}/{report_id}/{final_name}"
         file_kind = "video" if suffix in WORKFORCE_REPORT_VIDEO_EXTENSIONS else "image"
-        if storage.add_mobile_work_report_file(owner_chat_id, report_id, original_name, relative_path, file_kind, actor_user_id, actor_name) is None:
+        content_type = WORKFORCE_REPORT_MEDIA_MIME.get(suffix, upload.content_type or "application/octet-stream")
+        stored_file = file_storage.save_bytes(
+            storage_key,
+            file_bytes,
+            original_filename=original_name,
+            content_type=content_type,
+        )
+        if storage.add_mobile_work_report_file(
+            owner_chat_id,
+            report_id,
+            original_name,
+            stored_file.key,
+            file_kind,
+            actor_user_id,
+            actor_name,
+            storage_provider=stored_file.provider,
+            storage_key=stored_file.key,
+            original_filename=stored_file.original_filename,
+            content_type=stored_file.content_type,
+            size_bytes=stored_file.size_bytes,
+            checksum_sha256=stored_file.checksum_sha256,
+        ) is None:
             raise ValueError("Не удалось сохранить файл отчета")
 
 
@@ -23386,28 +23473,20 @@ self.addEventListener("notificationclick", (event) => {
             if report_file is None:
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
-            absolute_path, safe_filename, content_type = resolve_workforce_report_file(storage, report_file)
-            if not absolute_path.exists():
+            resolved_file = resolve_workforce_report_file(storage, report_file)
+            if not resolved_file.storage.file_exists(resolved_file.key):
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
             if path.endswith("/preview"):
                 file_url = f"/cashoperations/work-report-files/{report_file.id}/file"
                 download_url = f"/cashoperations/work-report-files/{report_file.id}/download"
-                html = render_legal_file_preview_page(file_url, download_url, safe_filename, content_type)
+                html = render_legal_file_preview_page(file_url, download_url, resolved_file.safe_filename, resolved_file.content_type)
                 start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
                 return [html.encode("utf-8")]
             if path.endswith("/download"):
-                start_response(
-                    "200 OK",
-                    [
-                        ("Content-Type", content_type),
-                        ("Content-Disposition", attachment_content_disposition(safe_filename)),
-                    ],
-                )
-                return [absolute_path.read_bytes()]
+                return serve_resolved_upload_file(start_response, resolved_file, download=True)
             if path.endswith("/file"):
-                start_response("200 OK", [("Content-Type", content_type)])
-                return [absolute_path.read_bytes()]
+                return serve_resolved_upload_file(start_response, resolved_file)
         except Exception:
             pass
         start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
@@ -27839,12 +27918,8 @@ self.addEventListener("notificationclick", (event) => {
             if photo is None:
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"Photo not found"]
-            absolute_path, _, content_type = resolve_construction_report_photo(storage, photo)
-            if not absolute_path.exists():
-                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
-                return [b"File not found"]
-            start_response("200 OK", [("Content-Type", content_type)])
-            return [absolute_path.read_bytes()]
+            resolved_file = resolve_construction_report_photo(storage, photo)
+            return serve_resolved_upload_file(start_response, resolved_file)
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
@@ -27859,12 +27934,8 @@ self.addEventListener("notificationclick", (event) => {
             if report_file is None:
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
-            absolute_path, _, content_type = resolve_workforce_report_file(storage, report_file)
-            if not absolute_path.exists():
-                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
-                return [b"File not found"]
-            start_response("200 OK", [("Content-Type", content_type)])
-            return [absolute_path.read_bytes()]
+            resolved_file = resolve_workforce_report_file(storage, report_file)
+            return serve_resolved_upload_file(start_response, resolved_file)
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
@@ -27904,18 +27975,8 @@ self.addEventListener("notificationclick", (event) => {
             if report_file is None:
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
-            absolute_path, safe_filename, content_type = resolve_workforce_report_file(storage, report_file)
-            if not absolute_path.exists():
-                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
-                return [b"File not found"]
-            start_response(
-                "200 OK",
-                [
-                    ("Content-Type", content_type),
-                    ("Content-Disposition", attachment_content_disposition(safe_filename)),
-                ],
-            )
-            return [absolute_path.read_bytes()]
+            resolved_file = resolve_workforce_report_file(storage, report_file)
+            return serve_resolved_upload_file(start_response, resolved_file, download=True)
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
@@ -27930,13 +27991,13 @@ self.addEventListener("notificationclick", (event) => {
             if report_file is None:
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
-            absolute_path, safe_filename, content_type = resolve_workforce_report_file(storage, report_file)
-            if not absolute_path.exists():
+            resolved_file = resolve_workforce_report_file(storage, report_file)
+            if not resolved_file.storage.file_exists(resolved_file.key):
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
             file_url = f"/workforce/report-files/{report_file.id}/file?owner={current_owner}"
             download_url = f"/workforce/report-files/{report_file.id}/download?owner={current_owner}"
-            html = render_legal_file_preview_page(file_url, download_url, safe_filename, content_type)
+            html = render_legal_file_preview_page(file_url, download_url, resolved_file.safe_filename, resolved_file.content_type)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         except Exception:
@@ -27958,18 +28019,8 @@ self.addEventListener("notificationclick", (event) => {
             if photo is None:
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"Photo not found"]
-            absolute_path, safe_filename, content_type = resolve_construction_report_photo(storage, photo)
-            if not absolute_path.exists():
-                start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
-                return [b"File not found"]
-            start_response(
-                "200 OK",
-                [
-                    ("Content-Type", content_type),
-                    ("Content-Disposition", attachment_content_disposition(safe_filename)),
-                ],
-            )
-            return [absolute_path.read_bytes()]
+            resolved_file = resolve_construction_report_photo(storage, photo)
+            return serve_resolved_upload_file(start_response, resolved_file, download=True)
         except Exception:
             start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
             return [b"Not found"]
@@ -27989,13 +28040,13 @@ self.addEventListener("notificationclick", (event) => {
             if photo is None:
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"Photo not found"]
-            absolute_path, safe_filename, content_type = resolve_construction_report_photo(storage, photo)
-            if not absolute_path.exists():
+            resolved_file = resolve_construction_report_photo(storage, photo)
+            if not resolved_file.storage.file_exists(resolved_file.key):
                 start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"File not found"]
             file_url = f"/contracts/construction-photos/{photo.id}/file?owner={current_owner}"
             download_url = f"/contracts/construction-photos/{photo.id}/download?owner={current_owner}"
-            html = render_legal_file_preview_page(file_url, download_url, safe_filename, content_type)
+            html = render_legal_file_preview_page(file_url, download_url, resolved_file.safe_filename, resolved_file.content_type)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
         except Exception:
