@@ -7027,6 +7027,7 @@ def layout(
       display: grid;
       grid-template-columns: repeat(7, minmax(0, 1fr));
       gap: 8px;
+      font-family: var(--font-ui);
     }}
     .workforce-calendar-panel,
     .workforce-detail-panel {{
@@ -7036,7 +7037,7 @@ def layout(
       padding: 0 4px 4px;
       color: var(--muted);
       font-size: 12px;
-      font-weight: 800;
+      font-weight: var(--font-weight-bold);
       text-align: center;
       text-transform: uppercase;
       letter-spacing: 0.08em;
@@ -7074,8 +7075,10 @@ def layout(
     }}
     .workforce-calendar-date {{
       font-size: 18px;
-      font-weight: 800;
+      font-weight: var(--font-weight-bold);
       line-height: 1;
+      letter-spacing: 0;
+      font-variant-numeric: proportional-nums;
     }}
     .workforce-calendar-metrics {{
       display: flex;
