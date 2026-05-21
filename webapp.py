@@ -5638,13 +5638,77 @@ def layout(
     .dds-import-actions .mini-card {{
       height: 100%;
     }}
+    .dds-import-log-table {{
+      table-layout: fixed;
+      width: 100%;
+      font-size: 14px;
+    }}
+    .dds-import-log-table th,
+    .dds-import-log-table td {{
+      padding: 8px 10px;
+      vertical-align: middle;
+    }}
+    .dds-import-log-table th {{
+      font-size: 11px;
+      letter-spacing: 0.08em;
+    }}
+    .dds-import-log-table th:nth-child(1),
+    .dds-import-log-table td:nth-child(1) {{
+      width: 128px;
+    }}
+    .dds-import-log-table th:nth-child(2),
+    .dds-import-log-table td:nth-child(2) {{
+      width: 32%;
+    }}
+    .dds-import-log-table th:nth-child(3),
+    .dds-import-log-table td:nth-child(3) {{
+      width: 118px;
+    }}
+    .dds-import-log-table th:nth-child(4),
+    .dds-import-log-table td:nth-child(4) {{
+      width: 170px;
+    }}
+    .dds-import-log-table th:nth-child(5),
+    .dds-import-log-table td:nth-child(5) {{
+      width: 92px;
+      text-align: center;
+    }}
+    .dds-import-log-table .chip {{
+      padding: 6px 10px;
+      font-size: 12px;
+      line-height: 1.15;
+      white-space: nowrap;
+    }}
     .dds-import-log-table td:last-child {{
       max-width: 420px;
       white-space: normal;
     }}
+    .dds-import-source-title {{
+      color: var(--ink);
+      font-weight: 800;
+      line-height: 1.18;
+    }}
+    .dds-import-meta-row,
+    .dds-import-subject {{
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.25;
+      margin-top: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .dds-import-counts {{
+      color: var(--ink);
+      line-height: 1.25;
+      white-space: nowrap;
+    }}
+    .dds-import-counts strong {{
+      font-weight: 800;
+    }}
     .dds-import-log-message {{
       color: var(--muted);
-      line-height: 1.35;
+      line-height: 1.25;
     }}
     @media (max-width: 1180px) {{
       .dds-filter-panel {{
@@ -21979,12 +22043,22 @@ def bank_mail_import_status_chip(item) -> str:
     if item.status == "processed":
         return '<span class="chip ok">Обработано</span>'
     if item.status == "duplicate":
-        return '<span class="chip">Уже было</span>'
+        return '<span class="chip">Дубль</span>'
     if item.status == "checked":
         return '<span class="chip">Проверено</span>'
     if item.status == "skipped":
         return '<span class="chip">Пропущено</span>'
     return '<span class="chip danger">Ошибка</span>'
+
+
+def format_mail_import_message_date(raw_value: str) -> str:
+    if not raw_value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return raw_value
+    return format_datetime(parsed)
 
 
 def render_expense_imports_section(
@@ -22031,13 +22105,14 @@ def render_expense_imports_section(
         <tr>
           <td class="nowrap">{escape(format_datetime(item.processed_at.astimezone(VLADIVOSTOK_TZ)))}</td>
           <td>
-            <div class="timeline-title">{escape(item.attachment_filename or item.message_subject or 'Выписка из почты')}</div>
-            <div class="contract-table-subtle" style="margin-top:4px;">{escape(item.mailbox)} · {escape(item.mailbox_folder)} · UID {escape(item.message_uid or '—')}</div>
-            {f'<div class="contract-table-subtle" style="margin-top:4px;">Дата письма: {escape(item.message_date)}</div>' if item.message_date else ''}
-            {f'<div class="contract-table-subtle" style="margin-top:4px;">Письмо: {escape(item.message_subject)}</div>' if item.message_subject else ''}
+            <div class="dds-import-source-title">{escape(item.attachment_filename or item.message_subject or 'Выписка из почты')}</div>
+            <div class="dds-import-meta-row">{escape(item.mailbox)} · {escape(item.mailbox_folder or 'Почта')} · UID {escape(item.message_uid or '—')}{f' · письмо {escape(format_mail_import_message_date(item.message_date))}' if item.message_date else ''}</div>
+            {f'<div class="dds-import-subject">Тема: {escape(item.message_subject)}</div>' if item.message_subject and item.message_subject != (item.attachment_filename or item.message_subject) else ''}
           </td>
           <td>{bank_mail_import_status_chip(item)}</td>
-          <td class="nowrap">{item.imported_count} / {item.duplicate_count} / {item.skipped_count}</td>
+          <td class="nowrap">
+            <div class="dds-import-counts"><strong>{item.imported_count}</strong> новых · <strong>{item.duplicate_count}</strong> дублей · <strong>{item.skipped_count}</strong> пропусков</div>
+          </td>
           <td class="nowrap">{item.balance_count}</td>
           <td><div class="dds-import-log-message">{escape(item.error_message) if item.error_message else "Без ошибок"}</div></td>
         </tr>
@@ -22069,12 +22144,12 @@ def render_expense_imports_section(
           <table class="table contract-table dds-import-log-table">
             <thead>
               <tr>
-                <th class="nowrap">Когда</th>
-                <th>Файл / письмо</th>
+                <th class="nowrap">Время</th>
+                <th>Источник</th>
                 <th>Статус</th>
-                <th class="nowrap">Новые / дубли / пропущено</th>
+                <th class="nowrap">Операции</th>
                 <th class="nowrap">Остатки</th>
-                <th>Итог</th>
+                <th>Результат</th>
               </tr>
             </thead>
             <tbody>{rows_html}</tbody>
