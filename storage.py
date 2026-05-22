@@ -4,7 +4,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Iterator
 from typing import Optional
@@ -8073,6 +8073,66 @@ class Storage:
                 ),
             ).fetchone()
         return row is not None
+
+    def bank_statement_mail_link_recent_error(
+        self,
+        owner_chat_id: int,
+        mailbox: str,
+        mailbox_folder: str,
+        message_uid: str,
+        source_ref: str,
+        retry_after_hours: float,
+    ) -> bool:
+        cleaned_ref = source_ref.strip()
+        if not cleaned_ref or retry_after_hours <= 0:
+            return False
+        threshold = (datetime.utcnow() - timedelta(hours=retry_after_hours)).isoformat()
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM bank_statement_mail_imports
+                WHERE owner_chat_id = ?
+                  AND mailbox = ?
+                  AND mailbox_folder = ?
+                  AND message_uid = ?
+                  AND attachment_filename LIKE ?
+                  AND status = 'error'
+                  AND created_at >= ?
+                LIMIT 1
+                """,
+                (
+                    owner_chat_id,
+                    mailbox.strip(),
+                    mailbox_folder.strip(),
+                    message_uid.strip(),
+                    f"%Ссылка Сбера #{cleaned_ref}",
+                    threshold,
+                ),
+            ).fetchone()
+        return row is not None
+
+    def clear_bank_statement_mail_empty_success_hash(self, owner_chat_id: int, attachment_hash: str) -> int:
+        cleaned_hash = attachment_hash.strip()
+        if not cleaned_hash:
+            return 0
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE bank_statement_mail_imports
+                SET attachment_hash = ''
+                WHERE owner_chat_id = ?
+                  AND attachment_hash = ?
+                  AND status = 'processed'
+                  AND imported_count = 0
+                  AND duplicate_count = 0
+                  AND skipped_count = 0
+                  AND balance_count = 0
+                  AND error_message = ''
+                """,
+                (owner_chat_id, cleaned_hash),
+            )
+            return int(cursor.rowcount or 0)
 
     def add_bank_statement_mail_import(
         self,

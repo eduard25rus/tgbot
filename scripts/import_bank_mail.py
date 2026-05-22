@@ -102,6 +102,17 @@ def bank_mail_max_age_hours() -> float:
     return max(0, hours)
 
 
+def bank_mail_error_retry_hours() -> float:
+    raw = os.getenv("BANK_MAIL_ERROR_RETRY_HOURS", "6").strip()
+    if not raw:
+        return 0
+    try:
+        hours = float(raw)
+    except ValueError:
+        return 6
+    return max(0, hours)
+
+
 def message_is_too_old(message: Message, max_age_hours: float) -> bool:
     if max_age_hours <= 0:
         return False
@@ -717,6 +728,7 @@ def run_bank_mail_import(
     mark_seen = os.getenv("BANK_MAIL_MARK_SEEN", "1").strip().lower() not in {"0", "false", "no"}
     search_query = os.getenv("BANK_MAIL_SEARCH", "ALL").strip() or "ALL"
     max_age_hours = bank_mail_max_age_hours()
+    error_retry_hours = bank_mail_error_retry_hours()
 
     storage = Storage(db_path)
     imported_files = 0
@@ -804,6 +816,17 @@ def run_bank_mail_import(
                     ):
                         skipped_files += 1
                         continue
+                    if not force_recheck and storage.bank_statement_mail_link_recent_error(
+                        owner_chat_id,
+                        login,
+                        folder,
+                        uid_text,
+                        link_ref,
+                        error_retry_hours,
+                    ):
+                        message_had_errors = True
+                        skipped_files += 1
+                        continue
                     try:
                         filename, payload = download_statement_link(link)
                         statement_sources.append(StatementSource(filename, payload, "Ссылка Сбера", link_ref))
@@ -881,6 +904,19 @@ def run_bank_mail_import(
                         created_by_user_id=None,
                         created_by_name="Автоимпорт выписки",
                     )
+                    if retry_empty_success:
+                        storage.clear_bank_statement_mail_empty_success_hash(owner_chat_id, attachment_hash)
+                    empty_processed_result = (
+                        result.imported_count == 0
+                        and result.duplicate_count == 0
+                        and result.skipped_count == 0
+                        and result.balance_count == 0
+                    )
+                    processed_note = (
+                        "Выписка обработана, новых операций и остатков не найдено."
+                        if empty_processed_result
+                        else ""
+                    )
                     storage.add_bank_statement_mail_import(
                         owner_chat_id,
                         login,
@@ -890,12 +926,13 @@ def run_bank_mail_import(
                         message_from,
                         message_date(message),
                         filename,
-                        "" if retry_empty_success else attachment_hash,
+                        attachment_hash,
                         "processed",
                         result.imported_count,
                         result.duplicate_count,
                         result.skipped_count,
                         result.balance_count,
+                        processed_note,
                     )
                     imported_files += 1
                 except Exception as exc:
