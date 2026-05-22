@@ -847,6 +847,7 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                     continue
                 payload = statement_source.payload
                 attachment_hash = hashlib.sha256(payload).hexdigest()
+                retry_empty_success = storage.bank_statement_mail_attachment_empty_success(owner_chat_id, attachment_hash)
                 if storage.bank_statement_mail_attachment_exists(owner_chat_id, attachment_hash):
                     if add_mail_import_duplicate(
                         storage,
@@ -878,7 +879,7 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                         message_from,
                         message_date(message),
                         filename,
-                        attachment_hash,
+                        "" if retry_empty_success else attachment_hash,
                         "processed",
                         result.imported_count,
                         result.duplicate_count,

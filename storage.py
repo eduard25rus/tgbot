@@ -7918,6 +7918,36 @@ class Storage:
                 SELECT 1
                 FROM bank_statement_mail_imports
                 WHERE owner_chat_id = ? AND attachment_hash = ? AND status = 'processed'
+                  AND NOT (
+                    imported_count = 0
+                    AND duplicate_count = 0
+                    AND skipped_count = 0
+                    AND balance_count = 0
+                    AND error_message = ''
+                  )
+                LIMIT 1
+                """,
+                (owner_chat_id, cleaned_hash),
+            ).fetchone()
+        return row is not None
+
+    def bank_statement_mail_attachment_empty_success(self, owner_chat_id: int, attachment_hash: str) -> bool:
+        cleaned_hash = attachment_hash.strip()
+        if not cleaned_hash:
+            return False
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM bank_statement_mail_imports
+                WHERE owner_chat_id = ?
+                  AND attachment_hash = ?
+                  AND status = 'processed'
+                  AND imported_count = 0
+                  AND duplicate_count = 0
+                  AND skipped_count = 0
+                  AND balance_count = 0
+                  AND error_message = ''
                 LIMIT 1
                 """,
                 (owner_chat_id, cleaned_hash),
@@ -7982,6 +8012,14 @@ class Storage:
                   AND message_uid = ?
                   AND attachment_filename = ?
                   AND status IN ('processed', 'duplicate')
+                  AND NOT (
+                    status = 'processed'
+                    AND imported_count = 0
+                    AND duplicate_count = 0
+                    AND skipped_count = 0
+                    AND balance_count = 0
+                    AND error_message = ''
+                  )
                 LIMIT 1
                 """,
                 (
@@ -8016,6 +8054,14 @@ class Storage:
                   AND message_uid = ?
                   AND attachment_filename LIKE ?
                   AND status IN ('processed', 'duplicate')
+                  AND NOT (
+                    status = 'processed'
+                    AND imported_count = 0
+                    AND duplicate_count = 0
+                    AND skipped_count = 0
+                    AND balance_count = 0
+                    AND error_message = ''
+                  )
                 LIMIT 1
                 """,
                 (
