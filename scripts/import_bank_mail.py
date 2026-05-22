@@ -20,6 +20,7 @@ from email.header import decode_header
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.error import URLError
 from urllib.parse import unquote
 from urllib.parse import urljoin
@@ -353,15 +354,17 @@ def decode_download_html(data: bytes, content_type: str) -> str:
 
 
 def html_download_candidates(html: str, base_url: str) -> list[str]:
-    raw_links: list[tuple[str, bool]] = []
-    raw_links.extend((match, False) for match in re.findall(r"""href=["']([^"']+)""", html, flags=re.IGNORECASE))
-    raw_links.extend((match, True) for match in re.findall(r"""action=["']([^"']+)""", html, flags=re.IGNORECASE))
-    raw_links.extend((match, False) for match in re.findall(r"""url=([^"'>\s]+)""", html, flags=re.IGNORECASE))
-    raw_links.extend((match, False) for match in re.findall(r"""location(?:\.href)?\s*=\s*["']([^"']+)""", html, flags=re.IGNORECASE))
-    raw_links.extend((match.replace(r"\/", "/"), False) for match in re.findall(r"""https?:\\?/\\?/[^"'\s<>]+""", html))
-    candidates: list[str] = []
+    raw_links: list[tuple[str, bool, str]] = []
+    for match in re.finditer(r"""(?is)<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>""", html):
+        raw_links.append((match.group(1), False, normalize_statement_link_label(strip_html_fragment(match.group(2)))))
+    raw_links.extend((match, False, "") for match in re.findall(r"""href=["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_links.extend((match, True, "") for match in re.findall(r"""action=["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_links.extend((match, False, "") for match in re.findall(r"""url=([^"'>\s]+)""", html, flags=re.IGNORECASE))
+    raw_links.extend((match, False, "") for match in re.findall(r"""location(?:\.href)?\s*=\s*["']([^"']+)""", html, flags=re.IGNORECASE))
+    raw_links.extend((match.replace(r"\/", "/"), False, "") for match in re.findall(r"""https?:\\?/\\?/[^"'\s<>]+""", html))
+    candidates: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for raw_link, allow_fallback in raw_links:
+    for raw_link, allow_fallback, label in raw_links:
         raw_link = unescape(raw_link).strip()
         lowered_raw = raw_link.casefold()
         if not raw_link or lowered_raw.startswith(("javascript:", "mailto:", "tel:", "#")):
@@ -382,9 +385,16 @@ def html_download_candidates(html: str, base_url: str) -> list[str]:
         ):
             continue
         seen.add(link)
-        candidates.append(link)
-    candidates.sort(key=lambda item: (".txt" not in item.casefold(), "download" not in item.casefold(), len(item)))
-    return candidates
+        candidates.append((link, label))
+    candidates.sort(
+        key=lambda item: (
+            0 if item[1] == "TXT" else 2 if item[1] == "ONEC" else 1,
+            ".txt" not in item[0].casefold(),
+            "download" not in item[0].casefold(),
+            len(item[0]),
+        )
+    )
+    return [item[0] for item in candidates]
 
 
 def html_form_summary(html: str) -> str:
@@ -517,11 +527,23 @@ def download_statement_link_with_opener(opener, link: str) -> tuple[str, bytes]:
     last_size = 0
     last_url = link
     last_html_error = ""
+    last_http_error = ""
     challenge_waits = sber_challenge_waits()
     challenge_wait_index = 0
-    for _attempt in range(4 + len(challenge_waits)):
+    pending_links = [link]
+    attempts_left = 6 + len(challenge_waits)
+    while pending_links and attempts_left > 0:
+        link = pending_links.pop(0)
+        if link in visited:
+            continue
         visited.add(link)
-        filename, data, content_type, final_url = fetch_statement_url(opener, link)
+        attempts_left -= 1
+        try:
+            filename, data, content_type, final_url = fetch_statement_url(opener, link)
+        except HTTPError as exc:
+            last_url = link
+            last_http_error = f"HTTP Error {exc.code}: {exc.reason}"
+            continue
         last_content_type = content_type
         last_size = len(data)
         last_url = final_url
@@ -536,15 +558,19 @@ def download_statement_link_with_opener(opener, link: str) -> tuple[str, bytes]:
             if looks_like_sber_browser_challenge(html) and challenge_wait_index < len(challenge_waits):
                 time.sleep(challenge_waits[challenge_wait_index])
                 challenge_wait_index += 1
+                visited.discard(link)
+                pending_links.insert(0, link)
                 continue
             raise ValueError(last_html_error)
-        link = candidates[0]
+        pending_links = candidates + pending_links
     if last_html_error:
         raise ValueError(
             "Сбер вернул по ссылке не TXT 1С после перехода по найденной ссылке. "
             f"Последний URL: {last_url}. Content-Type: {last_content_type or 'не указан'}, размер: {last_size} байт. "
             f"Первая HTML-страница: {last_html_error}"
         )
+    if last_http_error:
+        raise ValueError(last_http_error)
     raise ValueError(
         "Сбер вернул по ссылке не TXT 1С. "
         f"Последний URL: {last_url}. Content-Type: {last_content_type or 'не указан'}, размер: {last_size} байт."
@@ -594,20 +620,13 @@ def statement_context_label(message: Message) -> str:
     org_upper = org_name.upper()
     account_title = ""
     if "ВОСТОЧ" in org_upper or account_number.endswith("1806"):
-        company_title = "Восточный Фундамент"
         account_title = "Резерв Сбербанк"
     elif "ФЕЛИС" in org_upper or account_number.endswith("37577"):
-        company_title = "Фелис Групп"
         account_title = "Фелис Сбербанк"
-    elif org_name:
-        company_title = org_name
-    else:
-        company_title = ""
     if account_number and not account_title:
         account_title = "Сбербанк"
     account_suffix = f" ****{account_number[-4:]}" if len(account_number) >= 4 else ""
-    parts = [part for part in (company_title, f"{account_title}{account_suffix}".strip()) if part]
-    return " · ".join(parts)
+    return f"{account_title}{account_suffix}".strip()
 
 
 def contextual_import_log_filename(context_label: str, filename: str) -> str:
