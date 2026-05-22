@@ -1553,10 +1553,26 @@ def parse_bank_1c_export(data: bytes) -> tuple[dict[str, str], list[dict[str, st
             key, value = line.split("=", 1)
             meta.setdefault(key.strip(), value.strip())
 
-    if meta.get("ВерсияФормата", "").strip() != "1.03":
-        raise ValueError("Поддерживается только формат 1С 1.03")
+    format_version = meta.get("ВерсияФормата", "").strip()
+    if not re.fullmatch(r"1\.0[2-3]", format_version):
+        raise ValueError(
+            f"Поддерживается формат 1С 1.02/1.03; в файле указано {format_version or 'без версии'}"
+        )
     if not meta.get("РасчСчет", "").strip():
         raise ValueError("В выписке не найден расчетный счет")
+    if not account_sections and any(
+        meta.get(key, "").strip()
+        for key in ("ДатаНачала", "ДатаКонца", "НачальныйОстаток", "ВсегоСписано", "ВсегоПоступило", "КонечныйОстаток")
+    ):
+        account_sections.append({
+            "РасчСчет": meta.get("РасчСчет", "").strip(),
+            "ДатаНачала": meta.get("ДатаНачала", "").strip(),
+            "ДатаКонца": meta.get("ДатаКонца", "").strip(),
+            "НачальныйОстаток": meta.get("НачальныйОстаток", "").strip(),
+            "ВсегоСписано": meta.get("ВсегоСписано", "").strip(),
+            "ВсегоПоступило": meta.get("ВсегоПоступило", "").strip(),
+            "КонечныйОстаток": meta.get("КонечныйОстаток", "").strip(),
+        })
     return meta, documents, account_sections
 
 
