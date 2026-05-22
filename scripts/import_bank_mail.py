@@ -554,9 +554,10 @@ def add_mail_import_error(
     message: Message,
     filename: str,
     error: Exception,
+    dedupe: bool = True,
 ) -> bool:
     error_message = normalize_mail_import_error(error)
-    if storage.bank_statement_mail_import_log_exists(
+    if dedupe and storage.bank_statement_mail_import_log_exists(
         owner_chat_id,
         login,
         folder,
@@ -639,9 +640,10 @@ def add_mail_import_duplicate(
     message_from: str,
     message: Message,
     filename: str,
+    dedupe: bool = True,
 ) -> bool:
     error_message = "Эта выписка уже была обработана ранее."
-    if storage.bank_statement_mail_import_log_exists(
+    if dedupe and storage.bank_statement_mail_import_log_exists(
         owner_chat_id,
         login,
         folder,
@@ -696,7 +698,12 @@ def append_scan_detail(details: list[str], uid_text: str, message: Message, stat
     details.append(f"UID {uid_text} — {format_scan_message_date(message)} — {status}")
 
 
-def run_bank_mail_import(*, return_scan_summary: bool = False):
+def run_bank_mail_import(
+    *,
+    return_scan_summary: bool = False,
+    force_recheck: bool = False,
+    log_repeated_attempts: bool = False,
+):
     db_path = os.getenv("DB_PATH", "contracts.db")
     owner_chat_id = int(env_required("BANK_MAIL_OWNER_CHAT_ID"))
     login = env_required("BANK_MAIL_LOGIN")
@@ -788,7 +795,7 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                     link_count += 1
                     message_had_statement = True
                     link_ref = short_source_ref(link)
-                    if storage.bank_statement_mail_link_seen(
+                    if not force_recheck and storage.bank_statement_mail_link_seen(
                         owner_chat_id,
                         login,
                         folder,
@@ -813,6 +820,7 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                             message,
                             f"Ссылка на выписку Сбера #{link_ref}" if link_ref else "Ссылка на выписку Сбера",
                             exc,
+                            dedupe=not log_repeated_attempts,
                         ):
                             error_files += 1
                         else:
@@ -840,6 +848,8 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                     statement_source.source_ref,
                 )
                 if (
+                    not force_recheck
+                    and
                     statement_source.source_kind == "Ссылка Сбера"
                     and storage.bank_statement_mail_source_seen(owner_chat_id, login, folder, uid_text, filename)
                 ):
@@ -859,6 +869,7 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                         message_from,
                         message,
                         filename,
+                        dedupe=not log_repeated_attempts,
                     ):
                         skipped_files += 1
                     continue
@@ -900,6 +911,7 @@ def run_bank_mail_import(*, return_scan_summary: bool = False):
                         message,
                         filename,
                         exc,
+                        dedupe=not log_repeated_attempts,
                     ):
                         error_files += 1
                     else:
