@@ -554,6 +554,27 @@ def format_month_label(value: date) -> str:
     return f"{RU_MONTH_NAMES[value.month]} {value.year}"
 
 
+def payroll_period_options(selected_value: str = "", anchor: date | None = None) -> str:
+    anchor = anchor or datetime.now(VLADIVOSTOK_TZ).date()
+    start_month = date(anchor.year - 1, 1, 1)
+    end_month = date(anchor.year + 1, 12, 1)
+    selected_month = parse_month_key(selected_value)
+    months: list[date] = []
+    cursor = start_month
+    while cursor <= end_month:
+        months.append(cursor)
+        cursor = month_add(cursor, 1)
+    if selected_month is not None and selected_month not in months:
+        months.append(selected_month)
+        months.sort()
+    options = ['<option value="">Не выбран</option>']
+    options.extend(
+        f'<option value="{month_value.strftime("%Y-%m")}"{" selected" if selected_month == month_value else ""}>{escape(format_month_label(month_value))} г.</option>'
+        for month_value in months
+    )
+    return "".join(options)
+
+
 def format_datetime(value: datetime) -> str:
     localized = value
     if value.tzinfo is None:
@@ -10672,7 +10693,7 @@ function syncDdsExpenseForm(form) {{
   const transferSet = new Set(transferCategoryCodes);
   const categorySelect = form.querySelector("[data-dds-category-select]");
   const periodField = form.querySelector("[data-dds-payroll-period-field]");
-  const periodInput = periodField ? periodField.querySelector('input[name="payroll_period"]') : null;
+  const periodInput = periodField ? periodField.querySelector('[name="payroll_period"]') : null;
   const sourceSelect = form.querySelector('select[name="payment_source"]');
   const targetField = form.querySelector("[data-dds-transfer-target-field]");
   const targetSelect = targetField ? targetField.querySelector('select[name="target_cashbox"]') : null;
@@ -17621,7 +17642,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
           </div>
           <div class="field payroll-period-field{' is-hidden' if not show_payroll_period else ''}" data-dds-payroll-period-field>
             <label>Период ФОТ</label>
-            <input type="month" name="payroll_period" value="{escape(entry.payroll_period or '')}" {'disabled' if not show_payroll_period else ''}>
+            <select name="payroll_period" {'disabled' if not show_payroll_period else ''}>{payroll_period_options(entry.payroll_period or '')}</select>
           </div>
           <div class="field span-2">
             <label>Наименование операции</label>
@@ -22368,7 +22389,7 @@ def render_expenses_section(
                 </div>
                 <div class="field payroll-period-field is-hidden" data-dds-payroll-period-field>
                   <label>Период ФОТ</label>
-                  <input type="month" name="payroll_period" disabled>
+                  <select name="payroll_period" disabled>{payroll_period_options(datetime.now(VLADIVOSTOK_TZ).date().strftime("%Y-%m"))}</select>
                 </div>
                 <div class="field span-2">
                   <label>Комментарий</label>
