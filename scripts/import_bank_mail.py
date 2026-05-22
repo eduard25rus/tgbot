@@ -46,6 +46,12 @@ class StatementSource:
         self.source_ref = source_ref
 
 
+class StatementLink:
+    def __init__(self, url: str, label: str = "") -> None:
+        self.url = url
+        self.label = label
+
+
 def env_required(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
@@ -160,6 +166,31 @@ def iter_text_parts(message: Message):
 
 
 def iter_message_links(message: Message):
+    for item in iter_message_link_items(message):
+        yield item.url
+
+
+def normalize_statement_link_label(raw_label: str) -> str:
+    label = " ".join(raw_label.split()).upper()
+    if "TXT" in label:
+        return "TXT"
+    if "ONEC" in label or "1C" in label or "1С" in label:
+        return "ONEC"
+    return ""
+
+
+def strip_html_fragment(raw_html: str) -> str:
+    cleaned = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", raw_html)
+    cleaned = re.sub(r"(?s)<[^>]+>", " ", cleaned)
+    return " ".join(unescape(cleaned).split())
+
+
+def iter_message_link_items(message: Message):
+    for html in iter_html_parts(message):
+        for match in re.finditer(r"""(?is)<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>""", html):
+            raw_link = match.group(1)
+            label = normalize_statement_link_label(strip_html_fragment(match.group(2)))
+            yield from expand_message_link(raw_link, label)
     for text in iter_text_parts(message):
         raw_links: list[str] = []
         raw_links.extend(re.findall(r"""href=["']([^"']+)""", text, flags=re.IGNORECASE))
@@ -169,24 +200,28 @@ def iter_message_links(message: Message):
             for match in re.findall(r"""https?%3A%2F%2F[^\s"'<>]+""", text, flags=re.IGNORECASE)
         )
         for raw_link in raw_links:
-            link = unescape(raw_link).strip()
-            link = link.rstrip(").,;")
-            if link:
-                yield link
-            decoded_link = unquote(link)
-            if decoded_link and decoded_link != link:
-                yield decoded_link
-            try:
-                parsed_link = urlsplit(link)
-            except ValueError:
-                continue
-            for _key, value in parse_qsl(parsed_link.query, keep_blank_values=True):
-                decoded_value = unquote(unescape(value)).strip()
-                if decoded_value.startswith(("http://", "https://")):
-                    yield decoded_value
-                    decoded_again = unquote(decoded_value)
-                    if decoded_again != decoded_value:
-                        yield decoded_again
+            yield from expand_message_link(raw_link, "")
+
+
+def expand_message_link(raw_link: str, label: str):
+    link = unescape(raw_link).strip()
+    link = link.rstrip(").,;")
+    if link:
+        yield StatementLink(link, label)
+    decoded_link = unquote(link)
+    if decoded_link and decoded_link != link:
+        yield StatementLink(decoded_link, label)
+    try:
+        parsed_link = urlsplit(link)
+    except ValueError:
+        return
+    for _key, value in parse_qsl(parsed_link.query, keep_blank_values=True):
+        decoded_value = unquote(unescape(value)).strip()
+        if decoded_value.startswith(("http://", "https://")):
+            yield StatementLink(decoded_value, label)
+            decoded_again = unquote(decoded_value)
+            if decoded_again != decoded_value:
+                yield StatementLink(decoded_again, label)
 
 
 def is_sber_statement_link(link: str) -> bool:
@@ -198,14 +233,19 @@ def is_sber_statement_link(link: str) -> bool:
 
 
 def iter_sber_statement_links(message: Message):
+    for item in iter_sber_statement_link_items(message):
+        yield item.url
+
+
+def iter_sber_statement_link_items(message: Message):
     seen: set[str] = set()
-    for link in iter_message_links(message):
-        if not is_sber_statement_link(link):
+    for item in iter_message_link_items(message):
+        if not is_sber_statement_link(item.url):
             continue
-        if link in seen:
+        if item.url in seen:
             continue
-        seen.add(link)
-        yield link
+        seen.add(item.url)
+        yield item
 
 
 def message_link_counts(message: Message) -> tuple[int, int]:
@@ -533,6 +573,52 @@ def import_log_filename(filename: str, source_kind: str, source_ref: str = "") -
     return filename
 
 
+def message_plain_text(message: Message) -> str:
+    chunks: list[str] = []
+    for text in iter_text_parts(message):
+        if "<" in text and ">" in text:
+            chunks.append(strip_html_fragment(text))
+        else:
+            chunks.append(" ".join(unescape(text).split()))
+    return " ".join(item for item in chunks if item)
+
+
+def statement_context_label(message: Message) -> str:
+    text = message_plain_text(message)
+    if not text:
+        return ""
+    account_match = re.search(r"Сч[её]т\s*([0-9][0-9\s-]{10,})", text, flags=re.IGNORECASE)
+    account_number = re.sub(r"\D", "", account_match.group(1)) if account_match else ""
+    org_match = re.search(r"Организация\s+(.+?)\s+Сч[её]т", text, flags=re.IGNORECASE)
+    org_name = " ".join(org_match.group(1).split()) if org_match else ""
+    org_upper = org_name.upper()
+    account_title = ""
+    if "ВОСТОЧ" in org_upper or account_number.endswith("1806"):
+        company_title = "Восточный Фундамент"
+        account_title = "Резерв Сбербанк"
+    elif "ФЕЛИС" in org_upper or account_number.endswith("37577"):
+        company_title = "Фелис Групп"
+        account_title = "Фелис Сбербанк"
+    elif org_name:
+        company_title = org_name
+    else:
+        company_title = ""
+    if account_number and not account_title:
+        account_title = "Сбербанк"
+    account_suffix = f" ****{account_number[-4:]}" if len(account_number) >= 4 else ""
+    parts = [part for part in (company_title, f"{account_title}{account_suffix}".strip()) if part]
+    return " · ".join(parts)
+
+
+def contextual_import_log_filename(context_label: str, filename: str) -> str:
+    cleaned_context = context_label.strip()
+    if not cleaned_context:
+        return filename
+    if filename.startswith(f"{cleaned_context} · "):
+        return filename
+    return f"{cleaned_context} · {filename}"
+
+
 def normalize_mail_import_error(error: Exception) -> str:
     text = " ".join(str(error).split())
     lowered = text.casefold()
@@ -770,6 +856,7 @@ def run_bank_mail_import(
                 continue
             subject_match_count += 1
             uid_text = uid.decode("ascii", errors="ignore")
+            context_label = statement_context_label(message)
             if message_is_too_old(message, max_age_hours):
                 stale_match_count += 1
                 append_scan_detail(scan_details, uid_text, message, "старое, пропущено")
@@ -782,7 +869,7 @@ def run_bank_mail_import(
                     subject,
                     message_from,
                     message,
-                    "Письмо пропущено",
+                    contextual_import_log_filename(context_label, "Письмо пропущено"),
                     "skipped",
                     f"Письмо старше окна автоимпорта BANK_MAIL_MAX_AGE_HOURS={max_age_hours:g}; ссылки не проверялись.",
                 ):
@@ -802,11 +889,16 @@ def run_bank_mail_import(
                 link_count = 0
                 total_link_count = 0
                 candidate_link_count = 0
+                link_errors: list[tuple[str, str, Exception]] = []
+                skipped_recent_error = False
                 total_link_count, candidate_link_count = message_link_counts(message)
-                for link in iter_sber_statement_links(message):
+                for link_item in iter_sber_statement_link_items(message):
                     link_count += 1
                     message_had_statement = True
-                    link_ref = short_source_ref(link)
+                    link_ref = short_source_ref(link_item.url)
+                    source_kind = "Ссылка Сбера"
+                    if link_item.label:
+                        source_kind = f"{source_kind} {link_item.label}"
                     if not force_recheck and storage.bank_statement_mail_link_seen(
                         owner_chat_id,
                         login,
@@ -815,7 +907,7 @@ def run_bank_mail_import(
                         link_ref,
                     ):
                         skipped_files += 1
-                        continue
+                        break
                     if not force_recheck and storage.bank_statement_mail_link_recent_error(
                         owner_chat_id,
                         login,
@@ -824,14 +916,23 @@ def run_bank_mail_import(
                         link_ref,
                         error_retry_hours,
                     ):
-                        message_had_errors = True
+                        skipped_recent_error = True
                         skipped_files += 1
                         continue
                     try:
-                        filename, payload = download_statement_link(link)
-                        statement_sources.append(StatementSource(filename, payload, "Ссылка Сбера", link_ref))
+                        filename, payload = download_statement_link(link_item.url)
+                        statement_sources.append(StatementSource(filename, payload, source_kind, link_ref))
+                        break
                     except Exception as exc:
+                        link_errors.append((source_kind, link_ref, exc))
+                if not statement_sources:
+                    if skipped_recent_error:
                         message_had_errors = True
+                    for source_kind, link_ref, exc in link_errors:
+                        message_had_errors = True
+                        error_filename = f"Ссылка на выписку Сбера #{link_ref}" if link_ref else "Ссылка на выписку Сбера"
+                        if source_kind != "Ссылка Сбера":
+                            error_filename = f"{source_kind.replace('Ссылка Сбера', 'Ссылка на выписку Сбера', 1)} #{link_ref}"
                         if add_mail_import_error(
                             storage,
                             owner_chat_id,
@@ -841,7 +942,7 @@ def run_bank_mail_import(
                             subject,
                             message_from,
                             message,
-                            f"Ссылка на выписку Сбера #{link_ref}" if link_ref else "Ссылка на выписку Сбера",
+                            contextual_import_log_filename(context_label, error_filename),
                             exc,
                             dedupe=not log_repeated_attempts,
                         ):
@@ -870,10 +971,11 @@ def run_bank_mail_import(
                     statement_source.source_kind,
                     statement_source.source_ref,
                 )
+                filename = contextual_import_log_filename(context_label, filename)
                 if (
                     not force_recheck
                     and
-                    statement_source.source_kind == "Ссылка Сбера"
+                    statement_source.source_kind.startswith("Ссылка Сбера")
                     and storage.bank_statement_mail_source_seen(owner_chat_id, login, folder, uid_text, filename)
                 ):
                     skipped_files += 1
@@ -963,7 +1065,7 @@ def run_bank_mail_import(
                     subject,
                     message_from,
                     message,
-                    "Письмо проверено",
+                    contextual_import_log_filename(context_label, "Письмо проверено"),
                     "checked",
                     "Подходящее письмо найдено, но TXT-вложений и ссылок на выписку внутри него не найдено.",
                 ):

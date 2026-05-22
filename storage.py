@@ -8069,7 +8069,7 @@ class Storage:
                     mailbox.strip(),
                     mailbox_folder.strip(),
                     message_uid.strip(),
-                    f"%· Ссылка Сбера #{cleaned_ref}",
+                    f"%Сбера%#{cleaned_ref}",
                 ),
             ).fetchone()
         return row is not None
@@ -8106,7 +8106,7 @@ class Storage:
                     mailbox.strip(),
                     mailbox_folder.strip(),
                     message_uid.strip(),
-                    f"%Ссылка Сбера #{cleaned_ref}",
+                    f"%Сбера%#{cleaned_ref}",
                     threshold,
                 ),
             ).fetchone()
