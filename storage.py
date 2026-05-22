@@ -6264,6 +6264,7 @@ class Storage:
                     e.title,
                     e.comment,
                     e.payment_source,
+                    e.status,
                     e.created_by_name,
                     e.created_at,
                     'direct' AS link_kind
@@ -6291,6 +6292,7 @@ class Storage:
                     e.title,
                     e.comment,
                     e.payment_source,
+                    e.status,
                     e.created_by_name,
                     e.created_at,
                     'allocation' AS link_kind
@@ -6326,6 +6328,7 @@ class Storage:
                 "title": row["title"] or "",
                 "comment": row["comment"] or "",
                 "payment_source": row["payment_source"] or "",
+                "status": row["status"] or "",
                 "created_by_name": row["created_by_name"] or "",
                 "created_at": datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
                 "link_kind": row["link_kind"] or "",

@@ -9623,6 +9623,20 @@ document.addEventListener("scroll", (event) => {{
   window.requestAnimationFrame(fitOpenStatusPopovers);
 }}, true);
 
+document.addEventListener("DOMContentLoaded", () => {{
+  const params = new URLSearchParams(window.location.search);
+  const focusExpenseId = params.get("entry") || "";
+  if (!/^\d+$/.test(focusExpenseId)) {{
+    return;
+  }}
+  const menu = document.querySelector('.expense-editor-menu[data-expense-editor-id="' + focusExpenseId + '"]');
+  if (!menu) {{
+    return;
+  }}
+  menu.scrollIntoView({{ block: "center", behavior: "auto" }});
+  window.requestAnimationFrame(() => openStatusMenuAsModal(menu));
+}});
+
 function buildContractStageFields(form, count) {{
   const container = form ? form.querySelector('[data-stage-container]') : null;
   if (!container) {{
@@ -12722,6 +12736,22 @@ def payroll_latest_rate(rate_history: list[dict]) -> dict:
     return sorted(rate_history, key=lambda rate: (rate["effective_from"], rate.get("id", 0)))[-1]
 
 
+def payroll_payment_expense_href(owner_chat_id: int, payment: dict) -> str:
+    expense_date = payment.get("expense_date")
+    expense_day = expense_date.isoformat() if isinstance(expense_date, date) else ""
+    active_tab = "archive" if payment.get("status") == "closed" else "active"
+    return (
+        f"/expenses?owner={owner_chat_id}"
+        f"&tab={active_tab}"
+        f"&project="
+        f"&category={quote_plus(str(payment.get('category_code') or ''))}"
+        f"&adjustment="
+        f"&day={quote_plus(expense_day)}"
+        f"&entry={quote_plus(str(payment.get('expense_id') or ''))}"
+        f"#expense-entry-{quote_plus(str(payment.get('expense_id') or ''))}"
+    )
+
+
 def payroll_rate_history_note(rate_history: list[dict], employee_group: str) -> str:
     if not rate_history:
         return "Ставка не задана"
@@ -13886,11 +13916,18 @@ def render_payroll_admin_section(storage: Storage, owner_chat_id: int, current_u
             f"""
             <tr>
               <td class="nowrap">
-                {format_date(payment["expense_date"])}
-                <div class="contract-table-subtle">{escape(payment.get("title") or "Выплата")}</div>
-                {f'<div class="contract-table-subtle">{escape(payment_comment_text(payment))}</div>' if payment_comment_text(payment) else ''}
+                <a class="contract-table-link" href="{payroll_payment_expense_href(owner_chat_id, payment)}">
+                  {format_date(payment["expense_date"])}
+                  <div class="contract-table-subtle">{escape(payment.get("title") or "Выплата")}</div>
+                  {f'<div class="contract-table-subtle">{escape(payment_comment_text(payment))}</div>' if payment_comment_text(payment) else ''}
+                </a>
               </td>
-              <td class="nowrap"><span class="payroll-amount is-paid">{escape(format_amount(float(payment["amount"])))}</span></td>
+              <td class="nowrap">
+                <a class="contract-table-link" href="{payroll_payment_expense_href(owner_chat_id, payment)}">
+                  <span class="payroll-amount is-paid">{escape(format_amount(float(payment["amount"])))}</span>
+                  <div class="contract-table-subtle">Открыть в ДДС</div>
+                </a>
+              </td>
               <td>{escape(payment_method_label(payment))}</td>
               <td>{escape(payment.get("created_by_name") or "Автор неизвестен")}</td>
               <td class="nowrap">{escape(payment_created_label(payment))}</td>
@@ -14120,6 +14157,7 @@ def render_payroll_worker_detail_page(
             <div class="contract-table-subtle">Внес: {escape(payment.get("created_by_name") or "Автор неизвестен")}</div>
             <div class="contract-table-subtle">Создано в ДДС: {escape(payment_created_label(payment))}</div>
             {f'<div class="contract-table-subtle">Комментарий: {escape(comment)}</div>' if comment else ''}
+            <a class="secondary-btn mini" href="{payroll_payment_expense_href(owner_chat_id, payment)}" style="margin-top:10px;">Открыть в ДДС</a>
           </div>
         </details>
         """
@@ -14323,6 +14361,7 @@ def render_payroll_admin_detail_page(
             <div class="contract-table-subtle">Внес: {escape(payment.get("created_by_name") or "Автор неизвестен")}</div>
             <div class="contract-table-subtle">Создано в ДДС: {escape(payment_created_label(payment))}</div>
             {f'<div class="contract-table-subtle">Комментарий: {escape(comment)}</div>' if comment else ''}
+            <a class="secondary-btn mini" href="{payroll_payment_expense_href(owner_chat_id, payment)}" style="margin-top:10px;">Открыть в ДДС</a>
           </div>
         </details>
         """
@@ -17555,7 +17594,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         if str(cashbox.get("code", "")).strip()
     )
     return f"""
-    <details class="status-menu expense-editor-menu">
+    <details id="expense-entry-{entry.id}" class="status-menu expense-editor-menu" data-expense-editor-id="{entry.id}">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
       <div class="status-popover expense-editor-popover" data-modal-title="Редактирование операции ДДС">
         <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}">
