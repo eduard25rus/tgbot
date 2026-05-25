@@ -28,6 +28,8 @@ DEFAULT_EXPENSE_CATEGORIES = (
     ("cash_withdrawal_commission", "Комиссия за вывод в кассу"),
     ("cash_withdrawal", "Вывод в кассу"),
     ("income_unallocated", "Поступление"),
+    ("income_work_payment", "Оплата работ"),
+    ("income_loan", "Займ"),
     ("other", "Прочее"),
 )
 EXPENSE_CATEGORY_GROUP_CODES = ("object", "admin", "transfer", "income")
@@ -46,6 +48,8 @@ DEFAULT_EXPENSE_CATEGORY_GROUPS = {
     "cash_withdrawal_commission": "admin",
     "cash_withdrawal": "transfer",
     "income_unallocated": "income",
+    "income_work_payment": "income",
+    "income_loan": "income",
     "other": "object,admin",
 }
 

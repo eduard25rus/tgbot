@@ -11011,6 +11011,7 @@ function syncDdsExpenseForm(form) {{
   const withdrawalCashboxSelect = form.querySelector('select[name="cash_withdrawal_cashbox"]');
   const withdrawalPercentInput = form.querySelector('input[name="cash_withdrawal_commission_percent"]');
   const selectedGroup = groupSelect ? groupSelect.value : "";
+  const isIncomeForm = isIncomeOperation || selectedGroup === "income";
   if (categorySelect) {{
     Array.from(categorySelect.options).forEach((option) => {{
       const optionGroups = (option.dataset.expenseGroups || "object").split(/\\s+/).filter(Boolean);
@@ -11034,25 +11035,25 @@ function syncDdsExpenseForm(form) {{
           ? "Тип поступления"
           : "Статья";
   }}
-  const needsPeriod = Boolean(categorySelect && payrollSet.has(categorySelect.value));
-  const needsPayrollEmployee = Boolean(categorySelect && categorySelect.value === "salary" && !isIncomeOperation);
+  const needsPeriod = Boolean(categorySelect && !isIncomeForm && payrollSet.has(categorySelect.value));
+  const needsPayrollEmployee = Boolean(categorySelect && categorySelect.value === "salary" && !isIncomeForm);
   const isCashboxTransfer = Boolean(categorySelect && transferSet.has(categorySelect.value));
   const needsAdjustment = form.dataset.needsAdjustment === "1";
   const projectSelect = form.querySelector('select[name="project_code"]');
   const projectField = projectSelect ? projectSelect.closest(".field") : null;
   const categoryField = categorySelect ? categorySelect.closest(".field") : null;
   const isCashWithdrawal = Boolean(
-    !isIncomeOperation &&
+    !isIncomeForm &&
     categorySelect &&
     sourceSelect &&
     categorySelect.value === withdrawalCategoryCode &&
     sourceSelect.value === "bank"
   );
   if (sourceField) {{
-    sourceField.classList.toggle("is-hidden", isIncomeOperation);
+    sourceField.classList.toggle("is-hidden", isIncomeForm);
   }}
   if (sourceSelect) {{
-    sourceSelect.disabled = isIncomeOperation;
+    sourceSelect.disabled = isIncomeForm;
   }}
   if (projectField && projectSelect && categorySelect) {{
     const categoryDoesNotNeedProject = selectedGroup === "admin" || selectedGroup === "transfer" || noProjectSet.has(categorySelect.value) || categorySelect.value === withdrawalCategoryCode || transferSet.has(categorySelect.value);
@@ -11092,10 +11093,10 @@ function syncDdsExpenseForm(form) {{
     payrollEmployeeField.classList.toggle("dds-editor-attention", needsAdjustment && needsPayrollEmployee && !payrollEmployeeSelect.value);
   }}
   if (targetField) {{
-    targetField.classList.toggle("is-hidden", isIncomeOperation || !isCashboxTransfer);
+    targetField.classList.toggle("is-hidden", isIncomeForm || !isCashboxTransfer);
   }}
   if (targetSelect) {{
-    targetSelect.disabled = isIncomeOperation || !isCashboxTransfer;
+    targetSelect.disabled = isIncomeForm || !isCashboxTransfer;
     const sourceCashbox = sourceSelect && sourceSelect.value.startsWith("cashbox:")
       ? sourceSelect.value.slice("cashbox:".length)
       : "";
@@ -12153,6 +12154,8 @@ def render_directories_section(
             "cash_withdrawal_commission": "Комиссия за снятие или вывод денег в кассу, учитывается как административный расход.",
             "cash_withdrawal": "Вывод денег в кассу или подотчет, когда списание с банка становится наличными.",
             "income_unallocated": "Поступления, которые еще нужно разобрать и привязать к объекту или основанию.",
+            "income_work_payment": "Оплата выполненных работ по объекту, поступившая от заказчика.",
+            "income_loan": "Заемные поступления, возвраты и временное финансирование.",
             "other": "Редкие расходы, которые пока не подходят ни под одну отдельную категорию.",
         }
         descriptions_by_label = {
@@ -17903,7 +17906,7 @@ def category_groups_for_code(code: str, category_labels: dict[str, str] | None =
     normalized_code = _normalized_cash_category_text(code)
     label = category_labels.get(code, "") if category_labels else EXPENSE_CATEGORY_META.get(code, "")
     normalized_label = _normalized_cash_category_text(label)
-    if normalized_code == "income_unallocated":
+    if normalized_code.startswith("income_"):
         return {"income"}
     if code == CASH_WITHDRAWAL_CATEGORY_CODE or is_cash_transfer_category(code, category_labels):
         return {"transfer"}
@@ -17926,7 +17929,7 @@ def infer_expense_group_code(entry, category_labels: dict[str, str] | None = Non
     operation_type = (getattr(entry, "operation_type", "") or "expense").strip() or "expense"
     category_code = (getattr(entry, "category_code", "") or "").strip()
     project_code = (getattr(entry, "project_code", "") or "").strip()
-    if operation_type == "income" or category_code == "income_unallocated":
+    if operation_type == "income" or _normalized_cash_category_text(category_code).startswith("income_"):
         return "income"
     if category_code == CASH_WITHDRAWAL_CATEGORY_CODE or is_cash_transfer_category(category_code, category_labels):
         return "transfer"
@@ -18449,7 +18452,9 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         return summary_html or f'<div class="timeline-title">{escape(entry.title)}</div>'
     cashboxes = cashboxes or []
     category_labels = dict(category_options_list)
-    is_income_operation = (entry.operation_type or "expense") == "income"
+    selected_group_code = infer_expense_group_code(entry, category_labels)
+    is_income_operation = (entry.operation_type or "expense") == "income" or selected_group_code == "income"
+    effective_operation_type = "income" if is_income_operation else (entry.operation_type or "expense")
     payroll_category_codes = [
         code for code, _label in category_options_list
         if code == "salary" or is_labor_force_category(code, category_labels)
@@ -18466,7 +18471,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         or is_cashbox_linked_income_entry(entry)
     )
     display_category_code = transfer_category_code if is_transfer_pair_entry and transfer_category_code else entry.category_code
-    show_payroll_period = display_category_code in payroll_category_codes
+    show_payroll_period = (not is_income_operation) and display_category_code in payroll_category_codes
     transfer_source_code = cashbox_transfer_source_code_from_entry(entry, cashboxes)
     transfer_target_code = cashbox_transfer_target_code_from_entry(entry, cashboxes)
     withdrawal_cashbox_code = cashbox_code_from_entry(entry, cashboxes) or "denis"
@@ -18478,14 +18483,13 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             f"{cashbox_label_from_directory(cashboxes, transfer_source_code)} → "
             f"{cashbox_label_from_directory(cashboxes, transfer_target_code)}"
         )
-    selected_group_code = infer_expense_group_code(entry, category_labels)
     group_needs_attention = (
         entry.needs_adjustment
         and (entry.project_code or "") == "admin"
         and display_category_code == "other"
     )
     display_group_code = "" if group_needs_attention else selected_group_code
-    project_requires_selection = expense_group_requires_project(display_group_code or "object", entry.operation_type or "expense")
+    project_requires_selection = expense_group_requires_project(display_group_code or "object", effective_operation_type)
     project_needs_attention = (
         entry.needs_adjustment
         and (entry.project_code or "") == "admin"
@@ -18555,8 +18559,8 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     <details id="expense-entry-{entry.id}" class="status-menu expense-editor-menu" data-expense-editor-id="{entry.id}">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
       <div class="status-popover expense-editor-popover" data-modal-title="Редактирование операции ДДС">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-operation-type="{escape(entry.operation_type or 'expense')}" data-needs-adjustment="{'1' if form_needs_attention else '0'}">
-          <input type="hidden" name="operation_type" value="{escape(entry.operation_type or 'expense')}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-operation-type="{escape(effective_operation_type)}" data-needs-adjustment="{'1' if form_needs_attention else '0'}">
+          <input type="hidden" name="operation_type" value="{escape(effective_operation_type)}">
           <div class="field">
             <label>Дата операции</label>
             <input type="date" name="expense_date" value="{entry.expense_date.isoformat()}" required>
@@ -31113,7 +31117,9 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите статью расхода")
             if operation_type not in MONEY_OPERATION_TYPE_META:
                 raise ValueError("Выберите тип операции")
-            if operation_type == "income":
+            if expense_group_code == "income":
+                operation_type = "income"
+            elif operation_type == "income":
                 expense_group_code = "income"
             if expense_group_code not in EXPENSE_GROUP_META:
                 raise ValueError("Выберите группу расхода")
@@ -31136,7 +31142,7 @@ self.addEventListener("notificationclick", (event) => {
                     raise ValueError("Выберите кассу получателя")
                 if target_cashbox_code == selected_cashbox_code:
                     raise ValueError("Касса списания и касса получателя должны отличаться")
-            needs_payroll_period = category_code == "salary" or is_labor_force_category(category_code, category_labels)
+            needs_payroll_period = (not is_income_operation) and (category_code == "salary" or is_labor_force_category(category_code, category_labels))
             if needs_payroll_period and not payroll_period_raw:
                 raise ValueError("Укажите период ФОТ")
             payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if needs_payroll_period else ""
@@ -31321,9 +31327,11 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите источник оплаты")
             if operation_type not in MONEY_OPERATION_TYPE_META:
                 raise ValueError("Выберите тип операции")
-            is_income_operation = operation_type == "income"
-            if is_income_operation:
+            if expense_group_code == "income":
+                operation_type = "income"
+            elif operation_type == "income":
                 expense_group_code = "income"
+            is_income_operation = operation_type == "income"
             if expense_group_code not in EXPENSE_GROUP_META:
                 raise ValueError("Выберите группу расхода")
             if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels, category_group_map):
