@@ -7640,6 +7640,20 @@ def layout(
       background-repeat: no-repeat;
       padding-right: 34px;
     }}
+    .field.dds-editor-attention label {{
+      color: #9f2f36;
+      font-weight: 800;
+    }}
+    .field.dds-editor-attention select {{
+      color: #9f2f36;
+      border-color: rgba(159,47,54,0.72);
+      background-color: rgba(159,47,54,0.05);
+      font-weight: 800;
+    }}
+    .field.dds-editor-attention select option {{
+      color: var(--ink);
+      font-weight: 500;
+    }}
     .field textarea {{
       min-height: 92px;
       resize: vertical;
@@ -17984,12 +17998,14 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             f"{cashbox_label_from_directory(cashboxes, transfer_source_code)} → "
             f"{cashbox_label_from_directory(cashboxes, transfer_target_code)}"
         )
+    project_needs_attention = entry.needs_adjustment and (entry.project_code or "") == "admin"
+    category_needs_attention = entry.needs_adjustment and display_category_code == "other"
     project_options = "".join(
-        f'<option value="{code}"{" selected" if code == entry.project_code else ""}>{escape(label)}</option>'
+        f'<option value="{code}"{" selected" if code == entry.project_code else ""}>{escape("Выберите" if project_needs_attention and code == "admin" else label)}</option>'
         for code, label in project_options_list
     )
     category_options = "".join(
-        f'<option value="{code}"{" selected" if code == display_category_code else ""}>{escape(label)}</option>'
+        f'<option value="{code}"{" selected" if code == display_category_code else ""}>{escape("Выберите" if category_needs_attention and code == "other" else label)}</option>'
         for code, label in category_options_list
     )
     target_cashbox_options = "".join(
@@ -18021,6 +18037,8 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         if is_income_operation and bank_account_label
         else ""
     )
+    project_attention_class = " dds-editor-attention" if project_needs_attention else ""
+    category_attention_class = " dds-editor-attention" if category_needs_attention else ""
     return f"""
     <details id="expense-entry-{entry.id}" class="status-menu expense-editor-menu" data-expense-editor-id="{entry.id}">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
@@ -18031,11 +18049,11 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <label>Дата операции</label>
             <input type="date" name="expense_date" value="{entry.expense_date.isoformat()}" required>
           </div>
-          <div class="field">
+          <div class="field{project_attention_class}">
             <label>Объект</label>
             <select name="project_code">{project_options}</select>
           </div>
-          <div class="field">
+          <div class="field{category_attention_class}">
             <label>Группа</label>
             <select name="category_code" data-dds-category-select>{category_options}</select>
           </div>
@@ -22703,9 +22721,13 @@ def render_expenses_section(
             if is_cash_income_display(entry):
                 return ""
             if entry.needs_adjustment and (entry.project_code or "") == "admin":
-                return '<span class="chip warn">Объект не выбран</span>'
+                return '<span class="chip danger">Объект не выбран</span>'
             color_style = chip_style_for_color(project_colors.get(entry.project_code, ""))
             return f'<span class="chip"{color_style}>{escape(expense_project_label(entry.project_code, project_labels))}</span>'
+        def category_chip(entry) -> str:
+            if entry.needs_adjustment and (entry.category_code or "") == "other":
+                return '<span class="chip danger">Группа не указана</span>'
+            return f'<span class="chip">{escape(expense_category_label(entry.category_code, category_labels))}</span>'
         def render_single_entry(entry) -> str:
             amount_is_income = row_is_income_display(entry)
             return f"""
@@ -22717,7 +22739,7 @@ def render_expenses_section(
                     <div class="dds-purpose">{escape(expense_comment_without_service_markers(entry.comment)) if expense_comment_without_service_markers(entry.comment) else "Назначение не указано"} <span class="dds-source-inline">· {escape(expense_entry_payment_source_label(entry, cashboxes))}</span></div>
                     <div class="dds-meta-row">
                       {project_chip(entry)}
-                      <span class="chip">{escape(expense_category_label(entry.category_code, category_labels))}</span>
+                      {category_chip(entry)}
                     </div>
                   </td>
                   <td class="nowrap"><span class="dds-amount{' income' if amount_is_income else ''}">{"+" if amount_is_income else "-"}{format_amount(entry.amount)}</span></td>
