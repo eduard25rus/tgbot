@@ -5024,6 +5024,7 @@ SECTIONS = [
 ]
 
 FINANCE_NAV_SECTIONS = [
+    ("dashboards", "Dashboards", "/dashboards"),
     ("finance", "Финанализ", "/finance-analysis"),
     ("payroll", "ФОТ", "/payroll"),
     ("expenses", "ДДС", "/expenses"),
@@ -5185,7 +5186,7 @@ def layout(
             (code, label, href)
             for code, label, href in FINANCE_NAV_SECTIONS
             if (
-                code in {"finance", "payroll", "cashoperations"}
+                code in {"dashboards", "finance", "payroll", "cashoperations"}
                 or (current_user is not None and has_permission(current_user, code, "view"))
             )
         ]
@@ -6566,6 +6567,154 @@ def layout(
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       max-width: 100%;
       overflow: hidden;
+    }}
+    .dashboard-object-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+    }}
+    .dashboard-object-card {{
+      display: grid;
+      gap: 8px;
+      min-height: 128px;
+      padding: 16px;
+      background: var(--paper);
+      border: 1px solid rgba(215, 204, 188, 0.9);
+      color: inherit;
+      text-decoration: none;
+      border-radius: 8px;
+      border-left: 4px solid var(--brand);
+      transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+    }}
+    .dashboard-object-card:hover {{
+      transform: translateY(-1px);
+      box-shadow: 0 16px 36px rgba(31, 41, 55, 0.1);
+    }}
+    .dashboard-object-card.active {{
+      border-color: #0f766e;
+      background: linear-gradient(180deg, rgba(240, 253, 250, 0.82), var(--paper));
+    }}
+    .dashboard-object-card.admin {{
+      border-color: #8b5cf6;
+    }}
+    .dashboard-object-meta {{
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }}
+    .dashboard-filter-panel {{
+      display: grid;
+      grid-template-columns: minmax(240px, 1.3fr) repeat(2, minmax(150px, .65fr)) auto;
+      gap: 12px;
+      align-items: end;
+    }}
+    .dashboard-grid {{
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr);
+      gap: 18px;
+      align-items: stretch;
+    }}
+    .dashboard-chart-panel {{
+      min-width: 0;
+    }}
+    .dashboard-month-chart {{
+      display: grid;
+      gap: 12px;
+    }}
+    .dashboard-month-row {{
+      display: grid;
+      grid-template-columns: minmax(92px, .35fr) minmax(0, 1fr) minmax(150px, .35fr);
+      gap: 12px;
+      align-items: center;
+    }}
+    .dashboard-month-bars {{
+      display: grid;
+      gap: 5px;
+    }}
+    .dashboard-bar-track {{
+      height: 9px;
+      border-radius: 999px;
+      background: #eef2f7;
+      overflow: hidden;
+    }}
+    .dashboard-bar {{
+      height: 100%;
+      border-radius: inherit;
+    }}
+    .dashboard-bar.income {{
+      background: #166534;
+    }}
+    .dashboard-bar.expense {{
+      background: #9f1239;
+    }}
+    .dashboard-donut-wrap {{
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      gap: 18px;
+      align-items: center;
+    }}
+    .dashboard-donut {{
+      width: 170px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      position: relative;
+      background: #eef2f7;
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, .08);
+    }}
+    .dashboard-donut::after {{
+      content: "";
+      position: absolute;
+      inset: 38px;
+      border-radius: 50%;
+      background: var(--paper);
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, .08);
+    }}
+    .dashboard-legend {{
+      display: grid;
+      gap: 9px;
+    }}
+    .dashboard-legend-row {{
+      display: grid;
+      grid-template-columns: 12px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      font-size: 14px;
+    }}
+    .dashboard-dot {{
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }}
+    .dashboard-risk-list {{
+      display: grid;
+      gap: 10px;
+    }}
+    .dashboard-risk {{
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }}
+    .dashboard-risk.danger {{
+      border-color: rgba(159, 18, 57, .32);
+      background: rgba(255, 241, 242, .72);
+    }}
+    .dashboard-risk.warn {{
+      border-color: rgba(217, 119, 6, .32);
+      background: rgba(255, 251, 235, .82);
+    }}
+    .dashboard-amount-income {{
+      color: #166534;
+      font-weight: 750;
+      white-space: nowrap;
+    }}
+    .dashboard-amount-expense {{
+      color: #9f1239;
+      font-weight: 750;
+      white-space: nowrap;
     }}
     .stats-contracts {{
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -9133,6 +9282,18 @@ def layout(
       .dds-money-stats,
       .stats-contracts {{
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }}
+      .dashboard-filter-panel,
+      .dashboard-grid,
+      .dashboard-donut-wrap {{
+        grid-template-columns: 1fr;
+      }}
+      .dashboard-month-row {{
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }}
+      .dashboard-month-row > div:last-child {{
+        text-align: left;
       }}
     }}
     {theme_css}
@@ -21377,6 +21538,497 @@ def finance_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     """
 
 
+DASHBOARD_CATEGORY_COLORS = (
+    "#0f766e",
+    "#2563eb",
+    "#d97706",
+    "#7c3aed",
+    "#9f1239",
+    "#0891b2",
+    "#4f46e5",
+    "#64748b",
+)
+
+
+def dashboard_date_filter_from_query(query: dict[str, list[str]]) -> tuple[date | None, date | None]:
+    date_from = None
+    date_to = None
+    for key in ("date_from", "date_to"):
+        raw_value = query.get(key, [""])[0].strip()
+        if not raw_value:
+            continue
+        try:
+            parsed = parse_date(raw_value)
+        except ValueError:
+            parsed = None
+        if key == "date_from":
+            date_from = parsed
+        else:
+            date_to = parsed
+    if date_from and date_to and date_from > date_to:
+        date_from, date_to = date_to, date_from
+    return date_from, date_to
+
+
+def dashboard_month_key(value: date) -> date:
+    return date(value.year, value.month, 1)
+
+
+def dashboard_entry_in_period(entry, date_from: date | None, date_to: date | None) -> bool:
+    return (date_from is None or entry.expense_date >= date_from) and (date_to is None or entry.expense_date <= date_to)
+
+
+def dashboard_is_internal_dds_entry(entry, category_labels: dict[str, str], cashboxes: list[dict]) -> bool:
+    category_code = (entry.category_code or "").strip()
+    return (
+        (entry.operation_type or "expense") == "transfer"
+        or category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+        or is_cash_transfer_category(category_code, category_labels)
+        or is_cashbox_linked_income_entry(entry)
+    )
+
+
+def dashboard_is_real_expense_entry(entry, category_labels: dict[str, str], cashboxes: list[dict]) -> bool:
+    return (
+        (entry.operation_type or "expense") != "income"
+        and not dashboard_is_internal_dds_entry(entry, category_labels, cashboxes)
+        and entry.amount > 0
+    )
+
+
+def dashboard_filter_query(owner_chat_id: int, project_code: str, date_from: date | None, date_to: date | None) -> str:
+    parts = [f"owner={owner_chat_id}", f"project={quote_plus(project_code)}"]
+    if date_from:
+        parts.append(f"date_from={quote_plus(date_from.isoformat())}")
+    if date_to:
+        parts.append(f"date_to={quote_plus(date_to.isoformat())}")
+    return "?" + "&".join(parts)
+
+
+def dashboard_dds_href(owner_chat_id: int, project_code: str, date_from: date | None = None, date_to: date | None = None, category_group: str = "") -> str:
+    return (
+        f"/expenses?owner={owner_chat_id}&tab=active&project={quote_plus(project_code)}"
+        f"&category={quote_plus(category_group)}&adjustment=&day="
+        f"{f'&date_from={quote_plus(date_from.isoformat())}' if date_from else ''}"
+        f"{f'&date_to={quote_plus(date_to.isoformat())}' if date_to else ''}"
+    )
+
+
+def render_object_dashboards_section(
+    storage: Storage,
+    owner_chat_id: int,
+    current_user: dict | None,
+    selected_project: str = "",
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> str:
+    entries = storage.list_expense_entries(owner_chat_id)
+    cashboxes = storage.list_cashbox_directory(owner_chat_id)
+    category_options_list = expense_category_options(storage, owner_chat_id, entries)
+    category_labels = dict(category_options_list)
+    payload = contract_payload(storage, owner_chat_id)
+    contract_items = []
+    for item in payload:
+        contract = item["contract"]
+        label = (contract.object_name.strip() or contract.title.strip() or f"Контракт {contract.id}").strip()
+        contract_items.append((f"contract:{contract.id}", label, item))
+    available_project_codes = {code for code, _label, _item in contract_items}
+    available_project_codes.add("admin")
+    if selected_project not in available_project_codes:
+        selected_project = contract_items[0][0] if contract_items else "admin"
+    is_admin_dashboard = selected_project == "admin"
+    selected_contract_item = next((item for code, _label, item in contract_items if code == selected_project), None)
+    selected_label = "Административные расходы" if is_admin_dashboard else next((label for code, label, _item in contract_items if code == selected_project), "Объект")
+
+    real_expense_entries = [
+        entry for entry in entries
+        if dashboard_is_real_expense_entry(entry, category_labels, cashboxes)
+    ]
+    if is_admin_dashboard:
+        scoped_expenses_all = [
+            entry for entry in real_expense_entries
+            if infer_expense_group_code(entry, category_labels) == "admin" or (entry.project_code or "") == "admin"
+        ]
+        payment_entries_all = []
+        potential_revenue = 0.0
+        paid_all = 0.0
+        debt_amount = 0.0
+        dashboard_subtitle = "Админ, налоги, комиссии и общие расходы, которые потом можно распределять по объектам."
+    else:
+        scoped_expenses_all = [entry for entry in real_expense_entries if (entry.project_code or "") == selected_project]
+        contract_id = int(selected_project.split(":", 1)[1]) if selected_project.startswith("contract:") else 0
+        payment_entries_all = dds_contract_payment_entries(storage, owner_chat_id, contract_id, entries) if contract_id else []
+        potential_revenue = float(selected_contract_item["total_amount"]) if selected_contract_item else 0.0
+        paid_all = sum(entry.amount for entry in payment_entries_all)
+        debt_amount = max(potential_revenue - paid_all, 0.0)
+        dashboard_subtitle = "Выручка, оплаты, расходы, маржа и денежный запас по выбранному объекту."
+
+    scoped_expenses_period = [
+        entry for entry in scoped_expenses_all
+        if dashboard_entry_in_period(entry, date_from, date_to)
+    ]
+    payment_entries_period = [
+        entry for entry in payment_entries_all
+        if dashboard_entry_in_period(entry, date_from, date_to)
+    ]
+    expense_total = sum(entry.amount for entry in scoped_expenses_period)
+    expense_total_all = sum(entry.amount for entry in scoped_expenses_all)
+    paid_period = sum(entry.amount for entry in payment_entries_period)
+    current_result = paid_period - expense_total
+    forecast_profit = potential_revenue - expense_total_all
+    margin_percent = (forecast_profit / potential_revenue * 100) if potential_revenue > 0 else 0.0
+    money_to_zero = forecast_profit
+    period_label = "Весь период"
+    if date_from and date_to:
+        period_label = f"{format_date(date_from)} — {format_date(date_to)}"
+    elif date_from:
+        period_label = f"С {format_date(date_from)}"
+    elif date_to:
+        period_label = f"По {format_date(date_to)}"
+
+    category_totals: dict[str, dict[str, float | int | date | None]] = {}
+    for entry in scoped_expenses_period:
+        bucket = category_totals.setdefault(
+            entry.category_code,
+            {"amount": 0.0, "count": 0, "last_date": None},
+        )
+        bucket["amount"] = float(bucket["amount"]) + entry.amount
+        bucket["count"] = int(bucket["count"]) + 1
+        last_date = bucket["last_date"]
+        if last_date is None or entry.expense_date > last_date:
+            bucket["last_date"] = entry.expense_date
+    category_rows = sorted(category_totals.items(), key=lambda item: float(item[1]["amount"]), reverse=True)
+    category_total = sum(float(item["amount"]) for _code, item in category_rows)
+    donut_segments = []
+    donut_start = 0.0
+    for index, (_code, item) in enumerate(category_rows):
+        if category_total <= 0:
+            continue
+        share = float(item["amount"]) / category_total * 100
+        donut_end = donut_start + share
+        color = DASHBOARD_CATEGORY_COLORS[index % len(DASHBOARD_CATEGORY_COLORS)]
+        donut_segments.append(f"{color} {donut_start:.2f}% {donut_end:.2f}%")
+        donut_start = donut_end
+    donut_style = f' style="background: conic-gradient({", ".join(donut_segments)});"' if donut_segments else ""
+    legend_html = "".join(
+        f"""
+        <div class="dashboard-legend-row">
+          <span class="dashboard-dot" style="background:{DASHBOARD_CATEGORY_COLORS[index % len(DASHBOARD_CATEGORY_COLORS)]};"></span>
+          <span>{escape(expense_category_label(code, category_labels))}</span>
+          <strong>{format_percent(float(item["amount"]) / category_total * 100) if category_total > 0 else "0,0%"}</strong>
+        </div>
+        """
+        for index, (code, item) in enumerate(category_rows[:7])
+    ) or '<div class="contract-table-subtle">Расходов за выбранный период нет.</div>'
+    category_table_rows = "".join(
+        f"""
+        <tr>
+          <td>{escape(expense_category_label(code, category_labels))}</td>
+          <td class="nowrap">{format_amount(float(item["amount"]))}</td>
+          <td class="nowrap">{format_percent(float(item["amount"]) / category_total * 100) if category_total > 0 else "0,0%"}</td>
+          <td class="nowrap">{int(item["count"])}</td>
+          <td class="nowrap">{format_amount(float(item["amount"]) / int(item["count"])) if int(item["count"]) else "—"}</td>
+          <td class="nowrap">{format_date(item["last_date"]) if item["last_date"] else "—"}</td>
+        </tr>
+        """
+        for code, item in category_rows
+    )
+
+    month_values: dict[date, dict[str, float]] = {}
+    for entry in scoped_expenses_period:
+        month = dashboard_month_key(entry.expense_date)
+        month_values.setdefault(month, {"income": 0.0, "expense": 0.0})["expense"] += entry.amount
+    for entry in payment_entries_period:
+        month = dashboard_month_key(entry.expense_date)
+        month_values.setdefault(month, {"income": 0.0, "expense": 0.0})["income"] += entry.amount
+    month_items = sorted(month_values.items())
+    max_month_value = max((max(values["income"], values["expense"]) for _month, values in month_items), default=0.0)
+    month_chart_html = "".join(
+        f"""
+        <div class="dashboard-month-row">
+          <div class="contract-table-subtle">{escape(format_month_label(month))}</div>
+          <div class="dashboard-month-bars">
+            <div class="dashboard-bar-track"><div class="dashboard-bar income" style="width:{(values["income"] / max_month_value * 100) if max_month_value else 0:.1f}%;"></div></div>
+            <div class="dashboard-bar-track"><div class="dashboard-bar expense" style="width:{(values["expense"] / max_month_value * 100) if max_month_value else 0:.1f}%;"></div></div>
+          </div>
+          <div style="text-align:right;">
+            <div class="dashboard-amount-income">+{format_amount(values["income"])}</div>
+            <div class="dashboard-amount-expense">-{format_amount(values["expense"])}</div>
+          </div>
+        </div>
+        """
+        for month, values in month_items
+    ) or '<div class="contract-table-subtle">Движений за выбранный период нет.</div>'
+
+    risks = []
+    needs_adjustment_count = sum(1 for entry in entries if entry.needs_adjustment)
+    scoped_needs_adjustment_count = sum(1 for entry in scoped_expenses_all if entry.needs_adjustment)
+    other_expense_total = sum(entry.amount for entry in scoped_expenses_period if (entry.category_code or "") == "other")
+    tax_total = sum(
+        entry.amount for entry in scoped_expenses_period
+        if "налог" in expense_category_label(entry.category_code, category_labels).casefold()
+        or (entry.category_code or "") == "taxes"
+    )
+    if money_to_zero < 0 and not is_admin_dashboard:
+        risks.append(("danger", "Объект уже ниже нуля", f"Расходы превысили потенциальную выручку на {format_amount(abs(money_to_zero))}."))
+    elif potential_revenue > 0 and margin_percent < 10 and not is_admin_dashboard:
+        risks.append(("warn", "Маржа тонкая", f"Текущая прогнозная маржа {format_percent(margin_percent)}. Нужно контролировать новые списания."))
+    if paid_period < expense_total and not is_admin_dashboard:
+        risks.append(("warn", "Кассовый разрыв в периоде", f"Расходов больше оплат на {format_amount(expense_total - paid_period)}."))
+    if scoped_needs_adjustment_count:
+        risks.append(("warn", "Есть неразнесенные операции в срезе", f"Операций, требующих корректировки: {scoped_needs_adjustment_count}."))
+    if needs_adjustment_count:
+        risks.append(("warn", "Общий хвост неразнесенных", f"Во всем ДДС неразнесенных операций: {needs_adjustment_count}. Они могут исказить аналитику объектов."))
+    if other_expense_total > 0:
+        risks.append(("warn", "Много расходов в прочем", f"В категории прочее сейчас {format_amount(other_expense_total)}. Лучше разнести точнее."))
+    if tax_total > 0 and is_admin_dashboard:
+        risks.append(("warn", "Налоги отдельно видны", f"За период налоговых списаний {format_amount(tax_total)}. Их позже можно распределять по объектам."))
+    risks_html = "".join(
+        f"""
+        <div class="dashboard-risk {css}">
+          <div class="timeline-title">{escape(title)}</div>
+          <div class="contract-table-subtle">{escape(text)}</div>
+        </div>
+        """
+        for css, title, text in risks[:6]
+    ) or '<div class="dashboard-risk"><div class="timeline-title">Критичных сигналов нет</div><div class="contract-table-subtle">По текущим данным срез выглядит спокойно.</div></div>'
+
+    def project_card(code: str, label: str, total_amount: float, paid_amount: float, expense_amount: float, color: str = "", admin: bool = False) -> str:
+        active_class = " active" if code == selected_project else ""
+        admin_class = " admin" if admin else ""
+        style = chip_style_for_color(color).replace("background:", "border-left-color:").replace(" color:", " --unused-color:") if color else ""
+        href = f"/dashboards{dashboard_filter_query(owner_chat_id, code, date_from, date_to)}"
+        result_amount = total_amount - expense_amount if total_amount else -expense_amount
+        return f"""
+        <a class="dashboard-object-card{active_class}{admin_class}" href="{href}"{style}>
+          <div>
+            <div class="timeline-title">{escape(label)}</div>
+            <div class="contract-table-subtle">{'Административный срез' if admin else 'Объектный dashboard'}</div>
+          </div>
+          <div class="dashboard-object-meta"><span>Выручка</span><strong>{format_amount(total_amount) if total_amount else "—"}</strong></div>
+          <div class="dashboard-object-meta"><span>Оплачено</span><strong>{format_amount(paid_amount) if paid_amount else "—"}</strong></div>
+          <div class="dashboard-object-meta"><span>Расходы</span><strong>{format_amount(expense_amount)}</strong></div>
+          <div class="dashboard-object-meta"><span>{'Остаток до нуля' if not admin else 'Итого админ'}</span><strong>{format_amount(result_amount if not admin else expense_amount)}</strong></div>
+        </a>
+        """
+
+    object_cards = []
+    for code, label, item in contract_items:
+        contract_expenses = [
+            entry for entry in real_expense_entries
+            if (entry.project_code or "") == code
+        ]
+        object_cards.append(
+            project_card(
+                code,
+                label,
+                float(item["total_amount"]),
+                float(item["paid_amount"]),
+                sum(entry.amount for entry in contract_expenses),
+                item["contract"].object_color,
+            )
+        )
+    admin_expenses_total = sum(
+        entry.amount for entry in real_expense_entries
+        if infer_expense_group_code(entry, category_labels) == "admin" or (entry.project_code or "") == "admin"
+    )
+    object_cards.append(project_card("admin", "Административные расходы", 0.0, 0.0, admin_expenses_total, admin=True))
+    object_cards_html = "".join(object_cards)
+
+    project_options = "".join(
+        f'<option value="{escape(code)}"{" selected" if code == selected_project else ""}>{escape(label)}</option>'
+        for code, label, _item in contract_items
+    )
+    project_options += f'<option value="admin"{" selected" if is_admin_dashboard else ""}>Административные расходы</option>'
+    date_from_value = date_from.isoformat() if date_from else ""
+    date_to_value = date_to.isoformat() if date_to else ""
+
+    combined_entries = [
+        ("income", entry) for entry in payment_entries_period
+    ] + [
+        ("expense", entry) for entry in scoped_expenses_period
+    ]
+    operations_rows = "".join(
+        f"""
+        <tr>
+          <td class="nowrap">{format_date(entry.expense_date)}</td>
+          <td>
+            <div class="timeline-title">{escape(entry.title)}</div>
+            <div class="contract-table-subtle">{escape(expense_comment_without_service_markers(entry.comment)) if expense_comment_without_service_markers(entry.comment) else "Комментарий не указан"}</div>
+          </td>
+          <td>{escape(expense_category_label(entry.category_code, category_labels))}</td>
+          <td class="nowrap">{escape(expense_entry_payment_source_label(entry, cashboxes))}</td>
+          <td class="nowrap"><span class="{'dashboard-amount-income' if kind == 'income' else 'dashboard-amount-expense'}">{"+" if kind == "income" else "-"}{format_amount(entry.amount)}</span></td>
+          <td>{'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'}</td>
+        </tr>
+        """
+        for kind, entry in sorted(combined_entries, key=lambda item: (item[1].expense_date, item[1].created_at, item[1].id), reverse=True)[:40]
+    )
+
+    return f"""
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Dashboards</h2>
+          <div class="panel-sub">Финансовые панели по объектам и административным расходам: выручка, оплаты, расходы, маржа, категории и динамика.</div>
+        </div>
+        <a class="secondary-btn mini" href="{dashboard_dds_href(owner_chat_id, selected_project, date_from, date_to)}">Открыть ДДС</a>
+      </div>
+      <div class="dashboard-object-grid">{object_cards_html}</div>
+    </section>
+
+    <section class="card panel" style="margin-top:18px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">{escape(selected_label)}</h2>
+          <div class="panel-sub">{escape(dashboard_subtitle)} Период: {escape(period_label)}.</div>
+        </div>
+      </div>
+      <form class="dashboard-filter-panel" method="get" action="/dashboards" data-auto-submit-form="1">
+        <input type="hidden" name="owner" value="{owner_chat_id}">
+        <div class="field" style="margin:0;">
+          <label>Срез</label>
+          <select name="project">{project_options}</select>
+        </div>
+        <div class="field" style="margin:0;">
+          <label>С</label>
+          <input type="date" name="date_from" value="{escape(date_from_value)}">
+        </div>
+        <div class="field" style="margin:0;">
+          <label>По</label>
+          <input type="date" name="date_to" value="{escape(date_to_value)}">
+        </div>
+        <div class="action-row" style="gap:10px; margin:0;">
+          <button class="secondary-btn mini" type="submit">Показать</button>
+          <a class="secondary-btn mini" href="/dashboards?owner={owner_chat_id}&project={quote_plus(selected_project)}">Весь период</a>
+        </div>
+      </form>
+    </section>
+
+    <section class="stats" style="margin-top:18px;">
+      <article class="card stat-card">
+        <div class="stat-label">Потенциальная выручка</div>
+        <div class="stat-value">{format_amount(potential_revenue) if potential_revenue else "—"}</div>
+        <div class="stat-note">{'По сумме этапов контракта' if not is_admin_dashboard else 'Для админ-среза выручки нет'}</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Оплачено</div>
+        <div class="stat-value">{format_amount(paid_period) if not is_admin_dashboard else "—"}</div>
+        <div class="stat-note">{'В выбранном периоде' if (date_from or date_to) else 'Всего по объекту'}</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Долг заказчика</div>
+        <div class="stat-value">{format_amount(debt_amount) if not is_admin_dashboard else "—"}</div>
+        <div class="stat-note">Потенциал минус все оплаты</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Расходы</div>
+        <div class="stat-value">{format_amount(expense_total)}</div>
+        <div class="stat-note">Реальные списания, без внутренних перемещений</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Результат периода</div>
+        <div class="stat-value">{format_amount(current_result) if not is_admin_dashboard else format_amount(-expense_total)}</div>
+        <div class="stat-note">Оплаты периода минус расходы периода</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Прогнозная прибыль</div>
+        <div class="stat-value">{format_amount(forecast_profit) if not is_admin_dashboard else "—"}</div>
+        <div class="stat-note">{format_percent(margin_percent) if potential_revenue else 'Появится после привязки выручки'}</div>
+      </article>
+      <article class="card stat-card">
+        <div class="stat-label">Можно еще потратить</div>
+        <div class="stat-value">{format_amount(money_to_zero) if not is_admin_dashboard else "—"}</div>
+        <div class="stat-note">Пока до нуля, без плановой маржи</div>
+      </article>
+    </section>
+
+    <section class="dashboard-grid" style="margin-top:18px;">
+      <div class="card panel dashboard-chart-panel">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title">Динамика по месяцам</h2>
+            <div class="panel-sub">Зеленым показаны оплаты, бордовым расходы.</div>
+          </div>
+        </div>
+        <div class="dashboard-month-chart">{month_chart_html}</div>
+      </div>
+      <div class="card panel dashboard-chart-panel">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title">Структура затрат</h2>
+            <div class="panel-sub">Доля категорий в расходах выбранного среза.</div>
+          </div>
+        </div>
+        <div class="dashboard-donut-wrap">
+          <div class="dashboard-donut"{donut_style}></div>
+          <div class="dashboard-legend">{legend_html}</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="dashboard-grid" style="margin-top:18px;">
+      <div class="card panel">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title">Категории затрат</h2>
+            <div class="panel-sub">Сумма, доля, количество операций и последняя дата движения.</div>
+          </div>
+        </div>
+        <div class="expenses-table-wrap">
+          <table class="table contract-table">
+            <thead>
+              <tr>
+                <th>Категория</th>
+                <th class="nowrap">Сумма</th>
+                <th class="nowrap">Доля</th>
+                <th class="nowrap">Операций</th>
+                <th class="nowrap">Средний чек</th>
+                <th class="nowrap">Последняя</th>
+              </tr>
+            </thead>
+            <tbody>{category_table_rows or '<tr><td colspan="6">Расходов за выбранный период нет.</td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card panel">
+        <div class="panel-head">
+          <div>
+            <h2 class="panel-title">Риски</h2>
+            <div class="panel-sub">То, что может искажать управленческую картину.</div>
+          </div>
+        </div>
+        <div class="dashboard-risk-list">{risks_html}</div>
+      </div>
+    </section>
+
+    <section class="card panel" style="margin-top:18px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Операции среза</h2>
+          <div class="panel-sub">Последние 40 движений, которые попали в dashboard.</div>
+        </div>
+        <a class="secondary-btn mini" href="{dashboard_dds_href(owner_chat_id, selected_project, date_from, date_to)}">Все в ДДС</a>
+      </div>
+      <div class="expenses-table-wrap">
+        <table class="table contract-table">
+          <thead>
+            <tr>
+              <th class="nowrap">Дата</th>
+              <th>Операция</th>
+              <th>Категория</th>
+              <th class="nowrap">Источник</th>
+              <th class="nowrap">Сумма</th>
+              <th>Статус</th>
+            </tr>
+          </thead>
+          <tbody>{operations_rows or '<tr><td colspan="6">Операций за выбранный период нет.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </section>
+    """
+
+
 def render_finance_section(
     storage: Storage,
     owner_chat_id: int,
@@ -25281,6 +25933,28 @@ self.addEventListener("notificationclick", (event) => {
             kind_filter = ""
         body = render_finance_section(storage, current_owner, current_user, active_tab, kind_filter=kind_filter)
         html = layout("Финансовый анализ", body, owners, current_owner, "finance", current_user)
+        start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+        return [html.encode("utf-8")]
+
+    if path == "/dashboards" and method == "GET":
+        denied = guard("finance", "view")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        selected_project = query.get("project", [""])[0].strip()
+        date_from, date_to = dashboard_date_filter_from_query(query)
+        body = render_object_dashboards_section(storage, current_owner, current_user, selected_project, date_from, date_to)
+        html = layout(
+            "Dashboards",
+            body,
+            owners,
+            current_owner,
+            "finance",
+            current_user,
+            hero_title_override="Dashboards",
+            hero_copy_override="Финансовые dashboards по объектам: выручка, оплаты, расходы, маржа, структура затрат и административный срез.",
+            active_subsection="dashboards",
+        )
         start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
         return [html.encode("utf-8")]
 
