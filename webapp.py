@@ -6634,6 +6634,31 @@ def layout(
       display: grid;
       gap: 5px;
     }}
+    .dashboard-month-total {{
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: center;
+      margin-top: 4px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }}
+    .dashboard-month-total-label {{
+      color: var(--muted);
+      font-size: 14px;
+    }}
+    .dashboard-month-total-value {{
+      font-size: 18px;
+      font-weight: 600;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }}
+    .dashboard-month-total-value.income {{
+      color: #166534;
+    }}
+    .dashboard-month-total-value.expense {{
+      color: #9f1239;
+    }}
     .dashboard-bar-track {{
       height: 9px;
       border-radius: 999px;
@@ -21856,6 +21881,18 @@ def render_object_dashboards_section(
         """
         for month, values in month_items
     ) or '<div class="contract-table-subtle">Движений за выбранный период нет.</div>'
+    month_balance_total = paid_period - expense_total
+    month_balance_class = "income" if month_balance_total > 0.009 else "expense" if month_balance_total < -0.009 else ""
+    month_balance_prefix = "+" if month_balance_total > 0.009 else "-" if month_balance_total < -0.009 else ""
+    month_balance_html = f"""
+        <div class="dashboard-month-total">
+          <div>
+            <div class="timeline-title">Итого баланс</div>
+            <div class="dashboard-month-total-label">Поступления минус расходы за выбранный период</div>
+          </div>
+          <div class="dashboard-month-total-value {month_balance_class}">{month_balance_prefix}{format_amount(abs(month_balance_total))}</div>
+        </div>
+    """
 
     risks = []
     needs_adjustment_count = sum(1 for entry in entries if entry.needs_adjustment)
@@ -22048,7 +22085,7 @@ def render_object_dashboards_section(
             <div class="panel-sub">Зеленым показаны оплаты, бордовым расходы.</div>
           </div>
         </div>
-        <div class="dashboard-month-chart">{month_chart_html}</div>
+        <div class="dashboard-month-chart">{month_chart_html}{month_balance_html}</div>
       </div>
       <div class="card panel dashboard-chart-panel">
         <div class="panel-head">
