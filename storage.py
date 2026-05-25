@@ -7559,7 +7559,7 @@ class Storage:
             "transfer_between_cashboxes",
             "transfer_cashboxes",
         }
-        if cleaned_operation == "income" or cleaned_category == "income_unallocated":
+        if cleaned_operation == "income" or cleaned_category.startswith("income_"):
             return "income"
         if cleaned_category in transfer_codes:
             return "transfer"

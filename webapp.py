@@ -8227,6 +8227,9 @@ def layout(
     .payroll-period-field.is-hidden {{
       display: none;
     }}
+    .payroll-employee-field.is-hidden {{
+      display: none;
+    }}
     .transfer-target-field.is-hidden {{
       display: none;
     }}
@@ -18495,7 +18498,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         and (entry.project_code or "") == "admin"
         and project_requires_selection
     )
-    category_needs_attention = entry.needs_adjustment and display_category_code == "other"
+    category_needs_attention = entry.needs_adjustment and display_category_code in {"other", "income_unallocated"}
     group_options = "".join(
         f'<option value="{code}"{" selected" if code == display_group_code else ""}>{escape(label)}</option>'
         for code, label in sorted_expense_groups(["income"] if is_income_operation else ["admin", "object", "transfer"])
@@ -18508,7 +18511,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         for code, label in [("admin", "Выберите" if project_needs_attention or project_requires_selection else "Админ"), *sorted_dds_options((code, label) for code, label in project_options_list if code != "admin")]
     )
     category_options = "".join(
-        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map) | ({display_group_code} if code == display_category_code and display_group_code else set()))))}"{" selected" if code == display_category_code else ""}>{escape("Выберите" if category_needs_attention and code == "other" else label)}</option>'
+        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map) | ({display_group_code} if code == display_category_code and display_group_code else set()))))}"{" selected" if code == display_category_code else ""}>{escape("Выберите" if category_needs_attention and code == display_category_code else label)}</option>'
         for code, label in sorted_dds_options(category_options_list)
     )
     target_cashbox_options = "".join(
@@ -23553,6 +23556,8 @@ def render_expenses_section(
     def entry_needs_adjustment(entry) -> bool:
         if entry.needs_adjustment:
             return True
+        if infer_expense_group_code(entry, category_labels) == "income" and (entry.category_code or "") == "income_unallocated":
+            return True
         return (
             (entry.operation_type or "expense") == "expense"
             and (entry.category_code or "") == "salary"
@@ -23881,6 +23886,8 @@ def render_expenses_section(
         def category_chip(entry) -> str:
             if entry.needs_adjustment and (entry.category_code or "") == "other":
                 return '<span class="chip danger">Группа не указана</span>'
+            if infer_expense_group_code(entry, category_labels) == "income" and (entry.category_code or "") == "income_unallocated":
+                return '<span class="chip danger">Тип поступления не указан</span>'
             return f'<span class="chip">{escape(expense_category_label(entry.category_code, category_labels))}</span>'
         def payroll_employee_chip(entry) -> str:
             if (
@@ -31132,6 +31139,8 @@ self.addEventListener("notificationclick", (event) => {
             if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
                 raise ValueError("Выберите источник оплаты")
             is_income_operation = operation_type == "income"
+            if is_income_operation and category_code == "income_unallocated":
+                needs_adjustment = True
             is_transfer_operation = (not is_income_operation) and is_cash_transfer_category(category_code, category_labels)
             if is_transfer_operation:
                 if payment_source != "cash" or not selected_cashbox_code:
@@ -31332,6 +31341,8 @@ self.addEventListener("notificationclick", (event) => {
             elif operation_type == "income":
                 expense_group_code = "income"
             is_income_operation = operation_type == "income"
+            if is_income_operation and category_code == "income_unallocated":
+                needs_adjustment = True
             if expense_group_code not in EXPENSE_GROUP_META:
                 raise ValueError("Выберите группу расхода")
             if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels, category_group_map):
