@@ -8103,6 +8103,12 @@ def layout(
       color: #fff;
       background: #a62e2e;
     }}
+    .secondary-btn.attention {{
+      border-color: color-mix(in srgb, var(--warn) 42%, white 58%);
+      background: color-mix(in srgb, var(--warn-soft) 88%, white 12%);
+      color: color-mix(in srgb, var(--warn) 78%, var(--ink) 22%);
+      box-shadow: 0 10px 22px rgba(183, 121, 31, 0.14);
+    }}
     .finance-bucket {{
       padding: 0;
       overflow: hidden;
@@ -22636,8 +22642,9 @@ def render_expenses_section(
     bank_account_numbers = {str(item.get("account_number", "")).strip() for item in bank_account_balances}
     if project_filter and project_filter not in project_labels:
         project_filter = ""
-    if category_filter and category_filter not in category_labels:
-        category_filter = ""
+    if category_filter and category_filter not in EXPENSE_GROUP_META:
+        legacy_groups = category_groups_for_code(category_filter, category_labels) if category_filter in category_labels else set()
+        category_filter = next(iter(legacy_groups), "") if len(legacy_groups) == 1 else ""
     if adjustment_filter not in {"", "needs"}:
         adjustment_filter = ""
     if source_filter not in {"", "bank", "cash"}:
@@ -22662,6 +22669,7 @@ def render_expenses_section(
                 entry.import_counterparty_account or "",
                 expense_project_label(entry.project_code, project_labels),
                 expense_category_label(entry.category_code, category_labels),
+                expense_group_label(infer_expense_group_code(entry, category_labels)),
                 expense_payment_source_label(entry.payment_source),
                 cashbox_label(cashbox_code_from_entry(entry, cashboxes)) if cashbox_code_from_entry(entry, cashboxes) else "",
             ]
@@ -22688,6 +22696,15 @@ def render_expenses_section(
                 and source_match.group(1).strip().casefold().startswith("касса ")
             )
         )
+    def is_system_expense_entry(entry) -> bool:
+        return (
+            is_cashbox_linked_income_entry(entry)
+            or cash_withdrawal_commission_source_id(entry) > 0
+            or (
+                (entry.operation_type or "expense") == "income"
+                and entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+            )
+        )
     def entry_matches_source_filter(entry) -> bool:
         if not source_filter:
             return True
@@ -22709,7 +22726,7 @@ def render_expenses_section(
         entry
         for entry in source_entries
         if (not project_filter or entry.project_code == project_filter)
-        and (not category_filter or entry.category_code == category_filter)
+        and (not category_filter or infer_expense_group_code(entry, category_labels) == category_filter)
         and (adjustment_filter != "needs" or entry.needs_adjustment)
         and entry_matches_source_filter(entry)
         and entry_matches_account_filter(entry)
@@ -22766,6 +22783,7 @@ def render_expenses_section(
     cashbox_total_balance = sum(cashbox_balances.values())
     bank_cash_balance = sum(item["closing_balance"] for item in bank_account_balances) if bank_account_balances else None
     company_money_total = (bank_cash_balance + cashbox_total_balance) if bank_cash_balance is not None else None
+    needs_adjustment_count = sum(1 for entry in source_entries if entry.needs_adjustment)
     anchor_day = today
     day_window = [anchor_day - timedelta(days=offset) for offset in range(20, -1, -1)]
     active_selected_day = selected_day if selected_day in day_window and date_from is None and date_to is None else None
@@ -22781,7 +22799,7 @@ def render_expenses_section(
     )
     category_options = "".join(
         f'<option value="{code}"{" selected" if code == category_filter else ""}>{escape(label)}</option>'
-        for code, label in category_options_list
+        for code, label in sorted_expense_groups(["admin", "income", "object", "transfer"])
     )
     form_category_options = "".join(
         f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels))))}">{escape(label)}</option>'
@@ -22898,7 +22916,7 @@ def render_expenses_section(
               </td>
         """
     def render_cash_income_row(entry) -> str:
-        source_label = "Банк" if (entry.payment_source or "bank") == "bank" and entry.import_source else "Мобильное приложение"
+        source_label = "Системная операция" if is_cash_income_display(entry) or is_system_expense_entry(entry) else "Банк" if (entry.payment_source or "bank") == "bank" and entry.import_source else "Мобильное приложение"
         cashbox_code = cashbox_code_from_entry(entry, cashboxes)
         recipient_label = cashbox_label_from_directory(cashboxes, cashbox_code) if cashbox_code else cash_recipient_label(entry.title, entry.comment)
         return f"""
@@ -22918,20 +22936,28 @@ def render_expenses_section(
         row_entries = list(row_entries)
         entries_by_id = {entry.id: entry for entry in row_entries}
         linked_income_by_source_id = {}
+        linked_commission_by_source_id = {}
         for entry in row_entries:
             linked_match = re.search(r"\[Связанный расход:\s*(\d+)\]", entry.comment or "")
             if linked_match:
                 linked_income_by_source_id[int(linked_match.group(1))] = entry
+            commission_source_id = cash_withdrawal_commission_source_id(entry)
+            if commission_source_id:
+                linked_commission_by_source_id[commission_source_id] = entry
         def row_sort_key(entry):
             linked_match = re.search(r"\[Связанный расход:\s*(\d+)\]", entry.comment or "")
-            linked_source_id = int(linked_match.group(1)) if linked_match else 0
+            linked_source_id = int(linked_match.group(1)) if linked_match else cash_withdrawal_commission_source_id(entry)
             linked_income = linked_income_by_source_id.get(entry.id)
+            linked_commission = linked_commission_by_source_id.get(entry.id)
             linked_source = entries_by_id.get(linked_source_id) if linked_source_id else None
-            group_entries = [item for item in (entry, linked_income, linked_source) if item is not None]
+            if linked_source is not None:
+                linked_income = linked_income_by_source_id.get(linked_source.id)
+                linked_commission = linked_commission_by_source_id.get(linked_source.id)
+            group_entries = [item for item in (entry, linked_income, linked_commission, linked_source) if item is not None]
             group_date = max(item.expense_date for item in group_entries)
             group_created = max(item.created_at for item in group_entries)
             group_id = max(item.id for item in group_entries)
-            sequence = 0 if linked_source_id else 1 if linked_income else 2
+            sequence = 2 if cash_withdrawal_commission_source_id(entry) else 1 if linked_match else 0
             return (group_date, group_created, group_id, -sequence)
         def status_editor(entry) -> str:
             status_html = f'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'
@@ -22974,7 +23000,7 @@ def render_expenses_section(
                   <td>
                     <div class="dds-status-stack">
                       {status_editor(entry)}
-                      <span class="contract-table-subtle">{escape("Автоимпорт выписки" if entry.import_source else (entry.created_by_name or "Автор неизвестен"))}</span>
+                      <span class="contract-table-subtle">{escape("Системная операция" if is_system_expense_entry(entry) else "Автоимпорт выписки" if entry.import_source else (entry.created_by_name or "Автор неизвестен"))}</span>
                     </div>
                   </td>
                 </tr>
@@ -23258,7 +23284,7 @@ def render_expenses_section(
         </div>
         <div class="action-row dds-top-actions">
           {dds_actions_html}
-          <a class="secondary-btn mini" href="{build_expenses_href(adjustment='needs', day=None)}">Неразнесенные</a>
+          <a class="secondary-btn mini{' attention' if needs_adjustment_count else ''}" href="{build_expenses_href(adjustment='needs', day=None)}">Неразнесенные</a>
           <a class="secondary-btn mini" href="{build_expenses_href(adjustment='', day=None)}">Все операции</a>
         </div>
       </div>
