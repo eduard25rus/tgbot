@@ -5877,6 +5877,10 @@ def layout(
       .dds-filter-panel {{
         grid-template-columns: 1fr;
       }}
+      .dds-bulk-actions {{
+        align-items: stretch;
+        flex-direction: column;
+      }}
     }}
     .expenses-panel {{
       max-width: 100%;
@@ -5917,6 +5921,29 @@ def layout(
     .dds-action-menu[open] {{
       z-index: 230;
     }}
+    .dds-bulk-actions {{
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid rgba(189,199,211,0.92);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.96);
+    }}
+    .dds-bulk-actions.is-visible {{
+      display: flex;
+    }}
+    .dds-bulk-summary {{
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.35;
+    }}
+    .dds-bulk-actions .secondary-btn[disabled] {{
+      opacity: 0.48;
+      cursor: not-allowed;
+    }}
     .expenses-table-wrap {{
       margin-top: 18px;
       max-width: 100%;
@@ -5951,9 +5978,24 @@ def layout(
     .dds-table {{
       table-layout: fixed;
     }}
-    .dds-table th:nth-child(1), .dds-table td:nth-child(1) {{ width: 118px; }}
-    .dds-table th:nth-child(3), .dds-table td:nth-child(3) {{ width: 155px; text-align: right; }}
-    .dds-table th:nth-child(4), .dds-table td:nth-child(4) {{ width: 190px; }}
+    .dds-select-cell {{
+      display: none;
+      width: 46px;
+      text-align: center;
+      vertical-align: middle;
+    }}
+    .dds-selection-mode .dds-select-cell {{
+      display: table-cell;
+    }}
+    .dds-select-cell input[type="checkbox"] {{
+      width: 18px;
+      height: 18px;
+      accent-color: var(--brand);
+      cursor: pointer;
+    }}
+    .dds-table th:nth-child(2), .dds-table td:nth-child(2) {{ width: 118px; }}
+    .dds-table th:nth-child(4), .dds-table td:nth-child(4) {{ width: 155px; text-align: right; }}
+    .dds-table th:nth-child(5), .dds-table td:nth-child(5) {{ width: 190px; }}
     .dds-table .timeline-title {{
       font-size: 15px;
       line-height: 1.25;
@@ -10798,7 +10840,84 @@ function initDdsExpenseForms() {{
   document.querySelectorAll('[data-dds-expense-form="1"]').forEach(syncDdsExpenseForm);
 }}
 
+function ddsBulkCheckboxes() {{
+  return Array.from(document.querySelectorAll("[data-dds-bulk-checkbox]"));
+}}
+
+function ddsSelectedExpenseIds() {{
+  const ids = new Set();
+  ddsBulkCheckboxes().forEach((checkbox) => {{
+    if (checkbox.checked && checkbox.value) {{
+      ids.add(checkbox.value);
+    }}
+  }});
+  return ids;
+}}
+
+function syncDdsBulkSelection() {{
+  const selectedIds = ddsSelectedExpenseIds();
+  const selectedCount = selectedIds.size;
+  const bulkForm = document.querySelector("[data-dds-bulk-form]");
+  const summary = document.querySelector("[data-dds-bulk-summary]");
+  const deleteButton = document.querySelector("[data-dds-bulk-delete]");
+  const selectAll = document.querySelector("[data-dds-bulk-select-all]");
+  const checkboxes = ddsBulkCheckboxes();
+  if (summary) {{
+    summary.textContent = selectedCount
+      ? "Выбрано операций: " + selectedCount
+      : "Выберите операции для удаления";
+  }}
+  if (deleteButton) {{
+    deleteButton.disabled = selectedCount === 0;
+  }}
+  if (selectAll) {{
+    selectAll.checked = checkboxes.length > 0 && checkboxes.every((checkbox) => checkbox.checked);
+    selectAll.indeterminate = selectedCount > 0 && !selectAll.checked;
+  }}
+  if (bulkForm) {{
+    bulkForm.dataset.selectedCount = String(selectedCount);
+  }}
+}}
+
+function setDdsBulkSelectionMode(enabled) {{
+  document.querySelectorAll(".dds-table").forEach((table) => {{
+    table.classList.toggle("dds-selection-mode", enabled);
+  }});
+  document.querySelectorAll("[data-dds-bulk-form]").forEach((form) => {{
+    form.classList.toggle("is-visible", enabled);
+  }});
+  document.querySelectorAll("[data-dds-selection-toggle]").forEach((button) => {{
+    button.textContent = enabled ? "Готово" : "Выбрать";
+    button.classList.toggle("is-active", enabled);
+  }});
+  if (!enabled) {{
+    ddsBulkCheckboxes().forEach((checkbox) => {{
+      checkbox.checked = false;
+    }});
+  }}
+  syncDdsBulkSelection();
+}}
+
 document.addEventListener("change", (event) => {{
+  const bulkCheckbox = event.target.closest("[data-dds-bulk-checkbox]");
+  if (bulkCheckbox) {{
+    const expenseId = bulkCheckbox.dataset.expenseId || bulkCheckbox.value;
+    ddsBulkCheckboxes().forEach((checkbox) => {{
+      if ((checkbox.dataset.expenseId || checkbox.value) === expenseId) {{
+        checkbox.checked = bulkCheckbox.checked;
+      }}
+    }});
+    syncDdsBulkSelection();
+    return;
+  }}
+  const bulkSelectAll = event.target.closest("[data-dds-bulk-select-all]");
+  if (bulkSelectAll) {{
+    ddsBulkCheckboxes().forEach((checkbox) => {{
+      checkbox.checked = bulkSelectAll.checked;
+    }});
+    syncDdsBulkSelection();
+    return;
+  }}
   const ddsFilterForm = event.target.closest('[data-dds-filter-form="1"]');
   if (ddsFilterForm) {{
     syncDdsFilterDefaults(ddsFilterForm);
@@ -10813,6 +10932,31 @@ document.addEventListener("change", (event) => {{
     return;
   }}
   syncDdsExpenseForm(ddsControl.closest('[data-dds-expense-form="1"]'));
+}});
+
+document.addEventListener("click", (event) => {{
+  const toggle = event.target.closest("[data-dds-selection-toggle]");
+  if (!toggle) {{
+    return;
+  }}
+  const isEnabled = !document.querySelector(".dds-table.dds-selection-mode");
+  setDdsBulkSelectionMode(isEnabled);
+}});
+
+document.addEventListener("submit", (event) => {{
+  const form = event.target.closest("[data-dds-bulk-form]");
+  if (!form) {{
+    return;
+  }}
+  const selectedCount = ddsSelectedExpenseIds().size;
+  if (selectedCount === 0) {{
+    event.preventDefault();
+    syncDdsBulkSelection();
+    return;
+  }}
+  if (!confirm("Удалить выбранные операции ДДС: " + selectedCount + "?")) {{
+    event.preventDefault();
+  }}
 }});
 
 document.addEventListener("input", (event) => {{
@@ -10866,6 +11010,7 @@ window.addEventListener("load", () => {{
   initAutoSubmitForms();
   initDdsFilterForms();
   initDdsExpenseForms();
+  syncDdsBulkSelection();
   document.querySelectorAll('.contract-create-form').forEach((form) => {{
     const stageCountInput = form.querySelector('[data-stage-count-input]');
     buildContractStageFields(form, stageCountInput ? stageCountInput.value : 1);
@@ -22432,6 +22577,16 @@ def render_expenses_section(
             f"&day={quote_plus(day.isoformat() if day else '')}"
             f"{build_extra_filter_query(include_dates=include_dates)}"
         )
+    can_bulk_delete = has_permission(current_user, "expenses", "edit")
+    bulk_delete_action = (
+        f"/expenses/bulk-delete?owner={owner_chat_id}"
+        f"&tab={quote_plus(active_tab)}"
+        f"&project={quote_plus(project_filter)}"
+        f"&category={quote_plus(category_filter)}"
+        f"&adjustment={quote_plus(adjustment_filter)}"
+        f"&day={quote_plus(selected_day.isoformat() if selected_day else '')}"
+        f"{extra_filter_query}"
+    )
     day_cards_html = "".join(
         f"""
         <a class="expenses-day-card{' is-selected' if active_selected_day == day else ''}" href="{build_expenses_href(day=day, include_dates=False)}" data-expenses-day-card="1">
@@ -22441,12 +22596,21 @@ def render_expenses_section(
         """
         for day in day_window
     )
+    def bulk_select_cell(entry) -> str:
+        if not can_bulk_delete:
+            return '<td class="dds-select-cell"></td>'
+        return f"""
+              <td class="dds-select-cell">
+                <input type="checkbox" name="expense_ids" value="{entry.id}" form="dds-bulk-delete-form" data-dds-bulk-checkbox data-expense-id="{entry.id}" aria-label="Выбрать операцию {entry.id}">
+              </td>
+        """
     def render_cash_income_row(entry) -> str:
         source_label = "Банк" if (entry.payment_source or "bank") == "bank" and entry.import_source else "Мобильное приложение"
         cashbox_code = cashbox_code_from_entry(entry, cashboxes)
         recipient_label = cashbox_label_from_directory(cashboxes, cashbox_code) if cashbox_code else cash_recipient_label(entry.title, entry.comment)
         return f"""
             <tr>
+              {bulk_select_cell(entry)}
               <td class="nowrap">{format_date(entry.expense_date)}</td>
               <td>
                 <div class="timeline-title">Пополнение кассы: {escape(recipient_label)}</div>
@@ -22492,6 +22656,7 @@ def render_expenses_section(
             amount_is_income = row_is_income_display(entry)
             return f"""
                 <tr>
+                  {bulk_select_cell(entry)}
                   <td class="nowrap">{format_date(entry.expense_date)}</td>
                   <td>
                     <div class="timeline-title">{escape(entry.title)}</div>
@@ -22526,13 +22691,14 @@ def render_expenses_section(
           <table class="table contract-table dds-table">
             <thead>
               <tr>
+                <th class="dds-select-cell">{'<input type="checkbox" data-dds-bulk-select-all aria-label="Выбрать все операции на экране">' if can_bulk_delete else ''}</th>
                 <th class="nowrap">Дата</th>
                 <th>Операция</th>
                 <th class="nowrap">Сумма</th>
                 <th>Статус</th>
               </tr>
             </thead>
-            <tbody>{rows_html or f'<tr><td colspan="4">{escape(empty_text)}</td></tr>'}</tbody>
+            <tbody>{rows_html or f'<tr><td colspan="5">{escape(empty_text)}</td></tr>'}</tbody>
           </table>
         </div>
         """
@@ -22547,13 +22713,14 @@ def render_expenses_section(
           <table class="table contract-table dds-table">
             <thead>
               <tr>
+                <th class="dds-select-cell">{'<input type="checkbox" data-dds-bulk-select-all aria-label="Выбрать все операции на экране">' if can_bulk_delete else ''}</th>
                 <th class="nowrap">Дата</th>
                 <th>Операция</th>
                 <th class="nowrap">Сумма</th>
                 <th>Источник</th>
               </tr>
             </thead>
-            <tbody>{rows_html or f'<tr><td colspan="4">{escape(empty_text)}</td></tr>'}</tbody>
+            <tbody>{rows_html or f'<tr><td colspan="5">{escape(empty_text)}</td></tr>'}</tbody>
           </table>
         </div>
         """
@@ -22564,9 +22731,20 @@ def render_expenses_section(
         else "Пока нет операций ДДС в этом срезе."
     )
     registry_tables_html = render_expenses_table(filtered_entries, registry_empty_text, False, True)
+    bulk_actions_html = ""
+    if can_bulk_delete:
+        bulk_actions_html = f"""
+          <form id="dds-bulk-delete-form" class="dds-bulk-actions" method="post" action="{bulk_delete_action}" data-dds-bulk-form>
+            <div class="dds-bulk-summary" data-dds-bulk-summary>Выберите операции для удаления</div>
+            <button class="secondary-btn danger" type="submit" disabled data-dds-bulk-delete>Удалить выбранные</button>
+          </form>
+        """
     dds_actions_html = ""
+    if can_bulk_delete:
+        dds_actions_html += '<button class="secondary-btn mini" type="button" data-dds-selection-toggle>Выбрать</button>'
     if has_permission(current_user, "expenses", "edit") and active_tab != "archive":
         dds_actions_html = f"""
+          {dds_actions_html}
           <a class="secondary-btn mini" href="/expenses/imports?owner={owner_chat_id}">Импорт выписки</a>
           <details class="dds-action-menu">
             <summary class="secondary-btn mini">Добавить расход</summary>
@@ -22783,6 +22961,7 @@ def render_expenses_section(
       </div>
       {dds_filters_html}
       {flash_html}
+      {bulk_actions_html}
       {registry_tables_html}
     </section>
     """
@@ -29960,6 +30139,44 @@ self.addEventListener("notificationclick", (event) => {
         storage.update_expense_entry_status(current_owner, entry_id, status)
         target_tab = "archive" if status == "closed" else "active"
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(target_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
+
+    if path == "/expenses/bulk-delete" and method == "POST":
+        denied = guard("expenses", "edit")
+        if denied:
+            return denied
+        query = parse_qs(environ.get("QUERY_STRING", ""))
+        active_tab = query.get("tab", ["active"])[0].strip() or "active"
+        project_filter = query.get("project", [""])[0].strip()
+        category_filter = query.get("category", [""])[0].strip()
+        adjustment_filter = query.get("adjustment", [""])[0].strip()
+        selected_day_raw = query.get("day", [""])[0].strip()
+        selected_day = parse_date(selected_day_raw) if selected_day_raw else None
+        extra_filters = expenses_filter_args_from_query(query)
+        extra_query = expenses_extra_query_from_filters(extra_filters)
+        form = read_post_data_multi(environ)
+        selected_ids = set()
+        for raw_id in form.get("expense_ids", []):
+            try:
+                selected_ids.add(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+        deleted_count = 0
+        if selected_ids:
+            entries = storage.list_expense_entries(current_owner)
+            selected_entry_ids = {entry.id for entry in entries if entry.id in selected_ids}
+            for entry_id in sorted(selected_entry_ids):
+                linked_commission = linked_cash_withdrawal_commission_entry(entries, entry_id)
+                if linked_commission is not None and linked_commission.id not in selected_entry_ids:
+                    if storage.delete_expense_entry(current_owner, linked_commission.id):
+                        deleted_count += 1
+                if storage.delete_expense_entry(current_owner, entry_id):
+                    deleted_count += 1
+        flash = (
+            f"Удалено операций: {deleted_count}."
+            if deleted_count
+            else "Выберите операции для удаления."
+        )
+        return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}&flash={quote_plus(flash)}")
 
     if path.startswith("/expenses/") and path.endswith("/delete") and method == "POST":
         denied = guard("expenses", "edit")
