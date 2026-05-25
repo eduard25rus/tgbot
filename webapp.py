@@ -6708,12 +6708,12 @@ def layout(
     }}
     .dashboard-amount-income {{
       color: #166534;
-      font-weight: 750;
+      font-weight: 600;
       white-space: nowrap;
     }}
     .dashboard-amount-expense {{
       color: #9f1239;
-      font-weight: 750;
+      font-weight: 600;
       white-space: nowrap;
     }}
     .stats-contracts {{
@@ -9324,6 +9324,26 @@ def layout(
       .dds-import-counts strong
     ) {{
       font-weight: var(--font-weight-bold);
+    }}
+    .shell .dds-table th {{
+      font-weight: var(--font-weight-medium);
+    }}
+    .shell .dds-table td,
+    .shell .dds-table .timeline-title,
+    .shell .dds-table .chip,
+    .shell .dds-table .status-chip,
+    .shell .dds-table .dds-amount {{
+      font-weight: var(--font-weight-medium);
+    }}
+    .shell .dds-table .contract-table-subtle,
+    .shell .dds-table .dds-purpose {{
+      font-weight: var(--font-weight-regular);
+    }}
+    .shell .dashboard-month-chart .dashboard-amount-income,
+    .shell .dashboard-month-chart .dashboard-amount-expense,
+    .shell table .dashboard-amount-income,
+    .shell table .dashboard-amount-expense {{
+      font-weight: var(--font-weight-medium);
     }}
   </style>
 </head>
