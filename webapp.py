@@ -8506,7 +8506,7 @@ def layout(
     }}
     .directory-category-actions {{
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: minmax(0, 1fr);
       gap: 10px;
       margin-top: 2px;
     }}
@@ -12086,9 +12086,9 @@ def render_directories_section(
                 <label>Где показывать в ДДС</label>
                 {expense_category_group_controls(category.group_codes)}
               </div>
+              <button class="submit-btn" type="submit">Сохранить</button>
             </form>
             <div class="directory-category-actions">
-              <button class="submit-btn" type="submit" form="expense-category-update-{category.id}">Сохранить</button>
               <form method="post" action="/directories/expense-categories/{category.id}/delete?owner={owner_chat_id}" onsubmit="return confirm('Удалить категорию расходов? Если она используется в ДДС, CRM остановит удаление и покажет связанные платежи.');">
                 <button class="secondary-btn danger" type="submit">Удалить категорию</button>
               </form>
