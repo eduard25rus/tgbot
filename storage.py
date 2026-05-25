@@ -24,6 +24,7 @@ DEFAULT_EXPENSE_CATEGORIES = (
     ("taxes", "Налоги и сборы"),
     ("utilities", "Связь / коммунальные"),
     ("bank_commission", "Комиссии банка"),
+    ("cash_withdrawal_commission", "Комиссия за вывод в кассу"),
     ("cash_withdrawal", "Вывод в кассу"),
     ("income_unallocated", "Поступление"),
     ("other", "Прочее"),
@@ -408,6 +409,7 @@ class ExpenseEntry:
     expense_date: date
     project_code: str
     category_code: str
+    expense_group_code: str
     payroll_employee_id: Optional[int]
     payroll_employee_name: str
     payroll_period: str
@@ -1075,6 +1077,7 @@ class Storage:
                     expense_date TEXT NOT NULL,
                     project_code TEXT NOT NULL DEFAULT 'admin',
                     category_code TEXT NOT NULL DEFAULT 'other',
+                    expense_group_code TEXT NOT NULL DEFAULT '',
                     payroll_employee_id INTEGER,
                     payroll_employee_name TEXT NOT NULL DEFAULT '',
                     payroll_period TEXT NOT NULL DEFAULT '',
@@ -1548,6 +1551,7 @@ class Storage:
                 ("expense_date", "TEXT NOT NULL DEFAULT ''"),
                 ("project_code", "TEXT NOT NULL DEFAULT 'admin'"),
                 ("category_code", "TEXT NOT NULL DEFAULT 'other'"),
+                ("expense_group_code", "TEXT NOT NULL DEFAULT ''"),
                 ("payroll_employee_id", "INTEGER"),
                 ("payroll_employee_name", "TEXT NOT NULL DEFAULT ''"),
                 ("payroll_period", "TEXT NOT NULL DEFAULT ''"),
@@ -1575,6 +1579,38 @@ class Storage:
             for column_name, column_def in expense_alters:
                 if column_name not in expense_columns:
                     conn.execute(f"ALTER TABLE expense_entries ADD COLUMN {column_name} {column_def}")
+            conn.execute(
+                """
+                UPDATE expense_entries
+                SET category_code = 'cash_withdrawal_commission'
+                WHERE category_code = 'admin'
+                  AND comment LIKE '%[Комиссия по выводу:%'
+                """
+            )
+            conn.execute(
+                """
+                UPDATE expense_entries
+                SET expense_group_code = CASE
+                    WHEN COALESCE(operation_type, 'expense') = 'income'
+                         OR category_code = 'income_unallocated'
+                        THEN 'income'
+                    WHEN category_code IN (
+                        'cash_withdrawal',
+                        'cash_transfer',
+                        'cashbox_transfer',
+                        'cashbox_transfer_between',
+                        'transfer_between_cashboxes',
+                        'transfer_cashboxes'
+                    )
+                        THEN 'transfer'
+                    WHEN COALESCE(project_code, '') = 'admin'
+                         OR category_code IN ('admin', 'bank_commission', 'cash_withdrawal_commission')
+                        THEN 'admin'
+                    ELSE 'object'
+                END
+                WHERE COALESCE(expense_group_code, '') = ''
+                """
+            )
             expense_category_alters = [
                 ("owner_chat_id", "INTEGER NOT NULL DEFAULT 0"),
                 ("code", "TEXT NOT NULL DEFAULT ''"),
@@ -7423,6 +7459,27 @@ class Storage:
         digest = hashlib.sha1(cleaned.encode("utf-8")).hexdigest()[:10]
         return f"custom_{digest}"
 
+    @staticmethod
+    def expense_group_code(project_code: str, category_code: str, operation_type: str = "expense") -> str:
+        cleaned_project = (project_code or "").strip()
+        cleaned_category = (category_code or "").strip()
+        cleaned_operation = (operation_type or "expense").strip() or "expense"
+        transfer_codes = {
+            "cash_withdrawal",
+            "cash_transfer",
+            "cashbox_transfer",
+            "cashbox_transfer_between",
+            "transfer_between_cashboxes",
+            "transfer_cashboxes",
+        }
+        if cleaned_operation == "income" or cleaned_category == "income_unallocated":
+            return "income"
+        if cleaned_category in transfer_codes:
+            return "transfer"
+        if cleaned_project == "admin" or cleaned_category in {"admin", "bank_commission", "cash_withdrawal_commission"}:
+            return "admin"
+        return "object"
+
     def ensure_default_expense_categories(self, owner_chat_id: int) -> None:
         now = datetime.utcnow().isoformat()
         with self.connection() as conn:
@@ -7630,7 +7687,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT
-                    id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
+                    id, owner_chat_id, expense_date, project_code, category_code, expense_group_code, title, amount, comment,
                     payroll_employee_id, payroll_employee_name, payroll_period, receipt_file_name, receipt_file_path,
                     payment_source, operation_type, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
@@ -7771,7 +7828,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT
-                    id, owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
+                    id, owner_chat_id, expense_date, project_code, category_code, expense_group_code, title, amount, comment,
                     payroll_employee_id, payroll_employee_name, payroll_period, receipt_file_name, receipt_file_path,
                     payment_source, operation_type, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
@@ -8326,8 +8383,13 @@ class Storage:
         payroll_period: str = "",
         client_request_key: str = "",
         operation_type: str = "expense",
+        expense_group_code: str = "",
     ) -> int:
         cleaned_request_key = client_request_key.strip()
+        cleaned_project = project_code.strip()
+        cleaned_category = category_code.strip()
+        cleaned_operation = operation_type.strip() or "expense"
+        cleaned_group = expense_group_code.strip() or self.expense_group_code(cleaned_project, cleaned_category, cleaned_operation)
         with self.connection() as conn:
             if cleaned_request_key:
                 existing = conn.execute(
@@ -8347,19 +8409,20 @@ class Storage:
             cursor = conn.execute(
                 """
                 INSERT INTO expense_entries (
-                    owner_chat_id, expense_date, project_code, category_code, title, amount, comment,
+                    owner_chat_id, expense_date, project_code, category_code, expense_group_code, title, amount, comment,
                     payroll_employee_id, payroll_employee_name, payroll_period, payment_source, operation_type, needs_adjustment,
                     status, created_by_user_id, created_by_name, deleted_at, created_at, updated_at,
                     import_source, import_hash, import_doc_number, import_counterparty_inn,
                     import_counterparty_account, raw_import_text, client_request_key
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     owner_chat_id,
                     expense_date.strftime(DATE_FMT),
-                    project_code.strip(),
-                    category_code.strip(),
+                    cleaned_project,
+                    cleaned_category,
+                    cleaned_group,
                     title.strip(),
                     amount,
                     comment.strip(),
@@ -8367,7 +8430,7 @@ class Storage:
                     payroll_employee_name.strip(),
                     payroll_period.strip(),
                     payment_source.strip() or "bank",
-                    operation_type.strip() or "expense",
+                    cleaned_operation,
                     1 if needs_adjustment else 0,
                     created_by_user_id,
                     created_by_name.strip(),
@@ -8525,7 +8588,12 @@ class Storage:
         payroll_employee_name: str = "",
         payroll_period: str = "",
         operation_type: str = "expense",
+        expense_group_code: str = "",
     ) -> bool:
+        cleaned_project = project_code.strip()
+        cleaned_category = category_code.strip()
+        cleaned_operation = operation_type.strip() or "expense"
+        cleaned_group = expense_group_code.strip() or self.expense_group_code(cleaned_project, cleaned_category, cleaned_operation)
         with self.connection() as conn:
             cursor = conn.execute(
                 """
@@ -8534,6 +8602,7 @@ class Storage:
                     expense_date = ?,
                     project_code = ?,
                     category_code = ?,
+                    expense_group_code = ?,
                     title = ?,
                     amount = ?,
                     comment = ?,
@@ -8548,8 +8617,9 @@ class Storage:
                 """,
                 (
                     expense_date.strftime(DATE_FMT),
-                    project_code.strip(),
-                    category_code.strip(),
+                    cleaned_project,
+                    cleaned_category,
+                    cleaned_group,
                     title.strip(),
                     amount,
                     comment.strip(),
@@ -8557,7 +8627,7 @@ class Storage:
                     payroll_employee_name.strip(),
                     payroll_period.strip(),
                     payment_source.strip() or "bank",
-                    operation_type.strip() or "expense",
+                    cleaned_operation,
                     1 if needs_adjustment else 0,
                     datetime.utcnow().isoformat(),
                     entry_id,
@@ -9001,6 +9071,7 @@ class Storage:
             expense_date=date.fromisoformat(row["expense_date"]),
             project_code=row["project_code"] or "admin",
             category_code=row["category_code"] or "other",
+            expense_group_code=row["expense_group_code"] if "expense_group_code" in row.keys() and row["expense_group_code"] else Storage.expense_group_code(row["project_code"] or "admin", row["category_code"] or "other", row["operation_type"] if "operation_type" in row.keys() else "expense"),
             payroll_employee_id=int(row["payroll_employee_id"]) if "payroll_employee_id" in row.keys() and row["payroll_employee_id"] is not None else None,
             payroll_employee_name=row["payroll_employee_name"] if "payroll_employee_name" in row.keys() else "",
             payroll_period=row["payroll_period"] if "payroll_period" in row.keys() else "",
