@@ -17795,13 +17795,13 @@ def sync_cash_withdrawal_commission_entry(
     category_options_list: list[tuple[str, str]],
     created_by_user_id: int | None,
     created_by_name: str,
-) -> None:
+) -> tuple[bool, float]:
     linked_commission = linked_cash_withdrawal_commission_entry(entries, source_entry_id)
     commission_amount = round(source_amount * commission_percent / 100, 2)
     if commission_percent <= 0 or commission_amount <= 0:
         if linked_commission is not None:
             storage.delete_expense_entry(owner_chat_id, linked_commission.id)
-        return
+        return False, 0.0
     clean_comment = expense_comment_without_service_markers(raw_comment)
     commission_comment = " ".join(
         part for part in (
@@ -17830,7 +17830,7 @@ def sync_cash_withdrawal_commission_entry(
             payroll_period="",
             operation_type="expense",
         )
-        return
+        return False, commission_amount
     storage.add_expense_entry(
         owner_chat_id,
         expense_date,
@@ -17846,6 +17846,7 @@ def sync_cash_withdrawal_commission_entry(
         client_request_key=f"cash-withdrawal:{source_entry_id}:commission",
         operation_type="expense",
     )
+    return True, commission_amount
 
 
 def parse_expense_payment_source_form_value(raw_source: str, cashboxes: list[dict], default_cashbox_code: str = "") -> tuple[str, str]:
@@ -24414,6 +24415,7 @@ self.addEventListener("notificationclick", (event) => {
                         operation_type="transfer",
                     )
                     storage.set_expense_worker_allocations(current_owner, source_entry_id, [])
+                    notify_cash_expense_created(storage, current_owner, amount, actor_name)
                 pair_marker = f"[Связанный расход: {source_entry_id}]"
                 target_comment = " ".join(part for part in (f"[{target_label}]", f"[Источник: {source_label}]", pair_marker, comment) if part)
                 linked_income = next(
@@ -24456,6 +24458,7 @@ self.addEventListener("notificationclick", (event) => {
                         client_request_key=f"cash-transfer:{source_entry_id}:in",
                         operation_type="income",
                     )
+                    notify_cash_income_created(storage, current_owner, amount, actor_name)
                 flash = f"Перевод в {target_label} сохранен."
                 return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
             if expense_id:
@@ -29929,6 +29932,7 @@ self.addEventListener("notificationclick", (event) => {
                     actor_name,
                     operation_type="transfer",
                 )
+                notify_cash_expense_created(storage, current_owner, amount, actor_name)
                 pair_marker = f"[Связанный расход: {source_entry_id}]"
                 target_comment = " ".join(
                     part
@@ -29955,6 +29959,7 @@ self.addEventListener("notificationclick", (event) => {
                     client_request_key=f"cash-transfer:{source_entry_id}:in",
                     operation_type="income",
                 )
+                notify_cash_income_created(storage, current_owner, amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             if not is_income_operation and category_code == CASH_WITHDRAWAL_CATEGORY_CODE and payment_source == "bank":
                 withdrawal_cashbox_code = form.get("cash_withdrawal_cashbox", "").strip()
@@ -29979,7 +29984,7 @@ self.addEventListener("notificationclick", (event) => {
                     payroll_period="",
                     operation_type="expense",
                 )
-                sync_cash_withdrawal_commission_entry(
+                commission_created, commission_amount = sync_cash_withdrawal_commission_entry(
                     storage,
                     current_owner,
                     source_entry_id,
@@ -29995,8 +30000,15 @@ self.addEventListener("notificationclick", (event) => {
                     actor_name,
                 )
                 notify_cash_income_created(storage, current_owner, amount, actor_name)
+                if commission_created:
+                    notify_cash_expense_created(storage, current_owner, commission_amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_period=payroll_period)
+            if payment_source == "cash":
+                if is_income_operation:
+                    notify_cash_income_created(storage, current_owner, amount, actor_name)
+                else:
+                    notify_cash_expense_created(storage, current_owner, amount, actor_name)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
@@ -30068,6 +30080,10 @@ self.addEventListener("notificationclick", (event) => {
                 existing_entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
                 and (existing_entry.payment_source or "bank") == "bank"
             )
+            existing_was_visible_cash_operation = (
+                ((existing_entry.payment_source or "bank") == "cash" and existing_entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE)
+                or existing_was_bank_cash_withdrawal
+            )
             if is_transfer_operation:
                 if payment_source != "cash" or not selected_cashbox_code:
                     raise ValueError("Для перевода выберите кассу-источник")
@@ -30118,6 +30134,8 @@ self.addEventListener("notificationclick", (event) => {
                     payroll_period="",
                     operation_type="transfer",
                 )
+                if not existing_was_visible_cash_operation:
+                    notify_cash_expense_created(storage, current_owner, amount, actor_name)
                 target_comment = " ".join(
                     part
                     for part in (
@@ -30159,6 +30177,7 @@ self.addEventListener("notificationclick", (event) => {
                         client_request_key=f"cash-transfer:{source_entry.id}:in",
                         operation_type="income",
                     )
+                    notify_cash_income_created(storage, current_owner, amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             if not title:
                 raise ValueError("Укажите наименование операции")
@@ -30198,7 +30217,7 @@ self.addEventListener("notificationclick", (event) => {
                     payroll_period="",
                     operation_type="expense",
                 )
-                sync_cash_withdrawal_commission_entry(
+                commission_created, commission_amount = sync_cash_withdrawal_commission_entry(
                     storage,
                     current_owner,
                     entry_id,
@@ -30215,6 +30234,8 @@ self.addEventListener("notificationclick", (event) => {
                 )
                 if not existing_was_bank_cash_withdrawal:
                     notify_cash_income_created(storage, current_owner, amount, actor_name)
+                if commission_created:
+                    notify_cash_expense_created(storage, current_owner, commission_amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             if existing_was_transfer_pair:
                 pair_marker = f"[Связанный расход: {existing_entry.id}]"
@@ -30241,6 +30262,11 @@ self.addEventListener("notificationclick", (event) => {
                 else " ".join(part for part in [*preserved_markers, expense_comment_without_service_markers(raw_comment)] if part)
             )
             storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, payroll_period=payroll_period, operation_type=operation_type)
+            if payment_source == "cash" and category_code != CASH_WITHDRAWAL_CATEGORY_CODE and not existing_was_visible_cash_operation:
+                if is_income_operation:
+                    notify_cash_income_created(storage, current_owner, amount, actor_name)
+                else:
+                    notify_cash_expense_created(storage, current_owner, amount, actor_name)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
