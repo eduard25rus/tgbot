@@ -21670,6 +21670,8 @@ DASHBOARD_CATEGORY_COLORS = (
     "#4f46e5",
     "#64748b",
 )
+DASHBOARD_WORKFORCE_CATEGORY_CODE = "__workforce_accrual__"
+DASHBOARD_WORKFORCE_CATEGORY_LABEL = "Рабочая сила"
 
 
 def dashboard_date_filter_from_query(query: dict[str, list[str]]) -> tuple[date | None, date | None]:
@@ -21710,12 +21712,77 @@ def dashboard_is_internal_dds_entry(entry, category_labels: dict[str, str], cash
     )
 
 
+def dashboard_is_workforce_payment_entry(entry, category_labels: dict[str, str]) -> bool:
+    return is_labor_force_category((entry.category_code or "").strip(), category_labels)
+
+
 def dashboard_is_real_expense_entry(entry, category_labels: dict[str, str], cashboxes: list[dict]) -> bool:
     return (
         (entry.operation_type or "expense") != "income"
         and not dashboard_is_internal_dds_entry(entry, category_labels, cashboxes)
+        and not dashboard_is_workforce_payment_entry(entry, category_labels)
         and entry.amount > 0
     )
+
+
+def dashboard_workforce_accruals(storage: Storage, owner_chat_id: int, project_labels: dict[str, str]) -> list[dict]:
+    reports = storage.list_mobile_work_reports(owner_chat_id)
+    if not reports:
+        return []
+    employees = storage.list_payroll_employees(owner_chat_id)
+    builder_ids = {
+        employee.id
+        for employee in employees
+        if (employee.employee_group or "admin") == "builders"
+    }
+    worker_ids = sorted({
+        int(worker["employee_id"])
+        for report in reports
+        for worker in report.workers
+        if int(worker["employee_id"]) in builder_ids
+    })
+    rate_history = storage.list_payroll_employee_rate_history(owner_chat_id, worker_ids)
+    accruals = []
+    for report in reports:
+        report_amount = 0.0
+        report_units = 0.0
+        worker_names = []
+        for worker in report.workers:
+            employee_id = int(worker["employee_id"])
+            if employee_id not in builder_ids:
+                continue
+            day_part = float(worker["day_part"] or 0)
+            rate = payroll_rate_for_date(rate_history.get(employee_id, []), report.report_date)
+            day_rate = float(rate.get("day_rate") or 0)
+            amount = round(day_part * day_rate, 2)
+            if amount <= 0:
+                continue
+            report_amount += amount
+            report_units += day_part
+            worker_names.append(str(worker.get("employee_name") or "").strip())
+        if report_amount <= 0:
+            continue
+        project_label = project_labels.get(report.project_code) or report.project_label or report.project_code or "Без объекта"
+        clean_names = [name for name in worker_names if name]
+        if len(clean_names) > 3:
+            people_text = ", ".join(clean_names[:3]) + f" и еще {len(clean_names) - 3}"
+        else:
+            people_text = ", ".join(clean_names)
+        accruals.append({
+            "id": f"workforce:{report.id}",
+            "expense_date": report.report_date,
+            "project_code": report.project_code,
+            "project_label": project_label,
+            "category_code": DASHBOARD_WORKFORCE_CATEGORY_CODE,
+            "category_label": DASHBOARD_WORKFORCE_CATEGORY_LABEL,
+            "title": f"Начисленная рабочая сила: {project_label}",
+            "amount": round(report_amount, 2),
+            "comment": f"{workforce_units_label(report_units)} смен · {people_text}" if people_text else f"{workforce_units_label(report_units)} смен",
+            "payment_source": "workforce",
+            "created_at": report.created_at,
+            "needs_adjustment": False,
+        })
+    return accruals
 
 
 def dashboard_filter_query(owner_chat_id: int, project_code: str, date_from: date | None, date_to: date | None) -> str:
@@ -21754,6 +21821,8 @@ def render_object_dashboards_section(
         contract = item["contract"]
         label = (contract.object_name.strip() or contract.title.strip() or f"Контракт {contract.id}").strip()
         contract_items.append((f"contract:{contract.id}", label, item))
+    project_labels = {"admin": "Админ", **{code: label for code, label, _item in contract_items}}
+    workforce_accruals_all = dashboard_workforce_accruals(storage, owner_chat_id, project_labels)
     available_project_codes = {code for code, _label, _item in contract_items}
     available_project_codes.add("admin")
     if selected_project not in available_project_codes:
@@ -21771,6 +21840,7 @@ def render_object_dashboards_section(
             entry for entry in real_expense_entries
             if infer_expense_group_code(entry, category_labels) == "admin" or (entry.project_code or "") == "admin"
         ]
+        scoped_workforce_all = []
         payment_entries_all = []
         potential_revenue = 0.0
         paid_all = 0.0
@@ -21778,23 +21848,28 @@ def render_object_dashboards_section(
         dashboard_subtitle = "Админ, налоги, комиссии и общие расходы, которые потом можно распределять по объектам."
     else:
         scoped_expenses_all = [entry for entry in real_expense_entries if (entry.project_code or "") == selected_project]
+        scoped_workforce_all = [item for item in workforce_accruals_all if item["project_code"] == selected_project]
         contract_id = int(selected_project.split(":", 1)[1]) if selected_project.startswith("contract:") else 0
         payment_entries_all = dds_contract_payment_entries(storage, owner_chat_id, contract_id, entries) if contract_id else []
         potential_revenue = float(selected_contract_item["total_amount"]) if selected_contract_item else 0.0
         paid_all = sum(entry.amount for entry in payment_entries_all)
         debt_amount = max(potential_revenue - paid_all, 0.0)
-        dashboard_subtitle = "Выручка, оплаты, расходы, маржа и денежный запас по выбранному объекту."
+        dashboard_subtitle = "Выручка, оплаты, расходы, маржа и денежный запас по выбранному объекту. Рабочая сила считается по начисленным сменам."
 
     scoped_expenses_period = [
         entry for entry in scoped_expenses_all
         if dashboard_entry_in_period(entry, date_from, date_to)
     ]
+    scoped_workforce_period = [
+        item for item in scoped_workforce_all
+        if (date_from is None or item["expense_date"] >= date_from) and (date_to is None or item["expense_date"] <= date_to)
+    ]
     payment_entries_period = [
         entry for entry in payment_entries_all
         if dashboard_entry_in_period(entry, date_from, date_to)
     ]
-    expense_total = sum(entry.amount for entry in scoped_expenses_period)
-    expense_total_all = sum(entry.amount for entry in scoped_expenses_all)
+    expense_total = sum(entry.amount for entry in scoped_expenses_period) + sum(float(item["amount"]) for item in scoped_workforce_period)
+    expense_total_all = sum(entry.amount for entry in scoped_expenses_all) + sum(float(item["amount"]) for item in scoped_workforce_all)
     paid_period = sum(entry.amount for entry in payment_entries_period)
     current_result = paid_period - expense_total
     forecast_profit = potential_revenue - expense_total_all
@@ -21819,6 +21894,16 @@ def render_object_dashboards_section(
         last_date = bucket["last_date"]
         if last_date is None or entry.expense_date > last_date:
             bucket["last_date"] = entry.expense_date
+    for item in scoped_workforce_period:
+        bucket = category_totals.setdefault(
+            DASHBOARD_WORKFORCE_CATEGORY_CODE,
+            {"amount": 0.0, "count": 0, "last_date": None},
+        )
+        bucket["amount"] = float(bucket["amount"]) + float(item["amount"])
+        bucket["count"] = int(bucket["count"]) + 1
+        last_date = bucket["last_date"]
+        if last_date is None or item["expense_date"] > last_date:
+            bucket["last_date"] = item["expense_date"]
     category_rows = sorted(category_totals.items(), key=lambda item: float(item[1]["amount"]), reverse=True)
     category_total = sum(float(item["amount"]) for _code, item in category_rows)
     donut_segments = []
@@ -21836,7 +21921,7 @@ def render_object_dashboards_section(
         f"""
         <div class="dashboard-legend-row">
           <span class="dashboard-dot" style="background:{DASHBOARD_CATEGORY_COLORS[index % len(DASHBOARD_CATEGORY_COLORS)]};"></span>
-          <span>{escape(expense_category_label(code, category_labels))}</span>
+          <span>{escape(DASHBOARD_WORKFORCE_CATEGORY_LABEL if code == DASHBOARD_WORKFORCE_CATEGORY_CODE else expense_category_label(code, category_labels))}</span>
           <strong>{format_percent(float(item["amount"]) / category_total * 100) if category_total > 0 else "0,0%"}</strong>
         </div>
         """
@@ -21845,7 +21930,7 @@ def render_object_dashboards_section(
     category_table_rows = "".join(
         f"""
         <tr>
-          <td>{escape(expense_category_label(code, category_labels))}</td>
+          <td>{escape(DASHBOARD_WORKFORCE_CATEGORY_LABEL if code == DASHBOARD_WORKFORCE_CATEGORY_CODE else expense_category_label(code, category_labels))}</td>
           <td class="nowrap">{format_amount(float(item["amount"]))}</td>
           <td class="nowrap">{format_percent(float(item["amount"]) / category_total * 100) if category_total > 0 else "0,0%"}</td>
           <td class="nowrap">{int(item["count"])}</td>
@@ -21860,6 +21945,9 @@ def render_object_dashboards_section(
     for entry in scoped_expenses_period:
         month = dashboard_month_key(entry.expense_date)
         month_values.setdefault(month, {"income": 0.0, "expense": 0.0})["expense"] += entry.amount
+    for item in scoped_workforce_period:
+        month = dashboard_month_key(item["expense_date"])
+        month_values.setdefault(month, {"income": 0.0, "expense": 0.0})["expense"] += float(item["amount"])
     for entry in payment_entries_period:
         month = dashboard_month_key(entry.expense_date)
         month_values.setdefault(month, {"income": 0.0, "expense": 0.0})["income"] += entry.amount
@@ -21952,13 +22040,18 @@ def render_object_dashboards_section(
             entry for entry in real_expense_entries
             if (entry.project_code or "") == code
         ]
+        contract_workforce_amount = sum(
+            float(accrual["amount"])
+            for accrual in workforce_accruals_all
+            if accrual["project_code"] == code
+        )
         object_cards.append(
             project_card(
                 code,
                 label,
                 float(item["total_amount"]),
                 float(item["paid_amount"]),
-                sum(entry.amount for entry in contract_expenses),
+                sum(entry.amount for entry in contract_expenses) + contract_workforce_amount,
                 item["contract"].object_color,
             )
         )
@@ -21981,22 +22074,45 @@ def render_object_dashboards_section(
         ("income", entry) for entry in payment_entries_period
     ] + [
         ("expense", entry) for entry in scoped_expenses_period
+    ] + [
+        ("workforce", item) for item in scoped_workforce_period
     ]
-    operations_rows = "".join(
-        f"""
+    def dashboard_operation_sort_key(item: tuple[str, object]) -> tuple:
+        payload_item = item[1]
+        if isinstance(payload_item, dict):
+            return (payload_item["expense_date"], payload_item["created_at"], str(payload_item["id"]))
+        return (payload_item.expense_date, payload_item.created_at, str(payload_item.id))
+    def dashboard_operation_row(kind: str, item) -> str:
+        if kind == "workforce":
+            return f"""
         <tr>
-          <td class="nowrap">{format_date(entry.expense_date)}</td>
+          <td class="nowrap">{format_date(item["expense_date"])}</td>
           <td>
-            <div class="timeline-title">{escape(entry.title)}</div>
-            <div class="contract-table-subtle">{escape(expense_comment_without_service_markers(entry.comment)) if expense_comment_without_service_markers(entry.comment) else "Комментарий не указан"}</div>
+            <div class="timeline-title">{escape(item["title"])}</div>
+            <div class="contract-table-subtle">{escape(item["comment"])}</div>
           </td>
-          <td>{escape(expense_category_label(entry.category_code, category_labels))}</td>
-          <td class="nowrap">{escape(expense_entry_payment_source_label(entry, cashboxes))}</td>
-          <td class="nowrap"><span class="{'dashboard-amount-income' if kind == 'income' else 'dashboard-amount-expense'}">{"+" if kind == "income" else "-"}{format_amount(entry.amount)}</span></td>
-          <td>{'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'}</td>
+          <td>{escape(DASHBOARD_WORKFORCE_CATEGORY_LABEL)}</td>
+          <td class="nowrap">Начисление смен</td>
+          <td class="nowrap"><span class="dashboard-amount-expense">-{format_amount(float(item["amount"]))}</span></td>
+          <td><span class="chip ok">По сменам</span></td>
+        </tr>
+            """
+        return f"""
+        <tr>
+          <td class="nowrap">{format_date(item.expense_date)}</td>
+          <td>
+            <div class="timeline-title">{escape(item.title)}</div>
+            <div class="contract-table-subtle">{escape(expense_comment_without_service_markers(item.comment)) if expense_comment_without_service_markers(item.comment) else "Комментарий не указан"}</div>
+          </td>
+          <td>{escape(expense_category_label(item.category_code, category_labels))}</td>
+          <td class="nowrap">{escape(expense_entry_payment_source_label(item, cashboxes))}</td>
+          <td class="nowrap"><span class="{'dashboard-amount-income' if kind == 'income' else 'dashboard-amount-expense'}">{"+" if kind == "income" else "-"}{format_amount(item.amount)}</span></td>
+          <td>{'<span class="chip warn">Требует корректировки</span>' if item.needs_adjustment else '<span class="chip ok">Разнесено</span>'}</td>
         </tr>
         """
-        for kind, entry in sorted(combined_entries, key=lambda item: (item[1].expense_date, item[1].created_at, item[1].id), reverse=True)[:40]
+    operations_rows = "".join(
+        dashboard_operation_row(kind, item)
+        for kind, item in sorted(combined_entries, key=dashboard_operation_sort_key, reverse=True)[:40]
     )
 
     return f"""
@@ -22058,7 +22174,7 @@ def render_object_dashboards_section(
       <article class="card stat-card">
         <div class="stat-label">Расходы</div>
         <div class="stat-value">{format_amount(expense_total)}</div>
-        <div class="stat-note">Реальные списания, без внутренних перемещений</div>
+        <div class="stat-note">ДДС без внутренних перемещений + рабочая сила по сменам</div>
       </article>
       <article class="card stat-card">
         <div class="stat-label">Результат периода</div>
