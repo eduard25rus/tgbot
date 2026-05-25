@@ -18683,12 +18683,11 @@ def render_cashoperations_body(
     )
     work_project_options = "".join(
         f'<option value="{code}">{escape(label)}</option>'
-        for code, label in project_options_list
-        if code != "admin"
+        for code, label in sorted_dds_options((code, label) for code, label in project_options_list if code != "admin")
     ) or project_options
     category_options = "".join(
         f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map))))}">{escape(label)}</option>'
-        for code, label in category_options_list
+        for code, label in sorted_dds_options(category_options_list)
     )
     transfer_category_codes = [
         code for code, _label in category_options_list
@@ -18700,7 +18699,7 @@ def render_cashoperations_body(
     ]
     transfer_cashbox_options = "".join(
         f'<option value="{item["code"]}">{escape(item["label"])}</option>'
-        for item in cashboxes
+        for item in sorted(cashboxes, key=lambda cashbox: str(cashbox.get("label", "")).casefold())
         if item["code"] != selected_cashbox
     )
     payroll_employees = [employee for employee in storage.list_payroll_employees(owner_chat_id) if employee.is_active]
@@ -19333,21 +19332,21 @@ def render_cashoperations_body(
           <div class="cash-mobile-section-head"><h2 data-cash-expense-title>Добавить расход</h2></div>
           <form class="cash-mobile-form" method="post" action="/cashoperations/expense" enctype="multipart/form-data">
             <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
-	            <input type="hidden" name="expense_id" value="" data-cash-expense-id>
-	            <input type="hidden" name="request_key" value="{secrets.token_urlsafe(18)}" data-cash-request-key>
-	            <label>Сумма
-	              <input type="text" name="amount" inputmode="decimal" placeholder="0" required>
-	            </label>
-	            <label>Группа
-	              <select name="expense_group_code" data-cash-group required>{expense_group_options}</select>
-	            </label>
-	            <label>Подгруппа
-	              <select name="category_code" data-cash-category required>{category_options}</select>
-	            </label>
+            <input type="hidden" name="expense_id" value="" data-cash-expense-id>
+            <input type="hidden" name="request_key" value="{secrets.token_urlsafe(18)}" data-cash-request-key>
+            <label>Сумма
+              <input type="text" name="amount" inputmode="decimal" placeholder="0" required>
+            </label>
+            <label>Группа
+              <select name="expense_group_code" data-cash-group required>{expense_group_options}</select>
+            </label>
+            <label>Подгруппа
+              <select name="category_code" data-cash-category required>{category_options}</select>
+            </label>
             <label data-cash-project-wrap>Объект
               <select name="project_code" data-cash-project required>{project_options}</select>
             </label>
-            <label class="is-hidden" data-cash-transfer-wrap>Выбор кассы
+            <label class="is-hidden" data-cash-transfer-wrap>Куда отправляем
               <select name="target_cashbox" data-cash-transfer-target>{transfer_cashbox_options}</select>
             </label>
             <label class="is-hidden" data-cash-employee-wrap>Кому? Сотрудник
@@ -20482,6 +20481,13 @@ def render_cashoperations_body(
         const editBack = document.querySelector("[data-cash-edit-back]");
         const groupSelect = document.querySelector("[data-cash-group]");
         const categorySelect = document.querySelector("[data-cash-category]");
+        const cashCategoryOptions = categorySelect
+          ? Array.from(categorySelect.options).map((option) => ({{
+              value: option.value,
+              label: option.textContent,
+              groups: (option.dataset.expenseGroups || "object").split(/\\s+/).filter(Boolean)
+            }}))
+          : [];
         const projectSelect = document.querySelector("[data-cash-project]");
         const projectWrap = document.querySelector("[data-cash-project-wrap]");
         const titleWrap = document.querySelector("[data-cash-title-wrap]");
@@ -20725,15 +20731,19 @@ def render_cashoperations_body(
           if (!categorySelect || !projectSelect) return;
           const selectedGroup = groupSelect ? groupSelect.value : "object";
           if (categorySelect) {{
-            Array.from(categorySelect.options).forEach((option) => {{
-              const optionGroups = (option.dataset.expenseGroups || "object").split(/\\s+/).filter(Boolean);
-              const isVisible = optionGroups.includes(selectedGroup);
-              option.hidden = !isVisible;
-              option.disabled = !isVisible;
-            }});
-            if (categorySelect.selectedOptions.length && categorySelect.selectedOptions[0].disabled) {{
-              const replacement = Array.from(categorySelect.options).find((option) => !option.disabled);
-              if (replacement) categorySelect.value = replacement.value;
+            const currentCategory = categorySelect.value;
+            const visibleOptions = cashCategoryOptions.filter((option) => option.groups.includes(selectedGroup));
+            categorySelect.replaceChildren(...visibleOptions.map((item) => {{
+              const option = document.createElement("option");
+              option.value = item.value;
+              option.textContent = item.label;
+              option.dataset.expenseGroups = item.groups.join(" ");
+              return option;
+            }}));
+            if (visibleOptions.some((option) => option.value === currentCategory)) {{
+              categorySelect.value = currentCategory;
+            }} else if (categorySelect.options.length) {{
+              categorySelect.value = categorySelect.options[0].value;
             }}
           }}
           const isAdmin = categorySelect.value === "admin";
@@ -21044,6 +21054,7 @@ def render_cashoperations_body(
           if (expenseIdInput) expenseIdInput.value = button.dataset.expenseId || "";
           if (expenseForm.elements.amount) expenseForm.elements.amount.value = button.dataset.expenseAmount || "";
           if (groupSelect) groupSelect.value = button.dataset.expenseGroup || "object";
+          syncAdminProject();
           if (categorySelect) categorySelect.value = button.dataset.expenseCategory || "other";
           if (projectSelect) projectSelect.value = button.dataset.expenseProject || "admin";
           if (transferSelect) transferSelect.value = button.dataset.expenseTransferTarget || transferSelect.value;
