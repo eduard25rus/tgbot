@@ -23481,6 +23481,46 @@ def format_mail_import_message_date(raw_value: str) -> str:
     return format_datetime(parsed)
 
 
+def bank_manual_import_status(result: BankStatementImportResult) -> str:
+    if result.imported_count > 0 or result.balance_count > 0 or result.skipped_count > 0:
+        return "processed"
+    if result.duplicate_count > 0:
+        return "duplicate"
+    return "processed"
+
+
+def add_manual_bank_statement_import_log(
+    storage: Storage,
+    owner_chat_id: int,
+    filename: str,
+    actor_name: str,
+    status: str,
+    imported_count: int = 0,
+    duplicate_count: int = 0,
+    skipped_count: int = 0,
+    balance_count: int = 0,
+    error_message: str = "",
+) -> None:
+    safe_filename = Path(filename).name.strip() or "TXT выписка"
+    storage.add_bank_statement_mail_import(
+        owner_chat_id,
+        "manual",
+        "CRM",
+        "",
+        "Ручная загрузка",
+        actor_name.strip() or "Ручная загрузка",
+        datetime.utcnow().isoformat(),
+        safe_filename,
+        "",
+        status,
+        imported_count,
+        duplicate_count,
+        skipped_count,
+        balance_count,
+        error_message,
+    )
+
+
 def local_day_utc_bounds(value: date) -> tuple[datetime, datetime]:
     start_local = datetime.combine(value, datetime.min.time()).replace(tzinfo=VLADIVOSTOK_TZ)
     end_local = start_local + timedelta(days=1)
@@ -23520,11 +23560,18 @@ def render_expense_imports_section(
         """
     mail_imports = storage.list_bank_statement_mail_imports(owner_chat_id, 80, import_day_from, import_day_to)
     def render_mail_import_row(item) -> str:
+        is_manual_import = item.mailbox == "manual"
         source_title = item.attachment_filename or item.message_subject or "Выписка из почты"
-        message_date_text = format_mail_import_message_date(item.message_date) if item.message_date else ""
-        meta_text = f"{item.mailbox} · {item.mailbox_folder or 'Почта'} · UID {item.message_uid or '—'}"
-        if message_date_text:
-            meta_text += f" · письмо {message_date_text}"
+        if is_manual_import:
+            meta_parts = ["Ручная загрузка"]
+            if item.message_from:
+                meta_parts.append(item.message_from)
+            meta_text = " · ".join(meta_parts)
+        else:
+            message_date_text = format_mail_import_message_date(item.message_date) if item.message_date else ""
+            meta_text = f"{item.mailbox} · {item.mailbox_folder or 'Почта'} · UID {item.message_uid or '—'}"
+            if message_date_text:
+                meta_text += f" · письмо {message_date_text}"
         result_text = item.error_message if item.error_message else "Без ошибок"
         source_tooltip = "\n".join(part for part in (source_title, meta_text, f"Тема: {item.message_subject}" if item.message_subject else "") if part)
         return f"""
@@ -23533,7 +23580,7 @@ def render_expense_imports_section(
           <td>
             <div class="dds-import-source-title" title="{escape(source_tooltip)}">{escape(source_title)}</div>
             <div class="dds-import-meta-row" title="{escape(meta_text)}">{escape(meta_text)}</div>
-            {f'<div class="dds-import-subject" title="{escape(item.message_subject)}">Тема: {escape(item.message_subject)}</div>' if item.message_subject and item.message_subject != source_title else ''}
+            {f'<div class="dds-import-subject" title="{escape(item.message_subject)}">Тема: {escape(item.message_subject)}</div>' if item.message_subject and item.message_subject != source_title and not is_manual_import else ''}
           </td>
           <td>{bank_mail_import_status_chip(item)}</td>
           <td class="nowrap">
@@ -23549,7 +23596,7 @@ def render_expense_imports_section(
       <div class="panel-head">
         <div>
           <h2 class="panel-title">Импорт выписок</h2>
-          <div class="panel-sub">Ручная загрузка 1С TXT, проверка почты и журнал всех попыток автоимпорта.</div>
+          <div class="panel-sub">Ручная загрузка 1С TXT, проверка почты и журнал всех загрузок.</div>
         </div>
         <a class="secondary-btn mini" href="/expenses?owner={owner_chat_id}">К реестру ДДС</a>
       </div>
@@ -23562,7 +23609,7 @@ def render_expense_imports_section(
         <div class="panel-head" style="margin-bottom:10px;">
           <div>
             <h3 class="panel-title">Журнал загрузок</h3>
-            <div class="panel-sub">Загрузки за выбранный день: новые операции, дубли, пропущенные строки и ошибки чтения.</div>
+            <div class="panel-sub">Загрузки за выбранный день: ручные файлы, почта, новые операции, дубли и ошибки чтения.</div>
           </div>
           <form class="dds-import-day-filter" method="get" action="/expenses/imports" data-auto-submit-form="1">
             <input type="hidden" name="owner" value="{owner_chat_id}">
@@ -23582,7 +23629,7 @@ def render_expense_imports_section(
                 <th>Источник</th>
                 <th>Статус</th>
                 <th class="nowrap">Операции</th>
-                <th class="nowrap">Остатки</th>
+                <th class="nowrap">Записи остатков</th>
                 <th>Результат</th>
               </tr>
             </thead>
@@ -30184,6 +30231,8 @@ self.addEventListener("notificationclick", (event) => {
         import_day_query = f"&import_day={quote_plus(import_day_raw)}" if import_day_raw else ""
         extra_filters = expenses_filter_args_from_query(query)
         extra_query = expenses_extra_query_from_filters(extra_filters)
+        upload: UploadedFile | None = None
+        actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Импорт выписки"
         try:
             form, files = read_multipart_form_data(environ)
             uploads = files.get("bank_statement", [])
@@ -30195,10 +30244,29 @@ self.addEventListener("notificationclick", (event) => {
             if len(upload.data) > 5 * 1024 * 1024:
                 raise ValueError("Файл выписки должен быть не больше 5 МБ")
 
-            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Импорт выписки"
             result = import_bank_1c_statement(storage, current_owner, upload.data, (current_user or {}).get("id"), actor_name)
-            flash = f"Импортировано операций: {result.imported_count}. Остатков обновлено: {result.balance_count}. Дублей пропущено: {result.duplicate_count}. Не распознано как ДДС: {result.skipped_count}."
+            add_manual_bank_statement_import_log(
+                storage,
+                current_owner,
+                upload.filename,
+                actor_name,
+                bank_manual_import_status(result),
+                result.imported_count,
+                result.duplicate_count,
+                result.skipped_count,
+                result.balance_count,
+            )
+            flash = f"Импортировано операций: {result.imported_count}. Записей остатков обновлено: {result.balance_count}. Дублей пропущено: {result.duplicate_count}. Не распознано как ДДС: {result.skipped_count}."
         except ValueError as exc:
+            if upload is not None and upload.filename:
+                add_manual_bank_statement_import_log(
+                    storage,
+                    current_owner,
+                    upload.filename,
+                    actor_name,
+                    "error",
+                    error_message=str(exc),
+                )
             if return_to_imports:
                 return redirect(start_response, f"/expenses/imports?owner={current_owner}{import_day_query}&ok=0&flash={quote_plus(str(exc))}")
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
