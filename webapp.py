@@ -22813,21 +22813,61 @@ def render_expenses_section(
         if not account_filter:
             return True
         return bank_account_number_from_expense_entry(entry) == account_filter
+    def entry_matches_date_filter(entry) -> bool:
+        if selected_day is not None and date_from is None and date_to is None and entry.expense_date != selected_day:
+            return False
+        return (date_from is None or entry.expense_date >= date_from) and (date_to is None or entry.expense_date <= date_to)
+    def entry_matches_registry_filter(entry, include_group: bool = True, include_query: bool = True) -> bool:
+        return (
+            (not project_filter or entry.project_code == project_filter)
+            and (not include_group or not category_filter or infer_expense_group_code(entry, category_labels) == category_filter)
+            and (adjustment_filter != "needs" or entry.needs_adjustment)
+            and entry_matches_source_filter(entry)
+            and entry_matches_account_filter(entry)
+            and (not cashbox_filter or cashbox_code_from_entry(entry, cashboxes) == cashbox_filter)
+            and (not include_query or entry_matches_query(entry))
+            and entry_matches_date_filter(entry)
+        )
     filtered_entries = [
         entry
         for entry in source_entries
-        if (not project_filter or entry.project_code == project_filter)
-        and (not category_filter or infer_expense_group_code(entry, category_labels) == category_filter)
-        and (adjustment_filter != "needs" or entry.needs_adjustment)
-        and entry_matches_source_filter(entry)
-        and entry_matches_account_filter(entry)
-        and (not cashbox_filter or cashbox_code_from_entry(entry, cashboxes) == cashbox_filter)
-        and entry_matches_query(entry)
-        and (date_from is None or entry.expense_date >= date_from)
-        and (date_to is None or entry.expense_date <= date_to)
+        if entry_matches_registry_filter(entry)
     ]
-    if selected_day is not None and date_from is None and date_to is None:
-        filtered_entries = [entry for entry in filtered_entries if entry.expense_date == selected_day]
+    def expand_linked_transfer_entries(row_entries) -> list:
+        if not category_filter or source_filter or account_filter or cashbox_filter:
+            return list(row_entries)
+        entries_by_id = {entry.id: entry for entry in source_entries}
+        linked_income_by_source_id: dict[int, list] = {}
+        linked_commission_by_source_id: dict[int, list] = {}
+        for entry in source_entries:
+            source_id = cashbox_transfer_source_id(entry)
+            if source_id:
+                linked_income_by_source_id.setdefault(source_id, []).append(entry)
+            commission_source_id = cash_withdrawal_commission_source_id(entry)
+            if commission_source_id:
+                linked_commission_by_source_id.setdefault(commission_source_id, []).append(entry)
+        expanded_ids = {entry.id for entry in row_entries}
+        queue = list(row_entries)
+        def maybe_add(entry) -> None:
+            if entry is None or entry.id in expanded_ids:
+                return
+            if not entry_matches_registry_filter(entry, include_group=False, include_query=False):
+                return
+            expanded_ids.add(entry.id)
+            queue.append(entry)
+        while queue:
+            entry = queue.pop(0)
+            source_id = cashbox_transfer_source_id(entry) or cash_withdrawal_commission_source_id(entry)
+            source_entry = entries_by_id.get(source_id) if source_id else entry
+            maybe_add(source_entry)
+            if source_entry is None:
+                continue
+            for linked_entry in linked_income_by_source_id.get(source_entry.id, []):
+                maybe_add(linked_entry)
+            for linked_entry in linked_commission_by_source_id.get(source_entry.id, []):
+                maybe_add(linked_entry)
+        return [entry for entry in source_entries if entry.id in expanded_ids]
+    filtered_entries = expand_linked_transfer_entries(filtered_entries)
     def is_income_display(entry) -> bool:
         return not is_cashbox_internal_transfer(entry) and (
             (entry.operation_type or "expense") == "income" or is_cash_income_display(entry)
