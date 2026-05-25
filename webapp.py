@@ -1873,12 +1873,39 @@ def parse_month_key(raw: str | None) -> date | None:
         return None
 
 
+def dds_contract_payment_entries(storage: Storage, owner_chat_id: int, contract_id: int, entries: list | None = None) -> list:
+    project_code = f"contract:{contract_id}"
+    source_entries = entries if entries is not None else storage.list_expense_entries(owner_chat_id)
+    payments = [
+        entry
+        for entry in source_entries
+        if (entry.project_code or "") == project_code
+        and (entry.operation_type or "expense") == "income"
+        and entry.category_code != CASH_WITHDRAWAL_CATEGORY_CODE
+    ]
+    return sorted(payments, key=lambda entry: (entry.expense_date, entry.id))
+
+
+def dds_contract_payment_href(owner_chat_id: int, entry) -> str:
+    active_tab = "archive" if entry.status == "closed" else "active"
+    return (
+        f"/expenses?owner={owner_chat_id}"
+        f"&tab={quote_plus(active_tab)}"
+        f"&project={quote_plus(entry.project_code or '')}"
+        f"&category=income"
+        f"&adjustment="
+        f"&day={quote_plus(entry.expense_date.isoformat())}"
+        f"#expense-entry-{quote_plus(str(entry.id))}"
+    )
+
+
 def contract_payload(storage: Storage, owner_chat_id: int) -> list[dict]:
     contracts = storage.list_contracts(owner_chat_id)
+    expense_entries = storage.list_expense_entries(owner_chat_id)
     payload: list[dict] = []
     for contract in contracts:
         stages = storage.list_stages_for_contract(owner_chat_id, contract.id)
-        payments = storage.list_payments_for_contract(owner_chat_id, contract.id)
+        payments = dds_contract_payment_entries(storage, owner_chat_id, contract.id, expense_entries)
         total_amount = sum(stage.amount for stage in stages)
         paid_amount = sum(payment.amount for payment in payments)
         debt_amount = max(total_amount - paid_amount, 0.0)
@@ -3476,7 +3503,7 @@ def build_contract_timeline_items(storage: Storage, owner_chat_id: int, contract
     legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract_id)
     meetings = storage.list_contract_meetings_for_contract(owner_chat_id, contract_id)
     construction_reports = storage.list_construction_reports_for_contract(owner_chat_id, contract_id)
-    payments = storage.list_payments_for_contract(owner_chat_id, contract_id)
+    payments = dds_contract_payment_entries(storage, owner_chat_id, contract_id)
 
     logged_refs = {
         (item.source_kind, item.source_ref)
@@ -3542,15 +3569,15 @@ def build_contract_timeline_items(storage: Storage, owner_chat_id: int, contract
         )
 
     for payment in payments:
-        source_ref = str(payment.id)
-        if ("payment_create", source_ref) in logged_refs:
-            continue
         timeline_items.append(
             {
-                "sort_date": payment.payment_date,
-                "title": f"Добавлена оплата по контракту на {format_amount(payment.amount)}",
-                "description": "",
-                "actor_name": "Автор неизвестен",
+                "sort_date": payment.expense_date,
+                "title": f"Поступление по ДДС на {format_amount(payment.amount)}",
+                "description": expense_comment_without_service_markers(payment.comment),
+                "actor_name": (
+                    payment.created_by_name.strip()
+                    or ("Автоимпорт выписки" if payment.import_source else "Автор неизвестен")
+                ),
                 "kind": "payment",
                 "badge_label": "Оплата",
                 "badge_css": "chip ok",
@@ -12773,15 +12800,27 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
         for stage in payload["stages"]
     ) or '<tr><td colspan="9">Этапов пока нет.</td></tr>'
 
+    cashboxes = storage.list_cashbox_directory(owner_chat_id)
+    payments_total = sum(payment.amount for payment in payload["payments"])
     payments_html = "".join(
         f"""
         <tr>
-          <td>{format_date(payment.payment_date)}</td>
-          <td>{format_amount(payment.amount)}</td>
+          <td class="nowrap">
+            <a class="contract-table-link" href="{dds_contract_payment_href(owner_chat_id, payment)}">{format_date(payment.expense_date)}</a>
+          </td>
+          <td>
+            <a class="contract-table-link" href="{dds_contract_payment_href(owner_chat_id, payment)}">
+              <div class="timeline-title">{escape(payment.title or "Поступление")}</div>
+              <div class="contract-table-subtle">{escape(expense_comment_without_service_markers(payment.comment)) if expense_comment_without_service_markers(payment.comment) else "Назначение не указано"}</div>
+            </a>
+          </td>
+          <td>{escape(expense_entry_payment_source_label(payment, cashboxes))}</td>
+          <td class="nowrap"><span class="dds-amount income">+{format_amount(payment.amount)}</span></td>
+          <td class="nowrap">{escape("Разнесено" if not payment.needs_adjustment else "Требует корректировки")}</td>
         </tr>
         """
         for payment in payload["payments"]
-    ) or '<tr><td colspan="2">Оплат пока нет.</td></tr>'
+    ) or '<tr><td colspan="5">Поступлений по этому контракту в ДДС пока нет.</td></tr>'
     legal_letters = storage.list_legal_letters_for_contract(owner_chat_id, contract.id) if can_view_legal_correspondence(current_user) else []
     legal_attachments = storage.list_legal_letter_attachments_for_contract(owner_chat_id, contract.id) if can_view_legal_correspondence(current_user) else []
     contract_meetings = storage.list_contract_meetings_for_contract(owner_chat_id, contract.id) if can_view_contract_meetings(current_user) else []
@@ -13028,45 +13067,29 @@ def render_contract_detail(storage: Storage, owner_chat_id: int, contract_id: in
     </section>
         {legal_section_html}
         {meetings_section_html}
-    <section class="grid" style="margin-top:22px;">
-      <section class="card panel">
-        <div class="panel-head">
-          <div>
-            <h2 class="panel-title">Оплаты</h2>
-            <div class="panel-sub">Все платежи по контракту в одном месте</div>
-          </div>
+    <section class="card panel" style="margin-top:22px;">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">Оплаты</h2>
+          <div class="panel-sub">Поступления подтягиваются из ДДС по объекту контракта. Ручной ввод оплат отключен.</div>
         </div>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Дата</th>
-              <th>Сумма</th>
-            </tr>
-          </thead>
-          <tbody>{payments_html}</tbody>
-        </table>
-      </section>
-      <aside class="section-stack">
-        <section class="card panel">
-          <div class="panel-head">
-            <div>
-              <h2 class="panel-title">Добавить оплату</h2>
-              <div class="panel-sub">Ввод платежа прямо из карточки</div>
-            </div>
-          </div>
-          <form class="form-grid" method="post" action="/contracts/{contract.id}/payments/new?owner={owner_chat_id}">
-            <div class="field">
-              <label>Дата оплаты</label>
-              <input type="text" name="payment_date" placeholder="31-07-2026" required>
-            </div>
-            <div class="field">
-              <label>Сумма оплаты</label>
-              <input type="text" name="amount" placeholder="500000" required>
-            </div>
-            <button class="submit-btn" type="submit">Добавить оплату</button>
-          </form>
-        </section>
-      </aside>
+        <div class="stat-card" style="min-width:220px; padding:14px 16px;">
+          <div class="stat-label">Всего по ДДС</div>
+          <div class="stat-value" style="font-size:26px;">{format_amount(payments_total)}</div>
+        </div>
+      </div>
+      <table class="table contract-table">
+        <thead>
+          <tr>
+            <th class="nowrap">Дата</th>
+            <th>Операция ДДС</th>
+            <th class="nowrap">Источник</th>
+            <th class="nowrap">Сумма</th>
+            <th class="nowrap">Статус</th>
+          </tr>
+        </thead>
+        <tbody>{payments_html}</tbody>
+      </table>
     </section>
     """
 
@@ -28960,25 +28983,14 @@ self.addEventListener("notificationclick", (event) => {
             return denied
         try:
             contract_id = int(path.split("/")[2])
-            form = read_post_data(environ)
-            payment_date = parse_date(form["payment_date"])
-            amount = parse_amount(form["amount"])
-            created = storage.add_payment(current_owner, contract_id, payment_date, amount)
-            if created is None:
+            if storage.get_contract(current_owner, contract_id) is None:
                 raise ValueError("Контракт не найден")
-            storage.add_contract_event(
-                current_owner,
-                contract_id,
-                payment_date,
-                "payment",
-                f"Добавлена оплата по контракту на {format_amount(amount)}",
-                actor_name=current_user.get("full_name", "").strip() if current_user else "",
-                source_kind="payment_create",
-                source_ref=str(created),
-            )
-            return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, "Оплаты теперь берутся из ДДС. Ручной ввод отключен.")
+            html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
+            start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
+            return [html.encode("utf-8")]
         except Exception as exc:
-            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить оплату: {exc}")
+            body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось открыть оплаты: {exc}")
             html = layout("Карточка контракта", body, owners, current_owner, "contracts", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
