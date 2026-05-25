@@ -35,7 +35,7 @@ DEFAULT_EXPENSE_CATEGORY_GROUPS = {
     "materials": "object",
     "equipment": "object",
     "labor": "object",
-    "salary": "object",
+    "salary": "admin",
     "transport": "object",
     "fuel": "object",
     "rent": "admin",
