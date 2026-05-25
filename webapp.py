@@ -29994,6 +29994,7 @@ self.addEventListener("notificationclick", (event) => {
                     (current_user or {}).get("id"),
                     actor_name,
                 )
+                notify_cash_income_created(storage, current_owner, amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_period=payroll_period)
         except ValueError as exc:
@@ -30062,6 +30063,10 @@ self.addEventListener("notificationclick", (event) => {
                 or (existing_entry.title or "").startswith("Перевод между кассами")
                 or is_cash_transfer_category(existing_entry.category_code, category_labels)
                 or is_cashbox_linked_income_entry(existing_entry)
+            )
+            existing_was_bank_cash_withdrawal = (
+                existing_entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+                and (existing_entry.payment_source or "bank") == "bank"
             )
             if is_transfer_operation:
                 if payment_source != "cash" or not selected_cashbox_code:
@@ -30208,6 +30213,8 @@ self.addEventListener("notificationclick", (event) => {
                     (current_user or {}).get("id"),
                     actor_name,
                 )
+                if not existing_was_bank_cash_withdrawal:
+                    notify_cash_income_created(storage, current_owner, amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             if existing_was_transfer_pair:
                 pair_marker = f"[Связанный расход: {existing_entry.id}]"
