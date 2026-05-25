@@ -10713,8 +10713,18 @@ function syncDdsExpenseForm(form) {{
   const sourceSelect = form.querySelector('select[name="payment_source"]');
   const targetField = form.querySelector("[data-dds-transfer-target-field]");
   const targetSelect = targetField ? targetField.querySelector('select[name="target_cashbox"]') : null;
+  const withdrawalCategoryCode = form.dataset.cashWithdrawalCategoryCode || "cash_withdrawal";
+  const withdrawalFields = form.querySelectorAll("[data-dds-cash-withdrawal-field]");
+  const withdrawalCashboxSelect = form.querySelector('select[name="cash_withdrawal_cashbox"]');
+  const withdrawalPercentInput = form.querySelector('input[name="cash_withdrawal_commission_percent"]');
   const needsPeriod = Boolean(categorySelect && payrollSet.has(categorySelect.value));
   const isTransfer = Boolean(categorySelect && transferSet.has(categorySelect.value));
+  const isCashWithdrawal = Boolean(
+    categorySelect &&
+    sourceSelect &&
+    categorySelect.value === withdrawalCategoryCode &&
+    sourceSelect.value === "bank"
+  );
   if (periodField) {{
     periodField.classList.toggle("is-hidden", !needsPeriod);
   }}
@@ -10742,6 +10752,46 @@ function syncDdsExpenseForm(form) {{
       }}
     }}
   }}
+  withdrawalFields.forEach((field) => {{
+    field.classList.toggle("is-hidden", !isCashWithdrawal);
+  }});
+  if (withdrawalCashboxSelect) {{
+    withdrawalCashboxSelect.disabled = !isCashWithdrawal;
+  }}
+  if (withdrawalPercentInput) {{
+    withdrawalPercentInput.disabled = !isCashWithdrawal;
+    if (!isCashWithdrawal) {{
+      withdrawalPercentInput.value = "";
+    }} else if (!withdrawalPercentInput.value.trim()) {{
+      withdrawalPercentInput.value = "0";
+    }}
+  }}
+  updateDdsCashWithdrawalCommission(form);
+}}
+
+function parseDdsNumericInput(value) {{
+  const cleaned = String(value || "").replace(/[^\\d,\\.\\s-]/g, "").replace(/\\s+/g, "").replace(",", ".").trim();
+  if (!cleaned) {{
+    return 0;
+  }}
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}}
+
+function updateDdsCashWithdrawalCommission(form) {{
+  if (!form) {{
+    return;
+  }}
+  const amountInput = form.querySelector('input[name="amount"]');
+  const percentInput = form.querySelector('input[name="cash_withdrawal_commission_percent"]');
+  const amountLabel = form.querySelector("[data-dds-commission-amount]");
+  if (!amountLabel) {{
+    return;
+  }}
+  const amount = parseDdsNumericInput(amountInput ? amountInput.value : "");
+  const percent = parseDdsNumericInput(percentInput ? percentInput.value : "");
+  const commission = Math.max(0, amount * percent / 100);
+  amountLabel.textContent = formatMoneyValue(commission);
 }}
 
 function initDdsExpenseForms() {{
@@ -10763,6 +10813,14 @@ document.addEventListener("change", (event) => {{
     return;
   }}
   syncDdsExpenseForm(ddsControl.closest('[data-dds-expense-form="1"]'));
+}});
+
+document.addEventListener("input", (event) => {{
+  const ddsCommissionControl = event.target.closest("[data-dds-commission-input], [data-dds-expense-form='1'] input[name='amount']");
+  if (!ddsCommissionControl) {{
+    return;
+  }}
+  updateDdsCashWithdrawalCommission(ddsCommissionControl.closest('[data-dds-expense-form="1"]'));
 }});
 
 document.addEventListener("change", (event) => {{
@@ -17025,6 +17083,8 @@ CASH_TRANSFER_CATEGORY_LABELS = {
     "перемещение между кассами",
     "перевод касса касса",
 }
+CASH_WITHDRAWAL_COMMISSION_MARKER = "Комиссия по выводу"
+CASH_WITHDRAWAL_COMMISSION_PERCENT_MARKER = "Процент комиссии"
 LABOR_FORCE_CATEGORY_CODES = {
     "labor_force",
     "workforce",
@@ -17417,7 +17477,8 @@ def expense_entry_payment_source_label(entry, cashboxes: list[dict]) -> str:
 
 EXPENSE_COMMENT_SERVICE_MARKER_RE = re.compile(
     r"\[(?:Касса [^\]]+|Источник:\s*[^\]]+|Касса получателя:\s*[^\]]+|"
-    r"Связанный расход:\s*\d+|Сотрудник:\s*[^\]]+)\]"
+    r"Связанный расход:\s*\d+|Комиссия по выводу:\s*\d+|"
+    r"Процент комиссии:\s*[^\]]+|Сотрудник:\s*[^\]]+)\]"
 )
 
 
@@ -17430,6 +17491,9 @@ def expense_comment_service_markers(comment: str, keep_cashbox: bool = False, ke
     markers = []
     for match in EXPENSE_COMMENT_SERVICE_MARKER_RE.finditer(comment or ""):
         marker = match.group(0)
+        marker_lower = marker.casefold()
+        if marker_lower.startswith("[комиссия по выводу:") or marker_lower.startswith("[процент комиссии:"):
+            continue
         if not keep_cashbox and marker.casefold().startswith("[касса "):
             continue
         if not keep_transfer_markers and (
@@ -17446,6 +17510,129 @@ def expense_comment_with_cashbox_marker(comment: str, cashbox_label_value: str, 
     markers = [f"[{cashbox_label_value}]"] if cashbox_label_value else []
     markers.extend(preserved_markers or [])
     return " ".join(part for part in [*markers, expense_comment_without_service_markers(comment)] if part)
+
+
+def parse_commission_percent(raw_value: str) -> float:
+    cleaned = (raw_value or "").strip().replace(" ", "").replace(",", ".")
+    if not cleaned:
+        return 0.0
+    try:
+        value = float(cleaned)
+    except ValueError as exc:
+        raise ValueError("Укажите корректный процент комиссии") from exc
+    if value < 0 or value > 100:
+        raise ValueError("Процент комиссии должен быть от 0 до 100")
+    return round(value, 4)
+
+
+def format_commission_percent(value: float) -> str:
+    if abs(value) < 0.0001:
+        return "0"
+    text = f"{value:.4f}".rstrip("0").rstrip(".")
+    return text.replace(".", ",")
+
+
+def cash_withdrawal_commission_percent_from_entry(entry) -> float:
+    match = re.search(r"\[Процент комиссии:\s*([^\]]+)\]", entry.comment or "", flags=re.IGNORECASE)
+    if not match:
+        return 0.0
+    try:
+        return parse_commission_percent(match.group(1).replace("%", ""))
+    except ValueError:
+        return 0.0
+
+
+def cash_withdrawal_commission_source_id(entry) -> int:
+    match = re.search(r"\[Комиссия по выводу:\s*(\d+)\]", entry.comment or "", flags=re.IGNORECASE)
+    return int(match.group(1)) if match else 0
+
+
+def linked_cash_withdrawal_commission_entry(entries, source_entry_id: int):
+    marker = f"[{CASH_WITHDRAWAL_COMMISSION_MARKER}: {source_entry_id}]"
+    return next((entry for entry in entries if marker in (entry.comment or "") and entry.deleted_at is None), None)
+
+
+def cash_withdrawal_commission_category_code(category_options_list: list[tuple[str, str]]) -> str:
+    codes = {code for code, _label in category_options_list}
+    if "bank_commission" in codes:
+        return "bank_commission"
+    if "other" in codes:
+        return "other"
+    return category_options_list[0][0] if category_options_list else "other"
+
+
+def cash_withdrawal_comment(raw_comment: str, cashbox_label_value: str, commission_percent: float) -> str:
+    markers = []
+    if commission_percent > 0:
+        markers.append(f"[{CASH_WITHDRAWAL_COMMISSION_PERCENT_MARKER}: {format_commission_percent(commission_percent)}%]")
+    return expense_comment_with_cashbox_marker(raw_comment, cashbox_label_value, markers)
+
+
+def sync_cash_withdrawal_commission_entry(
+    storage: Storage,
+    owner_chat_id: int,
+    source_entry_id: int,
+    entries,
+    expense_date: date,
+    cashbox_label_value: str,
+    source_title: str,
+    source_amount: float,
+    raw_comment: str,
+    commission_percent: float,
+    category_options_list: list[tuple[str, str]],
+    created_by_user_id: int | None,
+    created_by_name: str,
+) -> None:
+    linked_commission = linked_cash_withdrawal_commission_entry(entries, source_entry_id)
+    commission_amount = round(source_amount * commission_percent / 100, 2)
+    if commission_percent <= 0 or commission_amount <= 0:
+        if linked_commission is not None:
+            storage.delete_expense_entry(owner_chat_id, linked_commission.id)
+        return
+    clean_comment = expense_comment_without_service_markers(raw_comment)
+    commission_comment = " ".join(
+        part for part in (
+            f"[{cashbox_label_value}]",
+            f"[{CASH_WITHDRAWAL_COMMISSION_MARKER}: {source_entry_id}]",
+            f"[{CASH_WITHDRAWAL_COMMISSION_PERCENT_MARKER}: {format_commission_percent(commission_percent)}%]",
+            f"Комиссия за транш: {source_title}".strip(),
+            clean_comment,
+        )
+        if part
+    )
+    category_code = cash_withdrawal_commission_category_code(category_options_list)
+    title = f"Комиссия за вывод в кассу: {cashbox_label_value}"
+    if linked_commission is not None:
+        storage.update_expense_entry(
+            owner_chat_id,
+            linked_commission.id,
+            expense_date,
+            "admin",
+            category_code,
+            title,
+            commission_amount,
+            commission_comment,
+            "cash",
+            False,
+            payroll_period="",
+            operation_type="expense",
+        )
+        return
+    storage.add_expense_entry(
+        owner_chat_id,
+        expense_date,
+        "admin",
+        category_code,
+        title,
+        commission_amount,
+        commission_comment,
+        "cash",
+        False,
+        created_by_user_id,
+        created_by_name,
+        client_request_key=f"cash-withdrawal:{source_entry_id}:commission",
+        operation_type="expense",
+    )
 
 
 def parse_expense_payment_source_form_value(raw_source: str, cashboxes: list[dict], default_cashbox_code: str = "") -> tuple[str, str]:
@@ -17610,6 +17797,8 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     show_payroll_period = display_category_code in payroll_category_codes
     transfer_source_code = cashbox_transfer_source_code_from_entry(entry, cashboxes)
     transfer_target_code = cashbox_transfer_target_code_from_entry(entry, cashboxes)
+    withdrawal_cashbox_code = cashbox_code_from_entry(entry, cashboxes) or "denis"
+    withdrawal_commission_percent = cash_withdrawal_commission_percent_from_entry(entry)
     transfer_title = ""
     if is_transfer_pair_entry and transfer_source_code and transfer_target_code:
         transfer_title = (
@@ -17630,11 +17819,17 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         for cashbox in cashboxes
         if str(cashbox.get("code", "")).strip()
     )
+    withdrawal_cashbox_options = "".join(
+        f'<option value="{escape(str(cashbox.get("code", "")))}"{" selected" if str(cashbox.get("code", "")) == withdrawal_cashbox_code else ""}>{escape(str(cashbox.get("label", "")))}</option>'
+        for cashbox in cashboxes
+        if str(cashbox.get("code", "")).strip()
+    )
+    show_cash_withdrawal_fields = display_category_code == CASH_WITHDRAWAL_CATEGORY_CODE and (entry.payment_source or "bank") == "bank"
     return f"""
     <details id="expense-entry-{entry.id}" class="status-menu expense-editor-menu" data-expense-editor-id="{entry.id}">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
       <div class="status-popover expense-editor-popover" data-modal-title="Редактирование операции ДДС">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}">
           <input type="hidden" name="operation_type" value="{escape(entry.operation_type or 'expense')}">
           <div class="field">
             <label>Дата операции</label>
@@ -17655,6 +17850,15 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
           <div class="field transfer-target-field{' is-hidden' if not is_transfer_pair_entry else ''}" data-dds-transfer-target-field>
             <label>Касса получателя</label>
             <select name="target_cashbox" {'disabled' if not is_transfer_pair_entry else ''}>{target_cashbox_options}</select>
+          </div>
+          <div class="field cash-withdrawal-field{' is-hidden' if not show_cash_withdrawal_fields else ''}" data-dds-cash-withdrawal-field>
+            <label>Касса зачисления</label>
+            <select name="cash_withdrawal_cashbox" {'disabled' if not show_cash_withdrawal_fields else ''}>{withdrawal_cashbox_options}</select>
+          </div>
+          <div class="field cash-withdrawal-field{' is-hidden' if not show_cash_withdrawal_fields else ''}" data-dds-cash-withdrawal-field>
+            <label>Процент комиссии</label>
+            <input type="text" name="cash_withdrawal_commission_percent" data-dds-commission-input="1" value="{escape(format_commission_percent(withdrawal_commission_percent))}" {'disabled' if not show_cash_withdrawal_fields else ''}>
+            <div class="contract-table-subtle">Комиссия: <span data-dds-commission-amount>{escape(format_amount((entry.amount or 0) * withdrawal_commission_percent / 100))}</span></div>
           </div>
           <div class="field payroll-period-field{' is-hidden' if not show_payroll_period else ''}" data-dds-payroll-period-field>
             <label>Период ФОТ</label>
@@ -22171,6 +22375,11 @@ def render_expenses_section(
         for item in cashboxes
         if str(item.get("code", "")).strip()
     )
+    withdrawal_cashbox_options = "".join(
+        f'<option value="{escape(str(item.get("code", "")))}"{" selected" if str(item.get("code", "")) == "denis" else ""}>{escape(str(item.get("label", "")))}</option>'
+        for item in cashboxes
+        if str(item.get("code", "")).strip()
+    )
     source_options = "".join(
         f'<option value="{code}"{" selected" if code == source_filter else ""}>{escape(label)}</option>'
         for code, label in [("", "Все источники"), ("bank", "Расчетный счет"), ("cash", "Касса")]
@@ -22368,7 +22577,7 @@ def render_expenses_section(
                   <div class="panel-sub">Ручное добавление списания в ДДС: объект, группа, сумма, источник и комментарий.</div>
                 </div>
               </div>
-              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}">
+              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}">
                 <div class="field">
                   <label>Дата операции</label>
                   <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
@@ -22402,6 +22611,15 @@ def render_expenses_section(
                 <div class="field transfer-target-field is-hidden" data-dds-transfer-target-field>
                   <label>Касса получателя</label>
                   <select name="target_cashbox" disabled>{transfer_target_options}</select>
+                </div>
+                <div class="field cash-withdrawal-field is-hidden" data-dds-cash-withdrawal-field>
+                  <label>Касса зачисления</label>
+                  <select name="cash_withdrawal_cashbox" disabled>{withdrawal_cashbox_options}</select>
+                </div>
+                <div class="field cash-withdrawal-field is-hidden" data-dds-cash-withdrawal-field>
+                  <label>Процент комиссии</label>
+                  <input type="text" name="cash_withdrawal_commission_percent" data-dds-commission-input="1" value="0" disabled>
+                  <div class="contract-table-subtle">Комиссия: <span data-dds-commission-amount>0,00 ₽</span></div>
                 </div>
                 <div class="field payroll-period-field is-hidden" data-dds-payroll-period-field>
                   <label>Период ФОТ</label>
@@ -29432,6 +29650,45 @@ self.addEventListener("notificationclick", (event) => {
                     operation_type="income",
                 )
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
+            if category_code == CASH_WITHDRAWAL_CATEGORY_CODE and payment_source == "bank":
+                withdrawal_cashbox_code = form.get("cash_withdrawal_cashbox", "").strip()
+                cashbox_codes = {str(item.get("code", "")) for item in cashboxes}
+                if withdrawal_cashbox_code not in cashbox_codes:
+                    raise ValueError("Выберите кассу зачисления")
+                withdrawal_cashbox_label = cashbox_label_from_directory(cashboxes, withdrawal_cashbox_code)
+                commission_percent = parse_commission_percent(form.get("cash_withdrawal_commission_percent", "0"))
+                withdrawal_comment = cash_withdrawal_comment(raw_comment, withdrawal_cashbox_label, commission_percent)
+                source_entry_id = storage.add_expense_entry(
+                    current_owner,
+                    expense_date,
+                    project_code,
+                    category_code,
+                    title,
+                    amount,
+                    withdrawal_comment,
+                    payment_source,
+                    needs_adjustment,
+                    (current_user or {}).get("id"),
+                    actor_name,
+                    payroll_period="",
+                    operation_type="expense",
+                )
+                sync_cash_withdrawal_commission_entry(
+                    storage,
+                    current_owner,
+                    source_entry_id,
+                    storage.list_expense_entries(current_owner),
+                    expense_date,
+                    withdrawal_cashbox_label,
+                    title,
+                    amount,
+                    raw_comment,
+                    commission_percent,
+                    category_options_list,
+                    (current_user or {}).get("id"),
+                    actor_name,
+                )
+                return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_period=payroll_period)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
@@ -29491,6 +29748,7 @@ self.addEventListener("notificationclick", (event) => {
             if operation_type not in MONEY_OPERATION_TYPE_META:
                 raise ValueError("Выберите тип операции")
             is_transfer_operation = is_cash_transfer_category(category_code, category_labels)
+            actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             existing_was_transfer_pair = (
                 (existing_entry.operation_type or "") == "transfer"
                 or (existing_entry.title or "").startswith("Перевод между кассами")
@@ -29573,7 +29831,6 @@ self.addEventListener("notificationclick", (event) => {
                         operation_type="income",
                     )
                 else:
-                    actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
                     storage.add_expense_entry(
                         current_owner,
                         expense_date,
@@ -29590,8 +29847,60 @@ self.addEventListener("notificationclick", (event) => {
                         operation_type="income",
                     )
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
+            if not title:
+                raise ValueError("Укажите наименование операции")
             if is_cashbox_linked_income_entry(existing_entry):
                 raise ValueError("Пополнение пары перевода редактируется через группу «Перевод между кассами»")
+            if category_code == CASH_WITHDRAWAL_CATEGORY_CODE and payment_source == "bank":
+                withdrawal_cashbox_code = form.get("cash_withdrawal_cashbox", "").strip()
+                cashbox_codes = {str(item.get("code", "")) for item in cashboxes}
+                if withdrawal_cashbox_code not in cashbox_codes:
+                    raise ValueError("Выберите кассу зачисления")
+                if existing_was_transfer_pair:
+                    pair_marker = f"[Связанный расход: {existing_entry.id}]"
+                    linked_income = next(
+                        (
+                            entry for entry in entries
+                            if entry.category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+                            and pair_marker in (entry.comment or "")
+                        ),
+                        None,
+                    )
+                    if linked_income is not None:
+                        storage.delete_expense_entry(current_owner, linked_income.id)
+                withdrawal_cashbox_label = cashbox_label_from_directory(cashboxes, withdrawal_cashbox_code)
+                commission_percent = parse_commission_percent(form.get("cash_withdrawal_commission_percent", "0"))
+                withdrawal_comment = cash_withdrawal_comment(raw_comment, withdrawal_cashbox_label, commission_percent)
+                storage.update_expense_entry(
+                    current_owner,
+                    entry_id,
+                    expense_date,
+                    project_code,
+                    category_code,
+                    title,
+                    amount,
+                    withdrawal_comment,
+                    "bank",
+                    needs_adjustment,
+                    payroll_period="",
+                    operation_type="expense",
+                )
+                sync_cash_withdrawal_commission_entry(
+                    storage,
+                    current_owner,
+                    entry_id,
+                    entries,
+                    expense_date,
+                    withdrawal_cashbox_label,
+                    title,
+                    amount,
+                    raw_comment,
+                    commission_percent,
+                    category_options_list,
+                    (current_user or {}).get("id"),
+                    actor_name,
+                )
+                return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             if existing_was_transfer_pair:
                 pair_marker = f"[Связанный расход: {existing_entry.id}]"
                 linked_income = next(
@@ -29604,10 +29913,11 @@ self.addEventListener("notificationclick", (event) => {
                 )
                 if linked_income is not None:
                     storage.delete_expense_entry(current_owner, linked_income.id)
+            linked_commission = linked_cash_withdrawal_commission_entry(entries, existing_entry.id)
+            if linked_commission is not None:
+                storage.delete_expense_entry(current_owner, linked_commission.id)
             needs_payroll_period = category_code == "salary" or is_labor_force_category(category_code, category_labels)
             payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if needs_payroll_period and payroll_period_raw else ""
-            if not title:
-                raise ValueError("Укажите наименование операции")
             preserved_markers = expense_comment_service_markers(existing_entry.comment, keep_transfer_markers=not existing_was_transfer_pair)
             selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
             comment = (
@@ -29668,6 +29978,10 @@ self.addEventListener("notificationclick", (event) => {
         selected_day = parse_date(selected_day_raw) if selected_day_raw else None
         extra_filters = expenses_filter_args_from_query(query)
         extra_query = expenses_extra_query_from_filters(extra_filters)
+        entries = storage.list_expense_entries(current_owner)
+        linked_commission = linked_cash_withdrawal_commission_entry(entries, entry_id)
+        if linked_commission is not None:
+            storage.delete_expense_entry(current_owner, linked_commission.id)
         flash = "Операция удалена." if storage.delete_expense_entry(current_owner, entry_id) else "Операция не найдена."
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}&flash={quote_plus(flash)}")
 
