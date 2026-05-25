@@ -1,6 +1,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -29,6 +30,37 @@ DEFAULT_EXPENSE_CATEGORIES = (
     ("income_unallocated", "Поступление"),
     ("other", "Прочее"),
 )
+EXPENSE_CATEGORY_GROUP_CODES = ("object", "admin", "transfer", "income")
+DEFAULT_EXPENSE_CATEGORY_GROUPS = {
+    "materials": "object",
+    "equipment": "object",
+    "labor": "object",
+    "salary": "object",
+    "transport": "object",
+    "fuel": "object",
+    "rent": "admin",
+    "admin": "admin",
+    "taxes": "admin",
+    "utilities": "admin",
+    "bank_commission": "admin",
+    "cash_withdrawal_commission": "admin",
+    "cash_withdrawal": "transfer",
+    "income_unallocated": "income",
+    "other": "object,admin",
+}
+
+
+def normalize_expense_category_group_codes(group_codes: str | list[str] | tuple[str, ...] | set[str] | None) -> str:
+    if isinstance(group_codes, str):
+        raw_codes = re.split(r"[\s,;]+", group_codes)
+    else:
+        raw_codes = list(group_codes or [])
+    cleaned: list[str] = []
+    for code in raw_codes:
+        normalized = str(code or "").strip()
+        if normalized in EXPENSE_CATEGORY_GROUP_CODES and normalized not in cleaned:
+            cleaned.append(normalized)
+    return ",".join(cleaned or ["object"])
 
 
 @dataclass
@@ -463,6 +495,7 @@ class ExpenseCategory:
     owner_chat_id: int
     code: str
     label: str
+    group_codes: str
     sort_order: int
     deleted_at: Optional[datetime]
     created_at: datetime
@@ -1157,6 +1190,7 @@ class Storage:
                     owner_chat_id INTEGER NOT NULL,
                     code TEXT NOT NULL DEFAULT '',
                     label TEXT NOT NULL DEFAULT '',
+                    group_codes TEXT NOT NULL DEFAULT '',
                     sort_order INTEGER NOT NULL DEFAULT 0,
                     deleted_at TEXT,
                     created_at TEXT NOT NULL,
@@ -1615,6 +1649,7 @@ class Storage:
                 ("owner_chat_id", "INTEGER NOT NULL DEFAULT 0"),
                 ("code", "TEXT NOT NULL DEFAULT ''"),
                 ("label", "TEXT NOT NULL DEFAULT ''"),
+                ("group_codes", "TEXT NOT NULL DEFAULT ''"),
                 ("sort_order", "INTEGER NOT NULL DEFAULT 0"),
                 ("deleted_at", "TEXT"),
                 ("created_at", "TEXT NOT NULL DEFAULT ''"),
@@ -1623,6 +1658,54 @@ class Storage:
             for column_name, column_def in expense_category_alters:
                 if column_name not in expense_category_columns:
                     conn.execute(f"ALTER TABLE expense_categories ADD COLUMN {column_name} {column_def}")
+            for code, group_codes in DEFAULT_EXPENSE_CATEGORY_GROUPS.items():
+                conn.execute(
+                    """
+                    UPDATE expense_categories
+                    SET group_codes = ?
+                    WHERE code = ?
+                      AND COALESCE(group_codes, '') = ''
+                    """,
+                    (group_codes, code),
+                )
+            for keyword in ("аренд", "связ", "коммун", "комисс", "налог", "пошлин", "штраф", "офис", "бухгалтер", "юрист", "подпис", "софт", "интернет"):
+                conn.execute(
+                    """
+                    UPDATE expense_categories
+                    SET group_codes = 'admin'
+                    WHERE COALESCE(group_codes, '') = ''
+                      AND LOWER(COALESCE(label, '')) LIKE ?
+                    """,
+                    (f"%{keyword}%",),
+                )
+            conn.execute(
+                """
+                UPDATE expense_categories
+                SET group_codes = 'transfer'
+                WHERE COALESCE(group_codes, '') = ''
+                  AND LOWER(COALESCE(label, '')) LIKE '%касс%'
+                  AND (
+                    LOWER(COALESCE(label, '')) LIKE '%перев%'
+                    OR LOWER(COALESCE(label, '')) LIKE '%вывод%'
+                    OR LOWER(COALESCE(label, '')) LIKE '%перемещ%'
+                  )
+                """
+            )
+            conn.execute(
+                """
+                UPDATE expense_categories
+                SET group_codes = 'income'
+                WHERE COALESCE(group_codes, '') = ''
+                  AND LOWER(COALESCE(label, '')) LIKE '%поступ%'
+                """
+            )
+            conn.execute(
+                """
+                UPDATE expense_categories
+                SET group_codes = 'object'
+                WHERE COALESCE(group_codes, '') = ''
+                """
+            )
             expense_category_event_alters = [
                 ("owner_chat_id", "INTEGER NOT NULL DEFAULT 0"),
                 ("action_type", "TEXT NOT NULL DEFAULT ''"),
@@ -7496,11 +7579,19 @@ class Storage:
                     conn.execute(
                         """
                         INSERT INTO expense_categories (
-                            owner_chat_id, code, label, sort_order, deleted_at, created_at, updated_at
+                            owner_chat_id, code, label, group_codes, sort_order, deleted_at, created_at, updated_at
                         )
-                        VALUES (?, ?, ?, ?, NULL, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
                         """,
-                        (owner_chat_id, code, label, index * 10, now, now),
+                        (
+                            owner_chat_id,
+                            code,
+                            label,
+                            normalize_expense_category_group_codes(DEFAULT_EXPENSE_CATEGORY_GROUPS.get(code, "object")),
+                            index * 10,
+                            now,
+                            now,
+                        ),
                     )
                 else:
                     conn.execute(
@@ -7511,13 +7602,26 @@ class Storage:
                         """,
                         (label, index * 10, now, int(existing["id"]), owner_chat_id),
                     )
+                    conn.execute(
+                        """
+                        UPDATE expense_categories
+                        SET group_codes = ?, updated_at = ?
+                        WHERE id = ? AND owner_chat_id = ? AND COALESCE(group_codes, '') = ''
+                        """,
+                        (
+                            normalize_expense_category_group_codes(DEFAULT_EXPENSE_CATEGORY_GROUPS.get(code, "object")),
+                            now,
+                            int(existing["id"]),
+                            owner_chat_id,
+                        ),
+                    )
 
     def list_expense_categories(self, owner_chat_id: int) -> list[ExpenseCategory]:
         self.ensure_default_expense_categories(owner_chat_id)
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT id, owner_chat_id, code, label, sort_order, deleted_at, created_at, updated_at
+                SELECT id, owner_chat_id, code, label, group_codes, sort_order, deleted_at, created_at, updated_at
                 FROM expense_categories
                 WHERE owner_chat_id = ? AND deleted_at IS NULL
                 ORDER BY sort_order ASC, LOWER(label) ASC, id ASC
@@ -7530,10 +7634,12 @@ class Storage:
         self,
         owner_chat_id: int,
         label: str,
+        group_codes: str = "object",
     ) -> int | None:
         cleaned_label = label.strip()
         if not cleaned_label:
             return None
+        cleaned_groups = normalize_expense_category_group_codes(group_codes)
         now = datetime.utcnow().isoformat()
         with self.connection() as conn:
             existing = conn.execute(
@@ -7549,10 +7655,10 @@ class Storage:
                     conn.execute(
                         """
                         UPDATE expense_categories
-                        SET deleted_at = NULL, updated_at = ?
+                        SET group_codes = ?, deleted_at = NULL, updated_at = ?
                         WHERE id = ? AND owner_chat_id = ?
                         """,
-                        (now, int(existing["id"]), owner_chat_id),
+                        (cleaned_groups, now, int(existing["id"]), owner_chat_id),
                     )
                 return int(existing["id"])
             code_base = self.expense_category_code(cleaned_label)
@@ -7571,18 +7677,19 @@ class Storage:
             cursor = conn.execute(
                 """
                 INSERT INTO expense_categories (
-                    owner_chat_id, code, label, sort_order, deleted_at, created_at, updated_at
+                    owner_chat_id, code, label, group_codes, sort_order, deleted_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
-                (owner_chat_id, code, cleaned_label, int(max_sort["max_sort"] or 0) + 10, now, now),
+                (owner_chat_id, code, cleaned_label, cleaned_groups, int(max_sort["max_sort"] or 0) + 10, now, now),
             )
             return int(cursor.lastrowid)
 
-    def update_expense_category(self, owner_chat_id: int, category_id: int, label: str) -> bool:
+    def update_expense_category(self, owner_chat_id: int, category_id: int, label: str, group_codes: str = "object") -> bool:
         cleaned_label = label.strip()
         if not cleaned_label:
             return False
+        cleaned_groups = normalize_expense_category_group_codes(group_codes)
         with self.connection() as conn:
             existing = conn.execute(
                 """
@@ -7597,10 +7704,10 @@ class Storage:
             cursor = conn.execute(
                 """
                 UPDATE expense_categories
-                SET label = ?, updated_at = ?
+                SET label = ?, group_codes = ?, updated_at = ?
                 WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
                 """,
-                (cleaned_label, datetime.utcnow().isoformat(), category_id, owner_chat_id),
+                (cleaned_label, cleaned_groups, datetime.utcnow().isoformat(), category_id, owner_chat_id),
             )
             return cursor.rowcount > 0
 
@@ -7609,7 +7716,7 @@ class Storage:
         with self.connection() as conn:
             row = conn.execute(
                 """
-                SELECT id, owner_chat_id, code, label, sort_order, deleted_at, created_at, updated_at
+                SELECT id, owner_chat_id, code, label, group_codes, sort_order, deleted_at, created_at, updated_at
                 FROM expense_categories
                 WHERE owner_chat_id = ? AND id = ? AND deleted_at IS NULL
                 """,
@@ -9104,6 +9211,7 @@ class Storage:
             owner_chat_id=int(row["owner_chat_id"]),
             code=row["code"] or "",
             label=row["label"] or "",
+            group_codes=normalize_expense_category_group_codes(row["group_codes"] if "group_codes" in row.keys() else ""),
             sort_order=int(row["sort_order"] or 0),
             deleted_at=datetime.fromisoformat(row["deleted_at"]) if row["deleted_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),

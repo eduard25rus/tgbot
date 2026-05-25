@@ -28,7 +28,7 @@ from urllib.parse import quote_plus
 from wsgiref.simple_server import make_server
 
 from file_storage import FileStorage, create_file_storage
-from storage import DEFAULT_EXPENSE_CATEGORIES, Storage, WEB_SECTION_IDS
+from storage import DEFAULT_EXPENSE_CATEGORIES, Storage, WEB_SECTION_IDS, normalize_expense_category_group_codes
 
 
 STATUS_META = {
@@ -8324,6 +8324,29 @@ def layout(
     .directory-edit-form .submit-btn {{
       font-weight: 500;
     }}
+    .directory-group-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .directory-group-toggle {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 9px 11px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: var(--ink);
+      background: rgba(248, 250, 252, 0.86);
+      font-size: 14px;
+      line-height: 1.25;
+    }}
+    .directory-group-toggle input {{
+      width: 18px;
+      height: 18px;
+      accent-color: var(--brand);
+    }}
     html.has-fixed-popover,
     body.has-fixed-popover {{
       overscroll-behavior: none;
@@ -11017,7 +11040,7 @@ document.addEventListener("change", (event) => {{
     syncDdsSourceDetail(sourceFilter.closest('[data-dds-filter-form="1"]'));
     return;
   }}
-  const ddsControl = event.target.closest("[data-dds-group-select], [data-dds-category-select], [data-dds-expense-form='1'] select[name='payment_source']");
+  const ddsControl = event.target.closest("[data-dds-group-select], [data-dds-category-select], [data-dds-expense-form='1'] select[name='project_code'], [data-dds-expense-form='1'] select[name='payment_source']");
   if (!ddsControl) {{
     return;
   }}
@@ -11925,6 +11948,7 @@ def render_directories_section(
             "taxes": "Налоги, госпошлины, страховые взносы, обязательные платежи и сборы.",
             "utilities": "Связь, интернет, телефония, коммунальные платежи и регулярные сервисы.",
             "bank_commission": "Комиссии банка, эквайринг, обслуживание счетов, платежные и переводные комиссии.",
+            "cash_withdrawal_commission": "Комиссия за снятие или вывод денег в кассу, учитывается как административный расход.",
             "cash_withdrawal": "Вывод денег в кассу или подотчет, когда списание с банка становится наличными.",
             "income_unallocated": "Поступления, которые еще нужно разобрать и привязать к объекту или основанию.",
             "other": "Редкие расходы, которые пока не подходят ни под одну отдельную категорию.",
@@ -11939,6 +11963,26 @@ def render_directories_section(
             or descriptions_by_label.get(normalized_label)
             or "Используйте для платежей, которые команда договорилась относить именно к этой группе."
         )
+
+    def expense_category_group_labels(category) -> list[str]:
+        groups = expense_category_group_set(category.group_codes)
+        return [label for code, label in sorted_expense_groups() if code in groups]
+
+    def expense_category_group_controls(group_codes: str) -> str:
+        selected_groups = expense_category_group_set(group_codes)
+        return f"""
+          <div class="directory-group-grid">
+            {''.join(
+                f'''
+                <label class="directory-group-toggle">
+                  <input type="checkbox" name="group_{code}" value="1" {"checked" if code in selected_groups else ""}>
+                  <span>{escape(label)}</span>
+                </label>
+                '''
+                for code, label in sorted_expense_groups()
+            )}
+          </div>
+        """
 
     contract_object_cards = "".join(
         render_directory_card(
@@ -12029,7 +12073,7 @@ def render_directories_section(
     expense_category_cards = "".join(
         render_directory_card(
             category.label,
-            [],
+            expense_category_group_labels(category),
             [expense_category_description(category)],
             f"""
             <div class="directory-edit-form">
@@ -12037,6 +12081,10 @@ def render_directories_section(
               <div class="field" style="grid-column: 1 / -1;">
                 <label>Название категории</label>
                 <input type="text" name="label" value="{escape(category.label)}" required>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Где показывать в ДДС</label>
+                {expense_category_group_controls(category.group_codes)}
               </div>
             </form>
             <div class="directory-category-actions">
@@ -12060,6 +12108,10 @@ def render_directories_section(
               <div class="field" style="grid-column: 1 / -1;">
                 <label>Название категории</label>
                 <input type="text" name="label" placeholder="Например, Комиссии банка" required>
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label>Где показывать в ДДС</label>
+                {expense_category_group_controls("object")}
               </div>
               <button class="submit-btn" type="submit">Сохранить категорию</button>
             </form>
@@ -17585,6 +17637,35 @@ def sorted_dds_options(options: Iterable[tuple[str, str]]) -> list[tuple[str, st
     return sorted(list(options), key=option_label_sort_key)
 
 
+def expense_category_group_set(group_codes: str) -> set[str]:
+    return set(normalize_expense_category_group_codes(group_codes).split(","))
+
+
+def expense_category_group_codes_from_form(form: dict[str, str]) -> str:
+    return normalize_expense_category_group_codes(
+        [
+            code
+            for code in ("object", "admin", "transfer", "income")
+            if form.get(f"group_{code}", "").strip() == "1"
+        ]
+    )
+
+
+def expense_category_group_map(storage: Storage, owner_chat_id: int, entries: Iterable | None = None) -> dict[str, set[str]]:
+    categories = storage.list_expense_categories(owner_chat_id)
+    group_map = {
+        item.code: expense_category_group_set(item.group_codes)
+        for item in categories
+        if item.code
+    }
+    category_labels = {item.code: item.label for item in categories}
+    for entry in entries or ():
+        code = (entry.category_code or "").strip()
+        if code and code not in group_map:
+            group_map[code] = category_groups_for_code(code, category_labels)
+    return group_map
+
+
 def _normalized_cash_category_text(value: str) -> str:
     return " ".join((value or "").casefold().replace("ё", "е").split())
 
@@ -17613,7 +17694,10 @@ def expense_category_requires_project(code: str, category_labels: dict[str, str]
     return True
 
 
-def category_groups_for_code(code: str, category_labels: dict[str, str] | None = None) -> set[str]:
+def category_groups_for_code(code: str, category_labels: dict[str, str] | None = None, category_group_map: dict[str, set[str]] | None = None) -> set[str]:
+    if category_group_map is not None and code in category_group_map:
+        groups = {group for group in category_group_map.get(code, set()) if group in EXPENSE_GROUP_META}
+        return groups or {"object"}
     normalized_code = _normalized_cash_category_text(code)
     label = category_labels.get(code, "") if category_labels else EXPENSE_CATEGORY_META.get(code, "")
     normalized_label = _normalized_cash_category_text(label)
@@ -18158,7 +18242,7 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None, bank_account_balances: list[dict] | None = None) -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None, bank_account_balances: list[dict] | None = None, category_group_map: dict[str, set[str]] | None = None) -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return summary_html or f'<div class="timeline-title">{escape(entry.title)}</div>'
     cashboxes = cashboxes or []
@@ -18218,7 +18302,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         for code, label in [("admin", "Выберите" if project_needs_attention or project_requires_selection else "Админ"), *sorted_dds_options((code, label) for code, label in project_options_list if code != "admin")]
     )
     category_options = "".join(
-        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels) | ({display_group_code} if code == display_category_code and display_group_code else set()))))}"{" selected" if code == display_category_code else ""}>{escape("Выберите" if category_needs_attention and code == "other" else label)}</option>'
+        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map) | ({display_group_code} if code == display_category_code and display_group_code else set()))))}"{" selected" if code == display_category_code else ""}>{escape("Выберите" if category_needs_attention and code == "other" else label)}</option>'
         for code, label in sorted_dds_options(category_options_list)
     )
     target_cashbox_options = "".join(
@@ -22642,6 +22726,7 @@ def render_expenses_section(
     category_options_list = expense_category_options(storage, owner_chat_id, entries)
     project_labels = dict(project_options_list)
     category_labels = dict(category_options_list)
+    category_group_map = expense_category_group_map(storage, owner_chat_id, entries)
     project_colors = expense_project_color_map(storage, owner_chat_id)
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     bank_account_balances = storage.list_latest_bank_account_balances(owner_chat_id)
@@ -22649,7 +22734,7 @@ def render_expenses_section(
     if project_filter and project_filter not in project_labels:
         project_filter = ""
     if category_filter and category_filter not in EXPENSE_GROUP_META:
-        legacy_groups = category_groups_for_code(category_filter, category_labels) if category_filter in category_labels else set()
+        legacy_groups = category_groups_for_code(category_filter, category_labels, category_group_map) if category_filter in category_labels else set()
         category_filter = next(iter(legacy_groups), "") if len(legacy_groups) == 1 else ""
     if adjustment_filter not in {"", "needs"}:
         adjustment_filter = ""
@@ -22808,7 +22893,7 @@ def render_expenses_section(
         for code, label in sorted_expense_groups(["admin", "income", "object", "transfer"])
     )
     form_category_options = "".join(
-        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels))))}">{escape(label)}</option>'
+        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map))))}">{escape(label)}</option>'
         for code, label in sorted_dds_options(category_options_list)
     )
     expense_group_options = "".join(
@@ -22968,12 +23053,14 @@ def render_expenses_section(
         def status_editor(entry) -> str:
             status_html = f'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'
             if has_permission(current_user, "expenses", "edit"):
-                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry.needs_adjustment, extra_filter_query, cashboxes, bank_account_balances)
+                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry.needs_adjustment, extra_filter_query, cashboxes, bank_account_balances, category_group_map)
             return status_html
         def row_is_income_display(entry) -> bool:
             return (entry.operation_type or "expense") == "income" or (cash_withdrawal_as_income and is_cash_income_display(entry))
         def project_chip(entry) -> str:
             if is_cash_income_display(entry):
+                return ""
+            if infer_expense_group_code(entry, category_labels) != "object":
                 return ""
             if not expense_category_requires_project(entry.category_code, category_labels):
                 return ""
@@ -25898,9 +25985,10 @@ self.addEventListener("notificationclick", (event) => {
         form = read_post_data(environ)
         try:
             label = form.get("label", "").strip()
+            group_codes = expense_category_group_codes_from_form(form)
             if not label:
                 raise ValueError("Укажите название категории")
-            created = storage.add_expense_category(current_owner, label)
+            created = storage.add_expense_category(current_owner, label, group_codes)
             if created is None:
                 raise ValueError("Не удалось сохранить категорию")
             return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
@@ -25921,9 +26009,10 @@ self.addEventListener("notificationclick", (event) => {
         form = read_post_data(environ)
         try:
             label = form.get("label", "").strip()
+            group_codes = expense_category_group_codes_from_form(form)
             if not label:
                 raise ValueError("Укажите название категории")
-            if not storage.update_expense_category(current_owner, category_id, label):
+            if not storage.update_expense_category(current_owner, category_id, label, group_codes):
                 raise ValueError("Категория не найдена или уже существует")
             return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
         except Exception as exc:
@@ -30102,6 +30191,7 @@ self.addEventListener("notificationclick", (event) => {
             project_codes = {code for code, _label in expense_project_options(storage, current_owner, entries)}
             category_options_list = expense_category_options(storage, current_owner, entries)
             category_labels = dict(category_options_list)
+            category_group_map = expense_category_group_map(storage, current_owner, entries)
             category_codes = {code for code, _label in category_options_list}
             if category_code not in category_codes:
                 raise ValueError("Выберите статью расхода")
@@ -30111,7 +30201,7 @@ self.addEventListener("notificationclick", (event) => {
                 expense_group_code = "income"
             if expense_group_code not in EXPENSE_GROUP_META:
                 raise ValueError("Выберите группу расхода")
-            if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels):
+            if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels, category_group_map):
                 raise ValueError("Выберите статью для выбранной группы")
             if not expense_group_requires_project(expense_group_code, operation_type):
                 project_code = "admin"
@@ -30288,6 +30378,7 @@ self.addEventListener("notificationclick", (event) => {
             project_codes = {code for code, _label in expense_project_options(storage, current_owner, entries)}
             category_options_list = expense_category_options(storage, current_owner, entries)
             category_labels = dict(category_options_list)
+            category_group_map = expense_category_group_map(storage, current_owner, entries)
             category_codes = {code for code, _label in category_options_list}
             if category_code not in category_codes:
                 raise ValueError("Выберите статью расхода")
@@ -30300,7 +30391,7 @@ self.addEventListener("notificationclick", (event) => {
                 expense_group_code = "income"
             if expense_group_code not in EXPENSE_GROUP_META:
                 raise ValueError("Выберите группу расхода")
-            if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels):
+            if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels, category_group_map):
                 raise ValueError("Выберите статью для выбранной группы")
             if not expense_group_requires_project(expense_group_code, operation_type):
                 project_code = "admin"
