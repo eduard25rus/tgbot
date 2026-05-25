@@ -8043,6 +8043,12 @@ def layout(
     .transfer-target-field.is-hidden {{
       display: none;
     }}
+    .cash-withdrawal-field.is-hidden {{
+      display: none;
+    }}
+    .dds-payment-source-field.is-hidden {{
+      display: none;
+    }}
     .action-row {{
       display: flex;
       gap: 10px;
@@ -10752,6 +10758,9 @@ function syncDdsExpenseForm(form) {{
   const categorySelect = form.querySelector("[data-dds-category-select]");
   const periodField = form.querySelector("[data-dds-payroll-period-field]");
   const periodInput = periodField ? periodField.querySelector('[name="payroll_period"]') : null;
+  const operationType = form.dataset.operationType || (form.querySelector('input[name="operation_type"]') ? form.querySelector('input[name="operation_type"]').value : "expense");
+  const isIncomeOperation = operationType === "income";
+  const sourceField = form.querySelector("[data-dds-payment-source-field]");
   const sourceSelect = form.querySelector('select[name="payment_source"]');
   const targetField = form.querySelector("[data-dds-transfer-target-field]");
   const targetSelect = targetField ? targetField.querySelector('select[name="target_cashbox"]') : null;
@@ -10762,11 +10771,18 @@ function syncDdsExpenseForm(form) {{
   const needsPeriod = Boolean(categorySelect && payrollSet.has(categorySelect.value));
   const isTransfer = Boolean(categorySelect && transferSet.has(categorySelect.value));
   const isCashWithdrawal = Boolean(
+    !isIncomeOperation &&
     categorySelect &&
     sourceSelect &&
     categorySelect.value === withdrawalCategoryCode &&
     sourceSelect.value === "bank"
   );
+  if (sourceField) {{
+    sourceField.classList.toggle("is-hidden", isIncomeOperation);
+  }}
+  if (sourceSelect) {{
+    sourceSelect.disabled = isIncomeOperation;
+  }}
   if (periodField) {{
     periodField.classList.toggle("is-hidden", !needsPeriod);
   }}
@@ -10777,10 +10793,10 @@ function syncDdsExpenseForm(form) {{
     }}
   }}
   if (targetField) {{
-    targetField.classList.toggle("is-hidden", !isTransfer);
+    targetField.classList.toggle("is-hidden", isIncomeOperation || !isTransfer);
   }}
   if (targetSelect) {{
-    targetSelect.disabled = !isTransfer;
+    targetSelect.disabled = isIncomeOperation || !isTransfer;
     const sourceCashbox = sourceSelect && sourceSelect.value.startsWith("cashbox:")
       ? sourceSelect.value.slice("cashbox:".length)
       : "";
@@ -17617,6 +17633,9 @@ def expense_entry_payment_source_label(entry, cashboxes: list[dict]) -> str:
     if (entry.payment_source or "bank") == "cash":
         cashbox_code = cashbox_code_from_entry(entry, cashboxes)
         return cashbox_label_from_directory(cashboxes, cashbox_code) if cashbox_code else "Касса"
+    account_label = bank_account_label_for_number(bank_account_number_from_expense_entry(entry))
+    if account_label:
+        return account_label
     return expense_payment_source_label(entry.payment_source or "bank")
 
 
@@ -17861,6 +17880,20 @@ def bank_account_display_label(index: int, balance: dict) -> str:
     return f"Счет *{account_number[-4:]}" if account_number else f"Счет {index + 1}"
 
 
+def bank_account_label_for_number(account_number: str, bank_account_balances: list[dict] | None = None) -> str:
+    account_number = (account_number or "").strip()
+    if not account_number:
+        return ""
+    for index, item in enumerate(bank_account_balances or []):
+        if str(item.get("account_number", "")).strip() == account_number:
+            return f"{bank_account_display_label(index, item)} ****{account_number[-4:]}"
+    if account_number.endswith("1806"):
+        return f"Резерв Сбербанк ****{account_number[-4:]}"
+    if account_number.endswith("7577"):
+        return f"Фелис Сбербанк ****{account_number[-4:]}"
+    return f"Расчетный счет ****{account_number[-4:]}"
+
+
 def bank_account_number_from_expense_entry(entry) -> str:
     raw_text = entry.raw_import_text or ""
     if not raw_text:
@@ -17918,7 +17951,7 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None) -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None, bank_account_balances: list[dict] | None = None) -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return summary_html or f'<div class="timeline-title">{escape(entry.title)}</div>'
     cashboxes = cashboxes or []
@@ -17969,12 +18002,30 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         for cashbox in cashboxes
         if str(cashbox.get("code", "")).strip()
     )
-    show_cash_withdrawal_fields = display_category_code == CASH_WITHDRAWAL_CATEGORY_CODE and (entry.payment_source or "bank") == "bank"
+    is_income_operation = (entry.operation_type or "expense") == "income"
+    show_payment_source_field = not is_income_operation
+    show_cash_withdrawal_fields = (
+        not is_income_operation
+        and display_category_code == CASH_WITHDRAWAL_CATEGORY_CODE
+        and (entry.payment_source or "bank") == "bank"
+    )
+    bank_account_number = bank_account_number_from_expense_entry(entry)
+    bank_account_label = bank_account_label_for_number(bank_account_number, bank_account_balances)
+    bank_account_field_html = (
+        f"""
+          <div class="field">
+            <label>Расчетный счет</label>
+            <input type="text" value="{escape(bank_account_label)}" readonly>
+          </div>
+        """
+        if is_income_operation and bank_account_label
+        else ""
+    )
     return f"""
     <details id="expense-entry-{entry.id}" class="status-menu expense-editor-menu" data-expense-editor-id="{entry.id}">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
       <div class="status-popover expense-editor-popover" data-modal-title="Редактирование операции ДДС">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-operation-type="{escape(entry.operation_type or 'expense')}">
           <input type="hidden" name="operation_type" value="{escape(entry.operation_type or 'expense')}">
           <div class="field">
             <label>Дата операции</label>
@@ -17988,9 +18039,10 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <label>Группа</label>
             <select name="category_code" data-dds-category-select>{category_options}</select>
           </div>
-          <div class="field">
+          {bank_account_field_html}
+          <div class="field dds-payment-source-field{' is-hidden' if not show_payment_source_field else ''}" data-dds-payment-source-field>
             <label>Источник оплаты</label>
-            <select name="payment_source">{expense_payment_source_options(expense_payment_source_value_for_entry(entry, cashboxes), cashboxes)}</select>
+            <select name="payment_source" {'disabled' if not show_payment_source_field else ''}>{expense_payment_source_options(expense_payment_source_value_for_entry(entry, cashboxes), cashboxes)}</select>
           </div>
           <div class="field transfer-target-field{' is-hidden' if not is_transfer_pair_entry else ''}" data-dds-transfer-target-field>
             <label>Касса получателя</label>
@@ -22643,13 +22695,15 @@ def render_expenses_section(
         def status_editor(entry) -> str:
             status_html = f'<span class="chip warn">Требует корректировки</span>' if entry.needs_adjustment else '<span class="chip ok">Разнесено</span>'
             if has_permission(current_user, "expenses", "edit"):
-                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry.needs_adjustment, extra_filter_query, cashboxes)
+                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry.needs_adjustment, extra_filter_query, cashboxes, bank_account_balances)
             return status_html
         def row_is_income_display(entry) -> bool:
             return (entry.operation_type or "expense") == "income" or (cash_withdrawal_as_income and is_cash_income_display(entry))
         def project_chip(entry) -> str:
             if is_cash_income_display(entry):
                 return ""
+            if entry.needs_adjustment and (entry.project_code or "") == "admin":
+                return '<span class="chip warn">Объект не выбран</span>'
             color_style = chip_style_for_color(project_colors.get(entry.project_code, ""))
             return f'<span class="chip"{color_style}>{escape(expense_project_label(entry.project_code, project_labels))}</span>'
         def render_single_entry(entry) -> str:
@@ -29763,7 +29817,8 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите группу расхода")
             if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
                 raise ValueError("Выберите источник оплаты")
-            is_transfer_operation = is_cash_transfer_category(category_code, category_labels)
+            is_income_operation = operation_type == "income"
+            is_transfer_operation = (not is_income_operation) and is_cash_transfer_category(category_code, category_labels)
             if is_transfer_operation:
                 if payment_source != "cash" or not selected_cashbox_code:
                     raise ValueError("Для перевода выберите кассу-источник")
@@ -29829,7 +29884,7 @@ self.addEventListener("notificationclick", (event) => {
                     operation_type="income",
                 )
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
-            if category_code == CASH_WITHDRAWAL_CATEGORY_CODE and payment_source == "bank":
+            if not is_income_operation and category_code == CASH_WITHDRAWAL_CATEGORY_CODE and payment_source == "bank":
                 withdrawal_cashbox_code = form.get("cash_withdrawal_cashbox", "").strip()
                 cashbox_codes = {str(item.get("code", "")) for item in cashboxes}
                 if withdrawal_cashbox_code not in cashbox_codes:
@@ -30095,7 +30150,7 @@ self.addEventListener("notificationclick", (event) => {
             linked_commission = linked_cash_withdrawal_commission_entry(entries, existing_entry.id)
             if linked_commission is not None:
                 storage.delete_expense_entry(current_owner, linked_commission.id)
-            needs_payroll_period = category_code == "salary" or is_labor_force_category(category_code, category_labels)
+            needs_payroll_period = (not is_income_operation) and (category_code == "salary" or is_labor_force_category(category_code, category_labels))
             payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if needs_payroll_period and payroll_period_raw else ""
             preserved_markers = expense_comment_service_markers(existing_entry.comment, keep_transfer_markers=not existing_was_transfer_pair)
             selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
