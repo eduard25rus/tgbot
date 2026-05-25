@@ -18239,14 +18239,20 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     )
     bank_account_number = bank_account_number_from_expense_entry(entry)
     bank_account_label = bank_account_label_for_number(bank_account_number, bank_account_balances)
+    is_imported_bank_entry = bool(entry.import_source) and (entry.payment_source or "bank") == "bank" and bool(bank_account_label)
+    payment_source_options_html = (
+        '<option value="bank" selected>Расчетный счет</option>'
+        if is_imported_bank_entry
+        else expense_payment_source_options(expense_payment_source_value_for_entry(entry, cashboxes), cashboxes)
+    )
     bank_account_field_html = (
         f"""
           <div class="field">
-            <label>Расчетный счет</label>
+            <label>{'Расчетный счет зачисления' if is_income_operation else 'Расчетный счет списания'}</label>
             <input type="text" value="{escape(bank_account_label)}" readonly>
           </div>
         """
-        if is_income_operation and bank_account_label
+        if (is_income_operation or is_imported_bank_entry) and bank_account_label
         else ""
     )
     project_attention_class = " dds-editor-attention" if project_needs_attention else ""
@@ -18277,7 +18283,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
           {bank_account_field_html}
           <div class="field dds-payment-source-field{' is-hidden' if not show_payment_source_field else ''}" data-dds-payment-source-field>
             <label>Источник оплаты</label>
-            <select name="payment_source" {'disabled' if not show_payment_source_field else ''}>{expense_payment_source_options(expense_payment_source_value_for_entry(entry, cashboxes), cashboxes)}</select>
+            <select name="payment_source" {'disabled' if not show_payment_source_field else ''}>{payment_source_options_html}</select>
           </div>
           <div class="field transfer-target-field{' is-hidden' if not is_transfer_pair_entry else ''}" data-dds-transfer-target-field>
             <label>Касса получателя</label>
@@ -30289,7 +30295,8 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите источник оплаты")
             if operation_type not in MONEY_OPERATION_TYPE_META:
                 raise ValueError("Выберите тип операции")
-            if operation_type == "income":
+            is_income_operation = operation_type == "income"
+            if is_income_operation:
                 expense_group_code = "income"
             if expense_group_code not in EXPENSE_GROUP_META:
                 raise ValueError("Выберите группу расхода")
