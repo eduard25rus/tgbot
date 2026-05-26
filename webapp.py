@@ -19402,6 +19402,15 @@ def render_cashoperations_body(
             if kind != "income" and getattr(entry, "payroll_employee_name", "") and not worker_allocations
             else ""
         )
+        deposit_amount = deposit_amount_from_entry(entry)
+        deposit_line = ""
+        if deposit_amount > 0:
+            open_amount = deposit_open_amount(entry, entries)
+            deposit_line = (
+                f'<span class="cash-mobile-op-deposit{" closed" if open_amount <= 0 else ""}">'
+                f'{escape("Залог возвращен" if open_amount <= 0 else f"Залог возврата: {format_amount(open_amount)}")}'
+                f'</span>'
+            )
         receipt_line = (
             '<span class="cash-mobile-op-receipt">Чек приложен</span>'
             if kind != "income" and getattr(entry, "receipt_file_path", "")
@@ -19452,6 +19461,7 @@ def render_cashoperations_body(
                 <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
                 {allocation_line}
                 {employee_line}
+                {deposit_line}
                 {f'<span class="cash-mobile-op-comment">{escape(comment)}</span>' if comment else ''}
               </span>
               <span class="cash-mobile-op-side">
@@ -19467,6 +19477,7 @@ def render_cashoperations_body(
             <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
             {allocation_line}
             {employee_line}
+            {deposit_line}
             {f'<span class="cash-mobile-op-comment">{escape(comment)}</span>' if comment else ''}
           </div>
           <div class="cash-mobile-op-side">
@@ -19913,8 +19924,9 @@ def render_cashoperations_body(
             <label class="is-hidden" data-cash-transfer-wrap>Куда отправляем
               <select name="target_cashbox" data-cash-transfer-target>{transfer_cashbox_options}</select>
             </label>
-            <label class="is-hidden" data-cash-deposit-wrap>
-              <span><input type="checkbox" name="has_deposit" value="1" data-cash-deposit-toggle> В сумме есть залог</span>
+            <label class="cash-mobile-check is-hidden" data-cash-deposit-wrap>
+              <input type="checkbox" name="has_deposit" value="1" data-cash-deposit-toggle>
+              <span>В сумме есть залог</span>
             </label>
             <label class="is-hidden" data-cash-deposit-amount-wrap>Сумма залога
               <input type="text" name="deposit_amount" inputmode="decimal" placeholder="0" data-cash-deposit-amount>
@@ -20290,6 +20302,7 @@ def render_cashoperations_body(
       .cash-mobile-op-date,
       .cash-mobile-op-comment,
       .cash-mobile-op-meta,
+      .cash-mobile-op-deposit,
       .cash-mobile-op-receipt {{
         color: var(--muted);
         font-size: 12px;
@@ -20310,6 +20323,25 @@ def render_cashoperations_body(
       .cash-mobile-op-comment,
       .cash-mobile-op-meta {{
         margin-top: 4px;
+      }}
+      .cash-mobile-op-deposit {{
+        display: inline-grid;
+        width: max-content;
+        max-width: 100%;
+        margin-top: 7px;
+        min-height: 28px;
+        align-items: center;
+        border-radius: 999px;
+        padding: 5px 9px;
+        background: #fff1d6;
+        color: #9a6507;
+        border: 1px solid rgba(154, 101, 7, .14);
+        font-weight: 800;
+      }}
+      .cash-mobile-op-deposit.closed {{
+        background: #e3f2e9;
+        color: #186844;
+        border-color: rgba(24, 104, 68, .16);
       }}
       .cash-mobile-worker-list span {{
         display: block;
@@ -20686,6 +20718,19 @@ def render_cashoperations_body(
         display: grid;
         gap: 6px;
       }}
+      .cash-mobile-form label.cash-mobile-check {{
+        min-height: 50px;
+        grid-template-columns: 26px minmax(0, 1fr);
+        align-items: center;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 11px 12px;
+        background: #fff;
+        color: var(--ink);
+        font-size: 16px;
+        font-weight: 700;
+      }}
       .cash-mobile-form input,
       .cash-mobile-form select,
       .cash-mobile-form textarea {{
@@ -20703,6 +20748,16 @@ def render_cashoperations_body(
       .cash-mobile-form input[type="date"] {{
         -webkit-appearance: none;
         appearance: none;
+      }}
+      .cash-mobile-form label.cash-mobile-check input[type="checkbox"] {{
+        width: 24px;
+        height: 24px;
+        min-width: 24px;
+        max-width: 24px;
+        margin: 0;
+        padding: 0;
+        border-radius: 6px;
+        accent-color: #186844;
       }}
       .cash-receipt-button input {{
         display: none;
