@@ -24307,7 +24307,7 @@ def render_expenses_section(
             if deposit_amount > 0:
                 open_amount = deposit_open_amount(entry, source_entries)
                 css = "warn" if open_amount > 0 else "ok"
-                label = f"Залог открыт: {format_amount(open_amount)}" if open_amount > 0 else "Залог возвращен"
+                label = f"Залог возврата: {format_amount(open_amount)}" if open_amount > 0 else "Залог возвращен"
                 return f'<span class="chip {css}">{escape(label)}</span>'
             source_id = deposit_return_source_id(entry)
             if source_id:
