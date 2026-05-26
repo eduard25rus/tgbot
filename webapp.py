@@ -7818,6 +7818,9 @@ def layout(
       display: grid;
       gap: 6px;
     }}
+    .field.is-hidden {{
+      display: none;
+    }}
     .field label {{
       font-size: 12px;
       text-transform: uppercase;
@@ -8262,13 +8265,62 @@ def layout(
       display: none;
     }}
     .deposit-field.is-hidden,
-    .deposit-return-field.is-hidden {{
+    .deposit-return-field.is-hidden,
+    .dds-worker-field.is-hidden {{
       display: none;
+    }}
+    .dds-worker-field {{
+      display: grid;
+      gap: 10px;
+    }}
+    .dds-worker-field.span-2 {{
+      grid-column: span 2;
+    }}
+    .dds-worker-allocations {{
+      display: grid;
+      gap: 8px;
+    }}
+    .dds-worker-row {{
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(120px, 0.35fr) 42px;
+      gap: 8px;
+      align-items: stretch;
+    }}
+    .dds-worker-row select,
+    .dds-worker-row input {{
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.75);
+      padding: 12px 14px;
+      font: inherit;
+      color: var(--ink);
+    }}
+    .dds-worker-row select {{
+      appearance: none;
+      background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+      background-position: calc(100% - 18px) 52%, calc(100% - 13px) 52%;
+      background-size: 5px 5px, 5px 5px;
+      background-repeat: no-repeat;
+      padding-right: 34px;
+    }}
+    .dds-worker-remove {{
+      border: 0;
+      border-radius: 14px;
+      background: var(--brand);
+      color: white;
+      font: inherit;
+      font-size: 22px;
+      font-weight: 800;
+      cursor: pointer;
     }}
     @media (max-width: 720px) {{
       [data-dds-deposit-field],
       [data-dds-deposit-amount-field] {{
         grid-column: auto !important;
+      }}
+      .dds-worker-row {{
+        grid-template-columns: 1fr;
       }}
     }}
     .dds-payment-source-field.is-hidden {{
@@ -11058,6 +11110,13 @@ function syncDdsExpenseForm(form) {{
   const periodInput = periodField ? periodField.querySelector('[name="payroll_period"]') : null;
   const payrollEmployeeField = form.querySelector("[data-dds-payroll-employee-field]");
   const payrollEmployeeSelect = payrollEmployeeField ? payrollEmployeeField.querySelector('select[name="payroll_employee_id"]') : null;
+  const workerField = form.querySelector("[data-dds-worker-field]");
+  const workerRows = form.querySelector("[data-dds-worker-allocations]");
+  const workerAdd = form.querySelector("[data-dds-worker-add]");
+  const workerAllocationsInput = form.querySelector("[data-dds-labor-allocations-json]");
+  const amountInput = form.querySelector('input[name="amount"]');
+  const titleInput = form.querySelector('input[name="title"]');
+  const titleField = titleInput ? titleInput.closest(".field") : null;
   const operationType = form.dataset.operationType || (form.querySelector('input[name="operation_type"]') ? form.querySelector('input[name="operation_type"]').value : "expense");
   const isIncomeOperation = operationType === "income";
   const sourceField = form.querySelector("[data-dds-payment-source-field]");
@@ -11102,6 +11161,7 @@ function syncDdsExpenseForm(form) {{
   }}
   const needsPeriod = Boolean(categorySelect && !isIncomeForm && payrollSet.has(categorySelect.value));
   const needsPayrollEmployee = Boolean(categorySelect && categorySelect.value === "salary" && !isIncomeForm);
+  const needsWorkerAllocations = Boolean(needsPeriod && !needsPayrollEmployee);
   const isCashboxTransfer = Boolean(categorySelect && transferSet.has(categorySelect.value));
   const needsAdjustment = form.dataset.needsAdjustment === "1";
   const projectSelect = form.querySelector('select[name="project_code"]');
@@ -11134,15 +11194,26 @@ function syncDdsExpenseForm(form) {{
     sourceSelect.disabled = isIncomeForm;
   }}
   if (projectField && projectSelect && categorySelect) {{
-    const categoryDoesNotNeedProject = selectedGroup === "admin" || selectedGroup === "transfer" || noProjectSet.has(categorySelect.value) || categorySelect.value === withdrawalCategoryCode || transferSet.has(categorySelect.value);
+    const categoryDoesNotNeedProject = needsWorkerAllocations || selectedGroup === "admin" || selectedGroup === "transfer" || noProjectSet.has(categorySelect.value) || categorySelect.value === withdrawalCategoryCode || transferSet.has(categorySelect.value);
     projectField.classList.toggle("is-hidden", categoryDoesNotNeedProject);
     projectSelect.disabled = categoryDoesNotNeedProject;
+    if (categoryDoesNotNeedProject) {{
+      projectSelect.value = "admin";
+    }}
     projectField.classList.toggle("dds-editor-attention", needsAdjustment && projectSelect.value === "admin" && !categoryDoesNotNeedProject);
   }}
   if (categoryField && categorySelect) {{
     categoryField.classList.toggle("is-hidden", !selectedGroup);
     categorySelect.disabled = !selectedGroup;
     categoryField.classList.toggle("dds-editor-attention", needsAdjustment && categorySelect.value === "other");
+  }}
+  const usesAutoTitle = needsPayrollEmployee || needsWorkerAllocations || isCashboxTransfer;
+  if (titleField) {{
+    titleField.classList.toggle("is-hidden", usesAutoTitle);
+  }}
+  if (titleInput) {{
+    titleInput.disabled = usesAutoTitle;
+    titleInput.required = !usesAutoTitle;
   }}
   if (groupSelect) {{
     const groupField = groupSelect.closest(".field");
@@ -11170,6 +11241,25 @@ function syncDdsExpenseForm(form) {{
     }}
     payrollEmployeeField.classList.toggle("dds-editor-attention", needsAdjustment && needsPayrollEmployee && !payrollEmployeeSelect.value);
   }}
+  if (workerField) {{
+    workerField.classList.toggle("is-hidden", !needsWorkerAllocations);
+  }}
+  if (workerRows) {{
+    const rows = Array.from(workerRows.querySelectorAll("[data-dds-worker-row]"));
+    rows.forEach((row) => {{
+      row.querySelectorAll("[data-dds-worker], [data-dds-worker-amount]").forEach((input) => {{
+        input.disabled = !needsWorkerAllocations;
+        input.required = needsWorkerAllocations;
+      }});
+    }});
+  }}
+  if (workerAdd) {{
+    workerAdd.disabled = !needsWorkerAllocations;
+  }}
+  if (workerAllocationsInput && !needsWorkerAllocations) {{
+    workerAllocationsInput.value = "[]";
+  }}
+  updateDdsLaborAllocationTotal(form);
   if (targetField) {{
     targetField.classList.toggle("is-hidden", isIncomeForm || !isCashboxTransfer);
   }}
@@ -11244,6 +11334,95 @@ function parseDdsNumericInput(value) {{
   return Number.isFinite(parsed) ? parsed : 0;
 }}
 
+function createDdsWorkerRow(form, employeeId, amount) {{
+  const rows = form.querySelector("[data-dds-worker-allocations]");
+  const template = rows ? rows.querySelector("[data-dds-worker-row]") : null;
+  if (!template) {{
+    return null;
+  }}
+  const row = template.cloneNode(true);
+  const select = row.querySelector("[data-dds-worker]");
+  const amountInput = row.querySelector("[data-dds-worker-amount]");
+  if (select) {{
+    select.value = employeeId || "";
+  }}
+  if (amountInput) {{
+    amountInput.value = amount ? String(amount).replace(".", ",") : "";
+  }}
+  return row;
+}}
+
+function ensureDdsWorkerRow(form) {{
+  const rows = form.querySelector("[data-dds-worker-allocations]");
+  if (!rows || rows.querySelector("[data-dds-worker-row]")) {{
+    return;
+  }}
+  const row = createDdsWorkerRow(form, "", "");
+  if (row) {{
+    rows.appendChild(row);
+  }}
+}}
+
+function collectDdsLaborAllocations(form, showErrors) {{
+  const workerField = form.querySelector("[data-dds-worker-field]");
+  if (!workerField || workerField.classList.contains("is-hidden")) {{
+    return [];
+  }}
+  const rows = Array.from(form.querySelectorAll("[data-dds-worker-row]"));
+  const allocations = [];
+  const seen = new Set();
+  for (const row of rows) {{
+    const select = row.querySelector("[data-dds-worker]");
+    const amountInput = row.querySelector("[data-dds-worker-amount]");
+    const employeeId = select ? select.value : "";
+    const employeeName = select && select.selectedOptions[0] ? select.selectedOptions[0].textContent.trim() : "";
+    const rowAmount = parseDdsNumericInput(amountInput ? amountInput.value : "");
+    if (!employeeId && rowAmount <= 0) {{
+      continue;
+    }}
+    if (!employeeId) {{
+      if (showErrors) alert("Выберите рабочего в каждой строке распределения.");
+      return null;
+    }}
+    if (seen.has(employeeId)) {{
+      if (showErrors) alert("Один рабочий указан два раза. Объедините сумму в одну строку.");
+      return null;
+    }}
+    if (rowAmount <= 0) {{
+      if (showErrors) alert("Укажите сумму для каждого рабочего.");
+      return null;
+    }}
+    seen.add(employeeId);
+    allocations.push({{ employee_id: Number(employeeId), employee_name: employeeName, amount: rowAmount }});
+  }}
+  return allocations;
+}}
+
+function updateDdsLaborAllocationTotal(form) {{
+  const workerField = form.querySelector("[data-dds-worker-field]");
+  const workerAllocationsInput = form.querySelector("[data-dds-labor-allocations-json]");
+  const totalNode = form.querySelector("[data-dds-worker-total]");
+  if (!workerField || !workerAllocationsInput) {{
+    return;
+  }}
+  if (workerField.classList.contains("is-hidden")) {{
+    workerAllocationsInput.value = "[]";
+    if (totalNode) totalNode.textContent = "Распределено: 0 ₽";
+    return;
+  }}
+  ensureDdsWorkerRow(form);
+  const allocations = collectDdsLaborAllocations(form, false) || [];
+  const total = Math.round(allocations.reduce((sum, item) => sum + item.amount, 0) * 100) / 100;
+  const amountInput = form.querySelector('input[name="amount"]');
+  const expenseAmount = parseDdsNumericInput(amountInput ? amountInput.value : "");
+  workerAllocationsInput.value = JSON.stringify(allocations);
+  if (totalNode) {{
+    const suffix = expenseAmount ? " из " + formatMoneyValue(expenseAmount) : "";
+    totalNode.textContent = "Распределено: " + formatMoneyValue(total) + suffix;
+    totalNode.style.color = expenseAmount && Math.abs(total - expenseAmount) > 0.009 ? "#9b2f2f" : "";
+  }}
+}}
+
 function updateDdsCashWithdrawalCommission(form) {{
   if (!form) {{
     return;
@@ -11261,7 +11440,59 @@ function updateDdsCashWithdrawalCommission(form) {{
 }}
 
 function initDdsExpenseForms() {{
-  document.querySelectorAll('[data-dds-expense-form="1"]').forEach(syncDdsExpenseForm);
+  document.querySelectorAll('[data-dds-expense-form="1"]').forEach((form) => {{
+    if (form.dataset.ddsLaborInit !== "1") {{
+      form.dataset.ddsLaborInit = "1";
+      form.addEventListener("click", (event) => {{
+        const addButton = event.target.closest("[data-dds-worker-add]");
+        if (addButton && form.contains(addButton)) {{
+          const rows = form.querySelector("[data-dds-worker-allocations]");
+          const row = createDdsWorkerRow(form, "", "");
+          if (rows && row) rows.appendChild(row);
+          syncDdsExpenseForm(form);
+          updateDdsLaborAllocationTotal(form);
+          return;
+        }}
+        const removeButton = event.target.closest("[data-dds-worker-remove]");
+        if (removeButton && form.contains(removeButton)) {{
+          const row = removeButton.closest("[data-dds-worker-row]");
+          const rows = form.querySelector("[data-dds-worker-allocations]");
+          if (row && rows && rows.querySelectorAll("[data-dds-worker-row]").length > 1) {{
+            row.remove();
+          }} else if (row) {{
+            row.querySelectorAll("select, input").forEach((input) => input.value = "");
+          }}
+          updateDdsLaborAllocationTotal(form);
+        }}
+      }});
+      form.addEventListener("input", () => updateDdsLaborAllocationTotal(form));
+      form.addEventListener("change", () => updateDdsLaborAllocationTotal(form));
+      form.addEventListener("submit", (event) => {{
+        const workerField = form.querySelector("[data-dds-worker-field]");
+        if (!workerField || workerField.classList.contains("is-hidden")) {{
+          return;
+        }}
+        const allocations = collectDdsLaborAllocations(form, true);
+        if (!allocations || !allocations.length) {{
+          event.preventDefault();
+          return;
+        }}
+        const amountInput = form.querySelector('input[name="amount"]');
+        const expenseAmount = parseDdsNumericInput(amountInput ? amountInput.value : "");
+        const total = Math.round(allocations.reduce((sum, item) => sum + item.amount, 0) * 100) / 100;
+        if (Math.abs(total - expenseAmount) > 0.009) {{
+          alert("Сумма по рабочим должна совпадать с общей суммой расхода.");
+          event.preventDefault();
+          return;
+        }}
+        const workerAllocationsInput = form.querySelector("[data-dds-labor-allocations-json]");
+        if (workerAllocationsInput) {{
+          workerAllocationsInput.value = JSON.stringify(allocations);
+        }}
+      }});
+    }}
+    syncDdsExpenseForm(form);
+  }});
 }}
 
 function ddsBulkCheckboxes() {{
@@ -18025,6 +18256,8 @@ def expense_category_requires_project(code: str, category_labels: dict[str, str]
         return False
     if is_cash_transfer_category(code, category_labels):
         return False
+    if is_labor_force_category(code, category_labels):
+        return False
     return True
 
 
@@ -18110,6 +18343,47 @@ def detach_labor_force_expense_projects(storage: Storage, owner_chat_id: int | N
         return 0
     codes = labor_force_category_codes(storage, owner_chat_id)
     return storage.detach_expense_projects_for_categories(owner_chat_id, codes, "admin")
+
+
+def parse_labor_allocations_payload(form: dict[str, str], worker_lookup: dict[int, object], amount: float) -> tuple[list[dict], int | None, str]:
+    try:
+        raw_allocations = json.loads(form.get("labor_allocations_json", "[]") or "[]")
+    except json.JSONDecodeError:
+        raw_allocations = []
+    if not isinstance(raw_allocations, list) or not raw_allocations:
+        raise ValueError("Добавьте хотя бы одного рабочего")
+    allocations = []
+    seen_worker_ids = set()
+    for item in raw_allocations:
+        if not isinstance(item, dict):
+            continue
+        try:
+            worker_id = int(item.get("employee_id", 0) or 0)
+        except (TypeError, ValueError):
+            worker_id = 0
+        worker = worker_lookup.get(worker_id)
+        if worker is None or (worker.employee_group or "admin") != "builders":
+            raise ValueError("Выберите рабочего")
+        if worker_id in seen_worker_ids:
+            raise ValueError("Один рабочий указан два раза")
+        seen_worker_ids.add(worker_id)
+        try:
+            worker_amount = round(float(item.get("amount", 0) or 0), 2)
+        except (TypeError, ValueError):
+            worker_amount = 0.0
+        if worker_amount <= 0:
+            raise ValueError("Укажите сумму для каждого рабочего")
+        allocations.append({
+            "employee_id": worker.id,
+            "employee_name": worker.full_name,
+            "amount": worker_amount,
+        })
+    allocations_total = round(sum(item["amount"] for item in allocations), 2)
+    if abs(allocations_total - round(amount, 2)) > 0.009:
+        raise ValueError("Сумма по рабочим должна совпадать с общей суммой расхода")
+    if len(allocations) == 1:
+        return allocations, allocations[0]["employee_id"], allocations[0]["employee_name"]
+    return allocations, None, f"{len(allocations)} рабочих"
 
 
 def expense_payment_source_label(code: str) -> str:
@@ -18636,7 +18910,7 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None, bank_account_balances: list[dict] | None = None, category_group_map: dict[str, set[str]] | None = None, payroll_employee_options_list: list[tuple[int, str]] | None = None, deposit_return_options_list: list[tuple[int, str]] | None = None, deposit_category_codes: set[str] | None = None) -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None, bank_account_balances: list[dict] | None = None, category_group_map: dict[str, set[str]] | None = None, payroll_employee_options_list: list[tuple[int, str]] | None = None, deposit_return_options_list: list[tuple[int, str]] | None = None, deposit_category_codes: set[str] | None = None, builder_employee_options_list: list[tuple[int, str]] | None = None, entry_worker_allocations: list[dict] | None = None) -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return summary_html or f'<div class="timeline-title">{escape(entry.title)}</div>'
     cashboxes = cashboxes or []
@@ -18721,9 +18995,60 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     )
     show_payment_source_field = not is_income_operation
     show_payroll_employee = (not is_income_operation) and display_category_code == "salary"
+    show_worker_allocations = (not is_income_operation) and is_labor_force_category(display_category_code, category_labels)
     payroll_employee_options = '<option value="">Выберите сотрудника</option>' + "".join(
         f'<option value="{employee_id}"{" selected" if employee_id == (entry.payroll_employee_id or 0) else ""}>{escape(employee_name)}</option>'
         for employee_id, employee_name in (payroll_employee_options_list or [])
+    )
+    worker_allocations = list(entry_worker_allocations or [])
+    if show_worker_allocations and not worker_allocations and entry.payroll_employee_id and entry.payroll_employee_name:
+        worker_allocations = [{
+            "employee_id": entry.payroll_employee_id,
+            "employee_name": entry.payroll_employee_name,
+            "amount": entry.amount,
+        }]
+    if show_worker_allocations and not worker_allocations:
+        worker_allocations = [{"employee_id": 0, "employee_name": "", "amount": 0}]
+    builder_option_base = list(builder_employee_options_list or [])
+    builder_option_map = {int(employee_id): employee_name for employee_id, employee_name in builder_option_base}
+    for item in worker_allocations:
+        employee_id = int(item.get("employee_id") or 0)
+        employee_name = str(item.get("employee_name") or "").strip()
+        if employee_id and employee_name and employee_id not in builder_option_map:
+            builder_option_map[employee_id] = employee_name
+            builder_option_base.append((employee_id, employee_name))
+    def worker_select_options(selected_employee_id: int) -> str:
+        return '<option value="">Выберите рабочего</option>' + "".join(
+            f'<option value="{employee_id}"{" selected" if employee_id == selected_employee_id else ""}>{escape(employee_name)}</option>'
+            for employee_id, employee_name in sorted(builder_option_base, key=lambda item: option_label_sort_key((str(item[0]), item[1])))
+        )
+    worker_rows = "".join(
+        f"""
+              <div class="dds-worker-row" data-dds-worker-row>
+                <select data-dds-worker>{worker_select_options(int(item.get("employee_id") or 0))}</select>
+                <input type="text" inputmode="decimal" placeholder="Сумма" data-dds-worker-amount value="{escape(format_amount_input(float(item.get("amount") or 0)) if float(item.get("amount") or 0) > 0 else '')}">
+                <button class="dds-worker-remove" type="button" data-dds-worker-remove aria-label="Убрать рабочего">×</button>
+              </div>
+        """
+        for item in worker_allocations
+    ) or f"""
+              <div class="dds-worker-row" data-dds-worker-row>
+                <select data-dds-worker>{worker_select_options(0)}</select>
+                <input type="text" inputmode="decimal" placeholder="Сумма" data-dds-worker-amount>
+                <button class="dds-worker-remove" type="button" data-dds-worker-remove aria-label="Убрать рабочего">×</button>
+              </div>
+    """
+    worker_allocations_json = json.dumps(
+        [
+            {
+                "employee_id": int(item.get("employee_id") or 0),
+                "employee_name": str(item.get("employee_name") or ""),
+                "amount": float(item.get("amount") or 0),
+            }
+            for item in worker_allocations
+            if int(item.get("employee_id") or 0) > 0 and float(item.get("amount") or 0) > 0
+        ],
+        ensure_ascii=False,
     )
     show_cash_withdrawal_fields = (
         not is_income_operation
@@ -18822,6 +19147,15 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <label>Сотрудник</label>
             <select name="payroll_employee_id" {'disabled' if not show_payroll_employee else ''} {'required' if show_payroll_employee else ''}>{payroll_employee_options}</select>
           </div>
+          <section class="dds-worker-field span-2{' is-hidden' if not show_worker_allocations else ''}" data-dds-worker-field>
+            <label>Кому и сколько выдали</label>
+            <div class="dds-worker-allocations" data-dds-worker-allocations>
+              {worker_rows}
+            </div>
+            <input type="hidden" name="labor_allocations_json" value="{escape(worker_allocations_json, quote=True)}" data-dds-labor-allocations-json>
+            <button class="secondary-btn mini" type="button" data-dds-worker-add{" disabled" if not show_worker_allocations else ""}>Добавить рабочего</button>
+            <div class="contract-table-subtle" data-dds-worker-total>Распределено: 0 ₽</div>
+          </section>
 	          <div class="field deposit-return-field{' is-hidden' if not show_deposit_return_fields else ''}" data-dds-deposit-return-field>
             <label>Какой залог вернулся</label>
             <select name="deposit_return_source_id" {'disabled' if not show_deposit_return_fields else ''} {'required' if show_deposit_return_fields else ''}>{deposit_return_options}</select>
@@ -21002,7 +21336,7 @@ def render_cashoperations_body(
 	            !isSalary &&
 	            !isLaborForce
 	          );
-          const groupDoesNotNeedProject = selectedGroup === "admin" || selectedGroup === "transfer" || isAdmin || isSalary || isTransfer;
+          const groupDoesNotNeedProject = selectedGroup === "admin" || selectedGroup === "transfer" || isAdmin || isSalary || isTransfer || isLaborForce;
           if (groupDoesNotNeedProject) {{
             projectSelect.value = "admin";
           }}
@@ -23879,6 +24213,11 @@ def render_expenses_section(
         for employee in storage.list_payroll_employees(owner_chat_id)
         if (employee.employee_group or "admin") == "admin"
     ]
+    builder_employee_options_list = [
+        (employee.id, f"{employee.full_name}{' · уволен' if not employee.is_active else ''}")
+        for employee in storage.list_payroll_employees(owner_chat_id)
+        if (employee.employee_group or "admin") == "builders"
+    ]
     bank_account_balances = storage.list_latest_bank_account_balances(owner_chat_id)
     bank_account_numbers = {str(item.get("account_number", "")).strip() for item in bank_account_balances}
     if project_filter and project_filter not in project_labels:
@@ -24107,6 +24446,10 @@ def render_expenses_section(
         f'<option value="{employee_id}">{escape(employee_name)}</option>'
         for employee_id, employee_name in payroll_employee_options_list
     )
+    form_builder_employee_options = '<option value="">Выберите рабочего</option>' + "".join(
+        f'<option value="{employee_id}">{escape(employee_name)}</option>'
+        for employee_id, employee_name in sorted(builder_employee_options_list, key=lambda item: option_label_sort_key((str(item[0]), item[1])))
+    )
     form_deposit_return_options = '<option value="">Выберите залог</option>' + "".join(
         f'<option value="{source_id}">{escape(label)}</option>'
         for source_id, label in deposit_return_option_items(source_entries)
@@ -24270,7 +24613,7 @@ def render_expenses_section(
             entry_has_adjustment = entry_needs_adjustment(entry)
             status_html = f'<span class="chip warn">Требует корректировки</span>' if entry_has_adjustment else '<span class="chip ok">Разнесено</span>'
             if has_permission(current_user, "expenses", "edit"):
-                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry_has_adjustment, extra_filter_query, cashboxes, bank_account_balances, category_group_map, payroll_employee_options_list, deposit_return_option_items(source_entries, entry), deposit_category_codes)
+                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry_has_adjustment, extra_filter_query, cashboxes, bank_account_balances, category_group_map, payroll_employee_options_list, deposit_return_option_items(source_entries, entry), deposit_category_codes, builder_employee_options_list, worker_allocations_by_entry.get(entry.id, []))
             return status_html
         def row_is_income_display(entry) -> bool:
             return (entry.operation_type or "expense") == "income" or (cash_withdrawal_as_income and is_cash_income_display(entry))
@@ -24393,6 +24736,7 @@ def render_expenses_section(
         if selected_day is not None
         else "Пока нет операций ДДС в этом срезе."
     )
+    worker_allocations_by_entry = storage.list_expense_worker_allocations(owner_chat_id, [entry.id for entry in source_entries])
     registry_tables_html = render_expenses_table(filtered_entries, registry_empty_text, False, True)
     bulk_actions_html = ""
     if can_bulk_delete:
@@ -24483,6 +24827,19 @@ def render_expenses_section(
                   <label>Сотрудник</label>
                   <select name="payroll_employee_id" disabled>{form_payroll_employee_options}</select>
                 </div>
+                <section class="dds-worker-field span-2 is-hidden" data-dds-worker-field>
+                  <label>Кому и сколько выдали</label>
+                  <div class="dds-worker-allocations" data-dds-worker-allocations>
+                    <div class="dds-worker-row" data-dds-worker-row>
+                      <select data-dds-worker>{form_builder_employee_options}</select>
+                      <input type="text" inputmode="decimal" placeholder="Сумма" data-dds-worker-amount>
+                      <button class="dds-worker-remove" type="button" data-dds-worker-remove aria-label="Убрать рабочего">×</button>
+                    </div>
+                  </div>
+                  <input type="hidden" name="labor_allocations_json" value="[]" data-dds-labor-allocations-json>
+                  <button class="secondary-btn mini" type="button" data-dds-worker-add disabled>Добавить рабочего</button>
+                  <div class="contract-table-subtle" data-dds-worker-total>Распределено: 0 ₽</div>
+                </section>
 	                <div class="field deposit-return-field is-hidden" data-dds-deposit-return-field>
                   <label>Какой залог вернулся</label>
                   <select name="deposit_return_source_id" disabled>{form_deposit_return_options}</select>
@@ -25917,9 +26274,9 @@ self.addEventListener("notificationclick", (event) => {
                 if not payroll_period_raw:
                     raise ValueError("Укажите период выплаты")
                 payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m")
-            if expense_group_code in {"admin", "transfer"} or category_code in {"admin", "salary"} or is_transfer_category:
+            if expense_group_code in {"admin", "transfer"} or category_code in {"admin", "salary"} or is_transfer_category or is_labor_category:
                 project_code = "admin"
-            if expense_group_code == "object" and project_code == "admin":
+            if expense_group_code == "object" and project_code == "admin" and not is_labor_category:
                 raise ValueError("Выберите объект")
             if project_code not in project_codes:
                 raise ValueError("Выберите объект")
@@ -31565,10 +31922,16 @@ self.addEventListener("notificationclick", (event) => {
             category_group_map = expense_category_group_map(storage, current_owner, entries)
             category_deposit_map = expense_category_deposit_map(storage, current_owner)
             category_codes = {code for code, _label in category_options_list}
+            payroll_employees = storage.list_payroll_employees(current_owner)
             payroll_employee_lookup = {
                 employee.id: employee
-                for employee in storage.list_payroll_employees(current_owner)
+                for employee in payroll_employees
                 if (employee.employee_group or "admin") == "admin"
+            }
+            builder_employee_lookup = {
+                employee.id: employee
+                for employee in payroll_employees
+                if (employee.employee_group or "admin") == "builders"
             }
             if category_code not in category_codes:
                 raise ValueError("Выберите статью расхода")
@@ -31582,13 +31945,15 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите группу расхода")
             if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels, category_group_map):
                 raise ValueError("Выберите статью для выбранной группы")
-            if not expense_group_requires_project(expense_group_code, operation_type):
+            is_income_operation = operation_type == "income"
+            is_labor_operation = (not is_income_operation) and is_labor_force_category(category_code, category_labels)
+            if is_labor_operation or not expense_group_requires_project(expense_group_code, operation_type):
                 project_code = "admin"
-            if project_code not in project_codes or (project_code == "admin" and expense_group_requires_project(expense_group_code, operation_type)):
+            project_required = expense_group_requires_project(expense_group_code, operation_type) and not is_labor_operation
+            if project_code not in project_codes or (project_code == "admin" and project_required):
                 raise ValueError("Выберите объект")
             if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
                 raise ValueError("Выберите источник оплаты")
-            is_income_operation = operation_type == "income"
             if is_income_operation and category_code == "income_unallocated":
                 needs_adjustment = True
             is_transfer_operation = (not is_income_operation) and is_cash_transfer_category(category_code, category_labels)
@@ -31629,10 +31994,11 @@ self.addEventListener("notificationclick", (event) => {
                     raise ValueError("Выберите залог, который вернулся")
                 if amount > deposit_open_amount(deposit_source, entries):
                     raise ValueError("Возврат залога не может быть больше открытого остатка")
-            needs_payroll_period = (not is_income_operation) and (category_code == "salary" or is_labor_force_category(category_code, category_labels))
+            needs_payroll_period = (not is_income_operation) and (category_code == "salary" or is_labor_operation)
             if needs_payroll_period and not payroll_period_raw:
                 raise ValueError("Укажите период ФОТ")
             payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if needs_payroll_period else ""
+            labor_allocations = []
             if (not is_income_operation) and category_code == "salary":
                 try:
                     selected_payroll_employee_id = int(form.get("payroll_employee_id", "0") or "0")
@@ -31643,6 +32009,12 @@ self.addEventListener("notificationclick", (event) => {
                     raise ValueError("Выберите сотрудника")
                 payroll_employee_id = payroll_employee.id
                 payroll_employee_name = payroll_employee.full_name
+                if not title:
+                    title = f"Выплата зарплаты: {payroll_employee_name}"
+            elif is_labor_operation:
+                labor_allocations, payroll_employee_id, payroll_employee_name = parse_labor_allocations_payload(form, builder_employee_lookup, amount)
+                if not title:
+                    title = f"Аванс рабочим: {payroll_employee_name}"
             if not title and not is_transfer_operation:
                 raise ValueError("Укажите наименование операции")
             selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
@@ -31749,7 +32121,8 @@ self.addEventListener("notificationclick", (event) => {
                 if commission_created:
                     notify_cash_expense_created(storage, current_owner, commission_amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
-            storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_employee_id=payroll_employee_id, payroll_employee_name=payroll_employee_name, payroll_period=payroll_period, expense_group_code=expense_group_code, operation_type=operation_type)
+            saved_expense_id = storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_employee_id=payroll_employee_id, payroll_employee_name=payroll_employee_name, payroll_period=payroll_period, expense_group_code=expense_group_code, operation_type=operation_type)
+            storage.set_expense_worker_allocations(current_owner, saved_expense_id, labor_allocations)
             if payment_source == "cash":
                 if is_income_operation:
                     notify_cash_income_created(storage, current_owner, amount, actor_name)
@@ -31809,10 +32182,16 @@ self.addEventListener("notificationclick", (event) => {
             category_group_map = expense_category_group_map(storage, current_owner, entries)
             category_deposit_map = expense_category_deposit_map(storage, current_owner)
             category_codes = {code for code, _label in category_options_list}
+            payroll_employees = storage.list_payroll_employees(current_owner)
             payroll_employee_lookup = {
                 employee.id: employee
-                for employee in storage.list_payroll_employees(current_owner)
+                for employee in payroll_employees
                 if (employee.employee_group or "admin") == "admin"
+            }
+            builder_employee_lookup = {
+                employee.id: employee
+                for employee in payroll_employees
+                if (employee.employee_group or "admin") == "builders"
             }
             if category_code not in category_codes:
                 raise ValueError("Выберите статью расхода")
@@ -31825,15 +32204,17 @@ self.addEventListener("notificationclick", (event) => {
             elif operation_type == "income":
                 expense_group_code = "income"
             is_income_operation = operation_type == "income"
+            is_labor_operation = (not is_income_operation) and is_labor_force_category(category_code, category_labels)
             if is_income_operation and category_code == "income_unallocated":
                 needs_adjustment = True
             if expense_group_code not in EXPENSE_GROUP_META:
                 raise ValueError("Выберите группу расхода")
             if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels, category_group_map):
                 raise ValueError("Выберите статью для выбранной группы")
-            if not expense_group_requires_project(expense_group_code, operation_type):
+            if is_labor_operation or not expense_group_requires_project(expense_group_code, operation_type):
                 project_code = "admin"
-            if project_code not in project_codes or (project_code == "admin" and expense_group_requires_project(expense_group_code, operation_type)):
+            project_required = expense_group_requires_project(expense_group_code, operation_type) and not is_labor_operation
+            if project_code not in project_codes or (project_code == "admin" and project_required):
                 raise ValueError("Выберите объект")
             is_transfer_operation = is_cash_transfer_category(category_code, category_labels)
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
@@ -31949,7 +32330,7 @@ self.addEventListener("notificationclick", (event) => {
                     )
                     notify_cash_income_created(storage, current_owner, amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
-            if not title:
+            if not title and category_code != "salary" and not is_labor_operation:
                 raise ValueError("Укажите наименование операции")
             if is_cashbox_linked_income_entry(existing_entry):
                 raise ValueError("Пополнение пары перевода редактируется через группу «Перевод между кассами»")
@@ -32051,10 +32432,11 @@ self.addEventListener("notificationclick", (event) => {
                     raise ValueError("Выберите залог, который вернулся")
                 if amount > deposit_open_amount(deposit_source, entries, entry_id):
                     raise ValueError("Возврат залога не может быть больше открытого остатка")
-            needs_payroll_period = (not is_income_operation) and (category_code == "salary" or is_labor_force_category(category_code, category_labels))
+            needs_payroll_period = (not is_income_operation) and (category_code == "salary" or is_labor_operation)
             if needs_payroll_period and not payroll_period_raw:
                 raise ValueError("Укажите период ФОТ")
             payroll_period = parse_month(payroll_period_raw).strftime("%Y-%m") if needs_payroll_period else ""
+            labor_allocations = []
             if (not is_income_operation) and category_code == "salary":
                 try:
                     selected_payroll_employee_id = int(form.get("payroll_employee_id", "0") or "0")
@@ -32065,6 +32447,12 @@ self.addEventListener("notificationclick", (event) => {
                     raise ValueError("Выберите сотрудника")
                 payroll_employee_id = payroll_employee.id
                 payroll_employee_name = payroll_employee.full_name
+                if not title:
+                    title = f"Выплата зарплаты: {payroll_employee_name}"
+            elif is_labor_operation:
+                labor_allocations, payroll_employee_id, payroll_employee_name = parse_labor_allocations_payload(form, builder_employee_lookup, amount)
+                if not title:
+                    title = f"Аванс рабочим: {payroll_employee_name}"
             preserved_markers = expense_comment_service_markers(existing_entry.comment, keep_transfer_markers=not existing_was_transfer_pair)
             preserved_markers.extend(deposit_markers(entry_deposit_amount, entry_deposit_return_source_id))
             selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
@@ -32074,6 +32462,7 @@ self.addEventListener("notificationclick", (event) => {
                 else " ".join(part for part in [*preserved_markers, expense_comment_without_service_markers(raw_comment)] if part)
             )
             storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, payroll_employee_id=payroll_employee_id, payroll_employee_name=payroll_employee_name, payroll_period=payroll_period, operation_type=operation_type, expense_group_code=expense_group_code)
+            storage.set_expense_worker_allocations(current_owner, entry_id, labor_allocations)
             if payment_source == "cash" and category_code != CASH_WITHDRAWAL_CATEGORY_CODE and not existing_was_visible_cash_operation:
                 if is_income_operation:
                     notify_cash_income_created(storage, current_owner, amount, actor_name)
