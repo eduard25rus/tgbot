@@ -8265,6 +8265,12 @@ def layout(
     .deposit-return-field.is-hidden {{
       display: none;
     }}
+    @media (max-width: 720px) {{
+      [data-dds-deposit-field],
+      [data-dds-deposit-amount-field] {{
+        grid-column: auto !important;
+      }}
+    }}
     .dds-payment-source-field.is-hidden {{
       display: none;
     }}
@@ -11064,6 +11070,7 @@ function syncDdsExpenseForm(form) {{
   const withdrawalCashboxSelect = form.querySelector('select[name="cash_withdrawal_cashbox"]');
   const withdrawalPercentInput = form.querySelector('input[name="cash_withdrawal_commission_percent"]');
   const depositFields = form.querySelectorAll("[data-dds-deposit-field]");
+  const depositAmountField = form.querySelector("[data-dds-deposit-amount-field]");
   const depositCheckbox = form.querySelector('input[name="has_deposit"]');
   const depositAmountInput = form.querySelector('input[name="deposit_amount"]');
   const depositReturnFields = form.querySelectorAll("[data-dds-deposit-return-field]");
@@ -11107,9 +11114,14 @@ function syncDdsExpenseForm(form) {{
     categorySelect.value === withdrawalCategoryCode &&
     sourceSelect.value === "bank"
   );
+  const selectedCategoryOption = categorySelect && categorySelect.selectedOptions.length
+    ? categorySelect.selectedOptions[0]
+    : null;
+  const categoryAllowsDeposit = Boolean(selectedCategoryOption && selectedCategoryOption.dataset.allowDeposit === "1");
   const isDepositReturn = Boolean(isIncomeForm && categorySelect && categorySelect.value === depositReturnCategoryCode);
   const canMarkDeposit = Boolean(
     !isIncomeForm &&
+    categoryAllowsDeposit &&
     selectedGroup !== "transfer" &&
     categorySelect &&
     categorySelect.value !== withdrawalCategoryCode &&
@@ -11201,6 +11213,9 @@ function syncDdsExpenseForm(form) {{
   }}
   if (depositAmountInput) {{
     const needsDepositAmount = canMarkDeposit && depositCheckbox && depositCheckbox.checked;
+    if (depositAmountField) {{
+      depositAmountField.classList.toggle("is-hidden", !needsDepositAmount);
+    }}
     depositAmountInput.disabled = !needsDepositAmount;
     depositAmountInput.required = Boolean(needsDepositAmount);
     if (!canMarkDeposit) {{
@@ -12265,7 +12280,10 @@ def render_directories_section(
 
     def expense_category_group_labels(category) -> list[str]:
         groups = expense_category_group_set(category.group_codes)
-        return [label for code, label in sorted_expense_groups() if code in groups]
+        labels = [label for code, label in sorted_expense_groups() if code in groups]
+        if getattr(category, "allow_deposit", False):
+            labels.append("Залоги")
+        return labels
 
     def expense_category_group_controls(group_codes: str) -> str:
         selected_groups = expense_category_group_set(group_codes)
@@ -12381,11 +12399,14 @@ def render_directories_section(
                 <label>Название категории</label>
                 <input type="text" name="label" value="{escape(category.label)}" required>
               </div>
-              <div class="field" style="grid-column: 1 / -1;">
-                <label>Где показывать в ДДС</label>
-                {expense_category_group_controls(category.group_codes)}
-              </div>
-              <button class="submit-btn" type="submit">Сохранить</button>
+	              <div class="field" style="grid-column: 1 / -1;">
+	                <label>Где показывать в ДДС</label>
+	                {expense_category_group_controls(category.group_codes)}
+	              </div>
+	              <label class="advance-toggle" style="grid-column: 1 / -1;">
+	                <input class="toggle-checkbox" type="checkbox" name="allow_deposit" value="1" {"checked" if getattr(category, "allow_deposit", False) else ""}> В этой категории бывают залоги
+	              </label>
+	              <button class="submit-btn" type="submit">Сохранить</button>
             </form>
             <div class="directory-category-actions">
               <form method="post" action="/directories/expense-categories/{category.id}/delete?owner={owner_chat_id}" onsubmit="return confirm('Удалить категорию расходов? Если она используется в ДДС, CRM остановит удаление и покажет связанные платежи.');">
@@ -12408,11 +12429,14 @@ def render_directories_section(
                 <label>Название категории</label>
                 <input type="text" name="label" placeholder="Например, Комиссии банка" required>
               </div>
-              <div class="field" style="grid-column: 1 / -1;">
-                <label>Где показывать в ДДС</label>
-                {expense_category_group_controls("object")}
-              </div>
-              <button class="submit-btn" type="submit">Сохранить категорию</button>
+	              <div class="field" style="grid-column: 1 / -1;">
+	                <label>Где показывать в ДДС</label>
+	                {expense_category_group_controls("object")}
+	              </div>
+	              <label class="advance-toggle" style="grid-column: 1 / -1;">
+	                <input class="toggle-checkbox" type="checkbox" name="allow_deposit" value="1"> В этой категории бывают залоги
+	              </label>
+	              <button class="submit-btn" type="submit">Сохранить категорию</button>
             </form>
           </div>
         </details>
@@ -17968,6 +17992,14 @@ def expense_category_group_map(storage: Storage, owner_chat_id: int, entries: It
     return group_map
 
 
+def expense_category_deposit_map(storage: Storage, owner_chat_id: int) -> dict[str, bool]:
+    return {
+        category.code: bool(getattr(category, "allow_deposit", False))
+        for category in storage.list_expense_categories(owner_chat_id)
+        if category.code
+    }
+
+
 def _normalized_cash_category_text(value: str) -> str:
     return " ".join((value or "").casefold().replace("ё", "е").split())
 
@@ -18604,10 +18636,11 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None, bank_account_balances: list[dict] | None = None, category_group_map: dict[str, set[str]] | None = None, payroll_employee_options_list: list[tuple[int, str]] | None = None, deposit_return_options_list: list[tuple[int, str]] | None = None) -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None, bank_account_balances: list[dict] | None = None, category_group_map: dict[str, set[str]] | None = None, payroll_employee_options_list: list[tuple[int, str]] | None = None, deposit_return_options_list: list[tuple[int, str]] | None = None, deposit_category_codes: set[str] | None = None) -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return summary_html or f'<div class="timeline-title">{escape(entry.title)}</div>'
     cashboxes = cashboxes or []
+    deposit_category_codes = deposit_category_codes or set()
     category_labels = dict(category_options_list)
     selected_group_code = infer_expense_group_code(entry, category_labels)
     is_income_operation = (entry.operation_type or "expense") == "income" or selected_group_code == "income"
@@ -18664,10 +18697,18 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         f'<option value="{code}"{" selected" if code == entry.project_code else ""}>{escape("Выберите" if project_needs_attention and code == "admin" else label)}</option>'
         for code, label in [("admin", "Выберите" if project_needs_attention or project_requires_selection else "Админ"), *sorted_dds_options((code, label) for code, label in project_options_list if code != "admin")]
     )
-    category_options = "".join(
-        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map) | ({display_group_code} if code == display_category_code and display_group_code else set()))))}"{" selected" if code == display_category_code else ""}>{escape("Выберите" if category_needs_attention and code == display_category_code else label)}</option>'
-        for code, label in sorted_dds_options(category_options_list)
-    )
+    category_option_parts = []
+    for code, label in sorted_dds_options(category_options_list):
+        option_groups = category_groups_for_code(code, category_labels, category_group_map)
+        if code == display_category_code and display_group_code:
+            option_groups = option_groups | {display_group_code}
+        allow_deposit_attr = "1" if code in deposit_category_codes else "0"
+        selected_attr = " selected" if code == display_category_code else ""
+        option_label = "Выберите" if category_needs_attention and code == display_category_code else label
+        category_option_parts.append(
+            f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(option_groups)))}" data-allow-deposit="{allow_deposit_attr}"{selected_attr}>{escape(option_label)}</option>'
+        )
+    category_options = "".join(category_option_parts)
     target_cashbox_options = "".join(
         f'<option value="{escape(str(cashbox.get("code", "")))}"{" selected" if str(cashbox.get("code", "")) == transfer_target_code else ""}>{escape(str(cashbox.get("label", "")))}</option>'
         for cashbox in cashboxes
@@ -18692,6 +18733,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     entry_deposit_amount = deposit_amount_from_entry(entry)
     show_deposit_fields = (
         not is_income_operation
+        and display_category_code in deposit_category_codes
         and display_group_code != "transfer"
         and display_category_code != CASH_WITHDRAWAL_CATEGORY_CODE
         and not is_cash_transfer_category(display_category_code, category_labels)
@@ -18748,11 +18790,18 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <select name="category_code" data-dds-category-select>{category_options}</select>
           </div>
           {bank_account_field_html}
-          <div class="field dds-payment-source-field{' is-hidden' if not show_payment_source_field else ''}" data-dds-payment-source-field>
-            <label>Источник оплаты</label>
-            <select name="payment_source" {'disabled' if not show_payment_source_field else ''}>{payment_source_options_html}</select>
-          </div>
-          <div class="field transfer-target-field{' is-hidden' if not is_transfer_pair_entry else ''}" data-dds-transfer-target-field>
+	          <div class="field dds-payment-source-field{' is-hidden' if not show_payment_source_field else ''}" data-dds-payment-source-field>
+	            <label>Источник оплаты</label>
+	            <select name="payment_source" {'disabled' if not show_payment_source_field else ''}>{payment_source_options_html}</select>
+	          </div>
+	          <label class="advance-toggle deposit-field{' is-hidden' if not show_deposit_fields else ''}" data-dds-deposit-field style="grid-column: 1;">
+	            <input class="toggle-checkbox" type="checkbox" name="has_deposit" value="1" {'checked' if entry_deposit_amount > 0 else ''} {'disabled' if not show_deposit_fields else ''}> В сумме есть залог
+	          </label>
+	          <div class="field deposit-field{' is-hidden' if not (show_deposit_fields and entry_deposit_amount > 0) else ''}" data-dds-deposit-amount-field style="grid-column: 2;">
+	            <label>Сумма залога</label>
+	            <input type="text" name="deposit_amount" data-money-input="1" value="{escape(format_amount_input(entry_deposit_amount)) if entry_deposit_amount > 0 else ''}" {'disabled' if not (show_deposit_fields and entry_deposit_amount > 0) else ''}>
+	          </div>
+	          <div class="field transfer-target-field{' is-hidden' if not is_transfer_pair_entry else ''}" data-dds-transfer-target-field>
             <label>Касса получателя</label>
             <select name="target_cashbox" {'disabled' if not is_transfer_pair_entry else ''}>{target_cashbox_options}</select>
           </div>
@@ -18773,14 +18822,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <label>Сотрудник</label>
             <select name="payroll_employee_id" {'disabled' if not show_payroll_employee else ''} {'required' if show_payroll_employee else ''}>{payroll_employee_options}</select>
           </div>
-          <label class="advance-toggle span-2 deposit-field{' is-hidden' if not show_deposit_fields else ''}" data-dds-deposit-field>
-            <input class="toggle-checkbox" type="checkbox" name="has_deposit" value="1" {'checked' if entry_deposit_amount > 0 else ''} {'disabled' if not show_deposit_fields else ''}> В сумме есть залог
-          </label>
-          <div class="field deposit-field{' is-hidden' if not show_deposit_fields else ''}" data-dds-deposit-field>
-            <label>Сумма залога</label>
-            <input type="text" name="deposit_amount" data-money-input="1" value="{escape(format_amount_input(entry_deposit_amount)) if entry_deposit_amount > 0 else ''}" {'disabled' if not (show_deposit_fields and entry_deposit_amount > 0) else ''}>
-          </div>
-          <div class="field deposit-return-field{' is-hidden' if not show_deposit_return_fields else ''}" data-dds-deposit-return-field>
+	          <div class="field deposit-return-field{' is-hidden' if not show_deposit_return_fields else ''}" data-dds-deposit-return-field>
             <label>Какой залог вернулся</label>
             <select name="deposit_return_source_id" {'disabled' if not show_deposit_return_fields else ''} {'required' if show_deposit_return_fields else ''}>{deposit_return_options}</select>
           </div>
@@ -18858,6 +18900,8 @@ def render_cashoperations_body(
     ]
     category_labels = dict(category_options_list)
     category_group_map = expense_category_group_map(storage, owner_chat_id, entries)
+    category_deposit_map = expense_category_deposit_map(storage, owner_chat_id)
+    deposit_category_codes = {code for code, allowed in category_deposit_map.items() if allowed}
     expense_group_options = "".join(
         f'<option value="{code}"{" selected" if code == "object" else ""}>{escape(label)}</option>'
         for code, label in sorted_expense_groups(["admin", "object", "transfer"])
@@ -18871,7 +18915,7 @@ def render_cashoperations_body(
         for code, label in sorted_dds_options((code, label) for code, label in project_options_list if code != "admin")
     ) or project_options
     category_options = "".join(
-        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map))))}">{escape(label)}</option>'
+        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map))))}" data-allow-deposit="{"1" if category_deposit_map.get(code, False) else "0"}">{escape(label)}</option>'
         for code, label in sorted_dds_options(category_options_list)
     )
     transfer_category_codes = [
@@ -19061,9 +19105,10 @@ def render_cashoperations_body(
               data-expense-project="{escape(entry.project_code)}"
               data-expense-transfer-target="{escape(transfer_target_code)}"
               data-expense-employee="{escape(str(entry.payroll_employee_id or ''))}"
-              data-expense-payroll-period="{escape(getattr(entry, 'payroll_period', '') or '')}"
-              data-expense-worker-allocations="{escape(worker_allocations_json, quote=True)}"
-              data-expense-title="{escape(entry.title)}"
+	              data-expense-payroll-period="{escape(getattr(entry, 'payroll_period', '') or '')}"
+	              data-expense-worker-allocations="{escape(worker_allocations_json, quote=True)}"
+	              data-expense-deposit-amount="{escape(format_amount_input(deposit_amount_from_entry(entry)) if deposit_amount_from_entry(entry) > 0 else '')}"
+	              data-expense-title="{escape(entry.title)}"
               data-expense-date="{entry.expense_date.isoformat()}"
               data-expense-comment="{escape(editable_comment(entry))}"
               data-expense-receipt="{"1" if getattr(entry, "receipt_file_path", "") else ""}"
@@ -19533,6 +19578,12 @@ def render_cashoperations_body(
             </label>
             <label class="is-hidden" data-cash-transfer-wrap>Куда отправляем
               <select name="target_cashbox" data-cash-transfer-target>{transfer_cashbox_options}</select>
+            </label>
+            <label class="is-hidden" data-cash-deposit-wrap>
+              <span><input type="checkbox" name="has_deposit" value="1" data-cash-deposit-toggle> В сумме есть залог</span>
+            </label>
+            <label class="is-hidden" data-cash-deposit-amount-wrap>Сумма залога
+              <input type="text" name="deposit_amount" inputmode="decimal" placeholder="0" data-cash-deposit-amount>
             </label>
             <label class="is-hidden" data-cash-employee-wrap>Кому? Сотрудник
               <select name="payroll_employee_id" data-cash-employee>{payroll_employee_options}</select>
@@ -20669,9 +20720,10 @@ def render_cashoperations_body(
         const cashCategoryOptions = categorySelect
           ? Array.from(categorySelect.options).map((option) => ({{
               value: option.value,
-              label: option.textContent,
-              groups: (option.dataset.expenseGroups || "object").split(/\\s+/).filter(Boolean)
-            }}))
+	              label: option.textContent,
+	              groups: (option.dataset.expenseGroups || "object").split(/\\s+/).filter(Boolean),
+	              allowDeposit: option.dataset.allowDeposit === "1"
+	            }}))
           : [];
         const projectSelect = document.querySelector("[data-cash-project]");
         const projectWrap = document.querySelector("[data-cash-project-wrap]");
@@ -20694,6 +20746,10 @@ def render_cashoperations_body(
         const workerTotal = document.querySelector("[data-cash-worker-total]");
         const transferWrap = document.querySelector("[data-cash-transfer-wrap]");
         const transferSelect = document.querySelector("[data-cash-transfer-target]");
+        const depositWrap = document.querySelector("[data-cash-deposit-wrap]");
+        const depositToggle = document.querySelector("[data-cash-deposit-toggle]");
+        const depositAmountWrap = document.querySelector("[data-cash-deposit-amount-wrap]");
+        const depositAmountInput = document.querySelector("[data-cash-deposit-amount]");
         const receiptInput = document.querySelector("[data-cash-receipt]");
         const receiptLabel = document.querySelector("[data-cash-receipt-label]");
         const receiptClear = document.querySelector("[data-cash-receipt-clear]");
@@ -20919,12 +20975,13 @@ def render_cashoperations_body(
             const currentCategory = categorySelect.value;
             const visibleOptions = cashCategoryOptions.filter((option) => option.groups.includes(selectedGroup));
             categorySelect.replaceChildren(...visibleOptions.map((item) => {{
-              const option = document.createElement("option");
-              option.value = item.value;
-              option.textContent = item.label;
-              option.dataset.expenseGroups = item.groups.join(" ");
-              return option;
-            }}));
+	              const option = document.createElement("option");
+	              option.value = item.value;
+	              option.textContent = item.label;
+	              option.dataset.expenseGroups = item.groups.join(" ");
+	              option.dataset.allowDeposit = item.allowDeposit ? "1" : "0";
+	              return option;
+	            }}));
             if (visibleOptions.some((option) => option.value === currentCategory)) {{
               categorySelect.value = currentCategory;
             }} else if (categorySelect.options.length) {{
@@ -20932,9 +20989,19 @@ def render_cashoperations_body(
             }}
           }}
           const isAdmin = categorySelect.value === "admin";
-          const isSalary = categorySelect.value === "salary";
-          const isTransfer = transferCategoryCodes.has(categorySelect.value);
-          const isLaborForce = laborForceCategoryCodes.has(categorySelect.value);
+	          const isSalary = categorySelect.value === "salary";
+	          const isTransfer = transferCategoryCodes.has(categorySelect.value);
+	          const isLaborForce = laborForceCategoryCodes.has(categorySelect.value);
+	          const selectedCategoryOption = categorySelect.selectedOptions && categorySelect.selectedOptions.length
+	            ? categorySelect.selectedOptions[0]
+	            : null;
+	          const canMarkDeposit = Boolean(
+	            selectedCategoryOption &&
+	            selectedCategoryOption.dataset.allowDeposit === "1" &&
+	            !isTransfer &&
+	            !isSalary &&
+	            !isLaborForce
+	          );
           const groupDoesNotNeedProject = selectedGroup === "admin" || selectedGroup === "transfer" || isAdmin || isSalary || isTransfer;
           if (groupDoesNotNeedProject) {{
             projectSelect.value = "admin";
@@ -20971,14 +21038,27 @@ def render_cashoperations_body(
           workerWrap && workerWrap.classList.toggle("is-hidden", !isLaborForce);
           if (workerAdd) workerAdd.disabled = !isLaborForce || {str(not bool(builder_employees)).lower()};
           syncLaborAllocationTotal();
-          if (transferSelect) {{
-            transferSelect.disabled = !isTransfer;
-            transferSelect.required = isTransfer;
-          }}
-          transferWrap && transferWrap.classList.toggle("is-hidden", !isTransfer);
-        }}
-        groupSelect && groupSelect.addEventListener("change", syncAdminProject);
-        categorySelect && categorySelect.addEventListener("change", syncAdminProject);
+	          if (transferSelect) {{
+	            transferSelect.disabled = !isTransfer;
+	            transferSelect.required = isTransfer;
+	          }}
+	          transferWrap && transferWrap.classList.toggle("is-hidden", !isTransfer);
+	          depositWrap && depositWrap.classList.toggle("is-hidden", !canMarkDeposit);
+	          if (depositToggle) {{
+	            depositToggle.disabled = !canMarkDeposit;
+	            if (!canMarkDeposit) depositToggle.checked = false;
+	          }}
+	          const needsDepositAmount = Boolean(canMarkDeposit && depositToggle && depositToggle.checked);
+	          depositAmountWrap && depositAmountWrap.classList.toggle("is-hidden", !needsDepositAmount);
+	          if (depositAmountInput) {{
+	            depositAmountInput.disabled = !needsDepositAmount;
+	            depositAmountInput.required = needsDepositAmount;
+	            if (!canMarkDeposit) depositAmountInput.value = "";
+	          }}
+	        }}
+	        groupSelect && groupSelect.addEventListener("change", syncAdminProject);
+	        categorySelect && categorySelect.addEventListener("change", syncAdminProject);
+	        depositToggle && depositToggle.addEventListener("change", syncAdminProject);
         function createWorkWorkerRow(employeeId, dayPart) {{
           if (!workWorkerTemplate) return null;
           const clone = workWorkerTemplate.cloneNode(true);
@@ -21211,8 +21291,10 @@ def render_cashoperations_body(
             const row = createLaborWorkerRow("", "");
             if (row) workerRows.appendChild(row);
           }}
-          if (workerAllocationsInput) workerAllocationsInput.value = "[]";
-          if (removeReceiptInput) removeReceiptInput.value = "";
+	          if (workerAllocationsInput) workerAllocationsInput.value = "[]";
+	          if (depositToggle) depositToggle.checked = false;
+	          if (depositAmountInput) depositAmountInput.value = "";
+	          if (removeReceiptInput) removeReceiptInput.value = "";
           currentExpenseHasReceipt = false;
           currentReceiptKind = "image";
           clearSelectedReceiptPreview();
@@ -21244,8 +21326,10 @@ def render_cashoperations_body(
           if (projectSelect) projectSelect.value = button.dataset.expenseProject || "admin";
           if (transferSelect) transferSelect.value = button.dataset.expenseTransferTarget || transferSelect.value;
           if (employeeSelect) employeeSelect.value = button.dataset.expenseEmployee || "";
-          if (payrollPeriodInput) payrollPeriodInput.value = button.dataset.expensePayrollPeriod || "{today.strftime('%Y-%m')}";
-          if (workerRows) {{
+	          if (payrollPeriodInput) payrollPeriodInput.value = button.dataset.expensePayrollPeriod || "{today.strftime('%Y-%m')}";
+	          if (depositToggle) depositToggle.checked = Boolean(button.dataset.expenseDepositAmount);
+	          if (depositAmountInput) depositAmountInput.value = button.dataset.expenseDepositAmount || "";
+	          if (workerRows) {{
             workerRows.innerHTML = "";
             let allocations = [];
             try {{
@@ -23786,6 +23870,8 @@ def render_expenses_section(
     project_labels = dict(project_options_list)
     category_labels = dict(category_options_list)
     category_group_map = expense_category_group_map(storage, owner_chat_id, entries)
+    category_deposit_map = expense_category_deposit_map(storage, owner_chat_id)
+    deposit_category_codes = {code for code, allowed in category_deposit_map.items() if allowed}
     project_colors = expense_project_color_map(storage, owner_chat_id)
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     payroll_employee_options_list = [
@@ -24014,7 +24100,7 @@ def render_expenses_section(
         for code, label in sorted_expense_groups(["admin", "income", "object", "transfer"])
     )
     form_category_options = "".join(
-        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map))))}">{escape(label)}</option>'
+        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map))))}" data-allow-deposit="{"1" if category_deposit_map.get(code, False) else "0"}">{escape(label)}</option>'
         for code, label in sorted_dds_options(category_options_list)
     )
     form_payroll_employee_options = '<option value="">Выберите сотрудника</option>' + "".join(
@@ -24184,7 +24270,7 @@ def render_expenses_section(
             entry_has_adjustment = entry_needs_adjustment(entry)
             status_html = f'<span class="chip warn">Требует корректировки</span>' if entry_has_adjustment else '<span class="chip ok">Разнесено</span>'
             if has_permission(current_user, "expenses", "edit"):
-                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry_has_adjustment, extra_filter_query, cashboxes, bank_account_balances, category_group_map, payroll_employee_options_list, deposit_return_option_items(source_entries, entry))
+                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry_has_adjustment, extra_filter_query, cashboxes, bank_account_balances, category_group_map, payroll_employee_options_list, deposit_return_option_items(source_entries, entry), deposit_category_codes)
             return status_html
         def row_is_income_display(entry) -> bool:
             return (entry.operation_type or "expense") == "income" or (cash_withdrawal_as_income and is_cash_income_display(entry))
@@ -24363,13 +24449,20 @@ def render_expenses_section(
                   <label>Сумма, ₽</label>
                   <input type="text" name="amount" data-money-input="1" placeholder="Например, 125000" required>
                 </div>
-                <div class="field">
-                  <label>Источник оплаты</label>
-                  <select name="payment_source">
-                    {expense_payment_source_options(default_cashbox_source, cashboxes)}
-                  </select>
-                </div>
-                <div class="field transfer-target-field is-hidden" data-dds-transfer-target-field>
+	                <div class="field">
+	                  <label>Источник оплаты</label>
+	                  <select name="payment_source">
+	                    {expense_payment_source_options(default_cashbox_source, cashboxes)}
+	                  </select>
+	                </div>
+	                <label class="advance-toggle deposit-field" data-dds-deposit-field style="grid-column: 1;">
+	                  <input class="toggle-checkbox" type="checkbox" name="has_deposit" value="1"> В сумме есть залог
+	                </label>
+	                <div class="field deposit-field is-hidden" data-dds-deposit-amount-field style="grid-column: 2;">
+	                  <label>Сумма залога</label>
+	                  <input type="text" name="deposit_amount" data-money-input="1" placeholder="Например, 5000" disabled>
+	                </div>
+	                <div class="field transfer-target-field is-hidden" data-dds-transfer-target-field>
                   <label>Касса получателя</label>
                   <select name="target_cashbox" disabled>{transfer_target_options}</select>
                 </div>
@@ -24390,14 +24483,7 @@ def render_expenses_section(
                   <label>Сотрудник</label>
                   <select name="payroll_employee_id" disabled>{form_payroll_employee_options}</select>
                 </div>
-                <label class="advance-toggle span-2 deposit-field" data-dds-deposit-field>
-                  <input class="toggle-checkbox" type="checkbox" name="has_deposit" value="1"> В сумме есть залог
-                </label>
-                <div class="field deposit-field" data-dds-deposit-field>
-                  <label>Сумма залога</label>
-                  <input type="text" name="deposit_amount" data-money-input="1" placeholder="Например, 5000" disabled>
-                </div>
-                <div class="field deposit-return-field is-hidden" data-dds-deposit-return-field>
+	                <div class="field deposit-return-field is-hidden" data-dds-deposit-return-field>
                   <label>Какой залог вернулся</label>
                   <select name="deposit_return_source_id" disabled>{form_deposit_return_options}</select>
                 </div>
@@ -25818,6 +25904,7 @@ self.addEventListener("notificationclick", (event) => {
             ]
             category_labels = dict(category_options_list)
             category_group_map = expense_category_group_map(storage, current_owner, entries)
+            category_deposit_map = expense_category_deposit_map(storage, current_owner)
             category_codes = {code for code, _label in category_options_list}
             if expense_group_code not in {"admin", "object", "transfer"}:
                 raise ValueError("Выберите группу расхода")
@@ -25904,10 +25991,26 @@ self.addEventListener("notificationclick", (event) => {
                 labor_allocations = []
             if not title:
                 raise ValueError("Укажите наименование траты")
+            entry_deposit_amount = 0.0
+            raw_has_deposit = form.get("has_deposit", "").strip() == "1"
+            if raw_has_deposit and not category_deposit_map.get(category_code, False):
+                raise ValueError("Для этой статьи залог не предусмотрен")
+            if (
+                raw_has_deposit
+                and category_deposit_map.get(category_code, False)
+                and not is_transfer_category
+                and category_code != "salary"
+                and not is_labor_category
+            ):
+                entry_deposit_amount = parse_amount(form.get("deposit_amount", "").strip())
+                if entry_deposit_amount <= 0:
+                    raise ValueError("Укажите сумму залога")
+                if entry_deposit_amount > amount:
+                    raise ValueError("Сумма залога не может быть больше суммы операции")
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             cashbox_marker = f"[{cashbox_labels.get(selected_cashbox, 'Касса')}]"
             employee_marker = f"[Сотрудник: {payroll_employee_name}]" if payroll_employee_name else ""
-            normalized_comment = " ".join(part for part in (cashbox_marker, employee_marker, comment) if part)
+            normalized_comment = " ".join(part for part in (cashbox_marker, employee_marker, *deposit_markers(entry_deposit_amount), expense_comment_without_service_markers(comment)) if part)
             if is_transfer_category:
                 source_label = cashbox_labels.get(selected_cashbox, "Касса")
                 target_label = cashbox_labels.get(target_cashbox, "Касса")
@@ -27240,9 +27343,10 @@ self.addEventListener("notificationclick", (event) => {
         try:
             label = form.get("label", "").strip()
             group_codes = expense_category_group_codes_from_form(form)
+            allow_deposit = form.get("allow_deposit", "").strip() == "1"
             if not label:
                 raise ValueError("Укажите название категории")
-            created = storage.add_expense_category(current_owner, label, group_codes)
+            created = storage.add_expense_category(current_owner, label, group_codes, allow_deposit)
             if created is None:
                 raise ValueError("Не удалось сохранить категорию")
             return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
@@ -27264,9 +27368,10 @@ self.addEventListener("notificationclick", (event) => {
         try:
             label = form.get("label", "").strip()
             group_codes = expense_category_group_codes_from_form(form)
+            allow_deposit = form.get("allow_deposit", "").strip() == "1"
             if not label:
                 raise ValueError("Укажите название категории")
-            if not storage.update_expense_category(current_owner, category_id, label, group_codes):
+            if not storage.update_expense_category(current_owner, category_id, label, group_codes, allow_deposit):
                 raise ValueError("Категория не найдена или уже существует")
             return redirect(start_response, f"/directories?owner={current_owner}&mode=expense-categories")
         except Exception as exc:
@@ -31458,6 +31563,7 @@ self.addEventListener("notificationclick", (event) => {
             category_options_list = expense_category_options(storage, current_owner, entries)
             category_labels = dict(category_options_list)
             category_group_map = expense_category_group_map(storage, current_owner, entries)
+            category_deposit_map = expense_category_deposit_map(storage, current_owner)
             category_codes = {code for code, _label in category_options_list}
             payroll_employee_lookup = {
                 employee.id: employee
@@ -31497,11 +31603,15 @@ self.addEventListener("notificationclick", (event) => {
                     raise ValueError("Касса списания и касса получателя должны отличаться")
             entry_deposit_amount = 0.0
             entry_deposit_return_source_id = 0
+            raw_has_deposit = form.get("has_deposit", "").strip() == "1"
+            if raw_has_deposit and not category_deposit_map.get(category_code, False):
+                raise ValueError("Для этой статьи залог не предусмотрен")
             can_mark_deposit = (
                 not is_income_operation
                 and not is_transfer_operation
                 and category_code != CASH_WITHDRAWAL_CATEGORY_CODE
-                and form.get("has_deposit", "").strip() == "1"
+                and raw_has_deposit
+                and category_deposit_map.get(category_code, False)
             )
             if can_mark_deposit:
                 entry_deposit_amount = parse_amount(form.get("deposit_amount", "").strip())
@@ -31697,6 +31807,7 @@ self.addEventListener("notificationclick", (event) => {
             category_options_list = expense_category_options(storage, current_owner, entries)
             category_labels = dict(category_options_list)
             category_group_map = expense_category_group_map(storage, current_owner, entries)
+            category_deposit_map = expense_category_deposit_map(storage, current_owner)
             category_codes = {code for code, _label in category_options_list}
             payroll_employee_lookup = {
                 employee.id: employee
@@ -31914,11 +32025,15 @@ self.addEventListener("notificationclick", (event) => {
                 storage.delete_expense_entry(current_owner, linked_commission.id)
             entry_deposit_amount = 0.0
             entry_deposit_return_source_id = 0
+            raw_has_deposit = form.get("has_deposit", "").strip() == "1"
+            if raw_has_deposit and not category_deposit_map.get(category_code, False):
+                raise ValueError("Для этой статьи залог не предусмотрен")
             can_mark_deposit = (
                 not is_income_operation
                 and not is_transfer_operation
                 and category_code != CASH_WITHDRAWAL_CATEGORY_CODE
-                and form.get("has_deposit", "").strip() == "1"
+                and raw_has_deposit
+                and category_deposit_map.get(category_code, False)
             )
             if can_mark_deposit:
                 entry_deposit_amount = parse_amount(form.get("deposit_amount", "").strip())
