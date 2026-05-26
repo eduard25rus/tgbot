@@ -8261,6 +8261,10 @@ def layout(
     .cash-withdrawal-field.is-hidden {{
       display: none;
     }}
+    .deposit-field.is-hidden,
+    .deposit-return-field.is-hidden {{
+      display: none;
+    }}
     .dds-payment-source-field.is-hidden {{
       display: none;
     }}
@@ -11055,9 +11059,15 @@ function syncDdsExpenseForm(form) {{
   const targetField = form.querySelector("[data-dds-transfer-target-field]");
   const targetSelect = targetField ? targetField.querySelector('select[name="target_cashbox"]') : null;
   const withdrawalCategoryCode = form.dataset.cashWithdrawalCategoryCode || "cash_withdrawal";
+  const depositReturnCategoryCode = form.dataset.depositReturnCategoryCode || "income_deposit_return";
   const withdrawalFields = form.querySelectorAll("[data-dds-cash-withdrawal-field]");
   const withdrawalCashboxSelect = form.querySelector('select[name="cash_withdrawal_cashbox"]');
   const withdrawalPercentInput = form.querySelector('input[name="cash_withdrawal_commission_percent"]');
+  const depositFields = form.querySelectorAll("[data-dds-deposit-field]");
+  const depositCheckbox = form.querySelector('input[name="has_deposit"]');
+  const depositAmountInput = form.querySelector('input[name="deposit_amount"]');
+  const depositReturnFields = form.querySelectorAll("[data-dds-deposit-return-field]");
+  const depositReturnSelect = form.querySelector('select[name="deposit_return_source_id"]');
   const selectedGroup = groupSelect ? groupSelect.value : "";
   const isIncomeForm = isIncomeOperation || selectedGroup === "income";
   if (categorySelect) {{
@@ -11096,6 +11106,14 @@ function syncDdsExpenseForm(form) {{
     sourceSelect &&
     categorySelect.value === withdrawalCategoryCode &&
     sourceSelect.value === "bank"
+  );
+  const isDepositReturn = Boolean(isIncomeForm && categorySelect && categorySelect.value === depositReturnCategoryCode);
+  const canMarkDeposit = Boolean(
+    !isIncomeForm &&
+    selectedGroup !== "transfer" &&
+    categorySelect &&
+    categorySelect.value !== withdrawalCategoryCode &&
+    !transferSet.has(categorySelect.value)
   );
   if (sourceField) {{
     sourceField.classList.toggle("is-hidden", isIncomeForm);
@@ -11170,6 +11188,33 @@ function syncDdsExpenseForm(form) {{
       withdrawalPercentInput.value = "";
     }} else if (!withdrawalPercentInput.value.trim()) {{
       withdrawalPercentInput.value = "0";
+    }}
+  }}
+  depositFields.forEach((field) => {{
+    field.classList.toggle("is-hidden", !canMarkDeposit);
+  }});
+  if (depositCheckbox) {{
+    depositCheckbox.disabled = !canMarkDeposit;
+    if (!canMarkDeposit) {{
+      depositCheckbox.checked = false;
+    }}
+  }}
+  if (depositAmountInput) {{
+    const needsDepositAmount = canMarkDeposit && depositCheckbox && depositCheckbox.checked;
+    depositAmountInput.disabled = !needsDepositAmount;
+    depositAmountInput.required = Boolean(needsDepositAmount);
+    if (!canMarkDeposit) {{
+      depositAmountInput.value = "";
+    }}
+  }}
+  depositReturnFields.forEach((field) => {{
+    field.classList.toggle("is-hidden", !isDepositReturn);
+  }});
+  if (depositReturnSelect) {{
+    depositReturnSelect.disabled = !isDepositReturn;
+    depositReturnSelect.required = isDepositReturn;
+    if (!isDepositReturn) {{
+      depositReturnSelect.value = "";
     }}
   }}
   updateDdsCashWithdrawalCommission(form);
@@ -11291,7 +11336,7 @@ document.addEventListener("change", (event) => {{
     syncDdsSourceDetail(sourceFilter.closest('[data-dds-filter-form="1"]'));
     return;
   }}
-  const ddsControl = event.target.closest("[data-dds-group-select], [data-dds-category-select], [data-dds-expense-form='1'] select[name='project_code'], [data-dds-expense-form='1'] select[name='payment_source'], [data-dds-expense-form='1'] select[name='payroll_employee_id']");
+  const ddsControl = event.target.closest("[data-dds-group-select], [data-dds-category-select], [data-dds-expense-form='1'] select[name='project_code'], [data-dds-expense-form='1'] select[name='payment_source'], [data-dds-expense-form='1'] select[name='payroll_employee_id'], [data-dds-expense-form='1'] input[name='has_deposit'], [data-dds-expense-form='1'] select[name='deposit_return_source_id']");
   if (!ddsControl) {{
     return;
   }}
@@ -12204,6 +12249,7 @@ def render_directories_section(
             "income_unallocated": "Поступления, которые еще нужно разобрать и привязать к объекту или основанию.",
             "income_work_payment": "Оплата выполненных работ по объекту, поступившая от заказчика.",
             "income_loan": "Заемные поступления, возвраты и временное финансирование.",
+            "income_deposit_return": "Возврат ранее оплаченного залога с привязкой к исходному платежу.",
             "other": "Редкие расходы, которые пока не подходят ни под одну отдельную категорию.",
         }
         descriptions_by_label = {
@@ -17675,6 +17721,9 @@ CASH_TRANSFER_CATEGORY_LABELS = {
 }
 CASH_WITHDRAWAL_COMMISSION_MARKER = "Комиссия по выводу"
 CASH_WITHDRAWAL_COMMISSION_PERCENT_MARKER = "Процент комиссии"
+INCOME_DEPOSIT_RETURN_CATEGORY_CODE = "income_deposit_return"
+DEPOSIT_MARKER = "Залог"
+DEPOSIT_RETURN_MARKER = "Возврат залога"
 LABOR_FORCE_CATEGORY_CODES = {
     "labor_force",
     "workforce",
@@ -17730,6 +17779,7 @@ def expenses_filter_args_from_query(query: dict[str, list[str]]) -> dict:
         "source_filter": query.get("source", [""])[0].strip(),
         "account_filter": query.get("account", [""])[0].strip(),
         "cashbox_filter": query.get("cashbox", [""])[0].strip(),
+        "deposit_filter": query.get("deposit", [""])[0].strip(),
         "query_filter": query.get("q", [""])[0].strip(),
         "date_from": date_from,
         "date_to": date_to,
@@ -17741,6 +17791,7 @@ def expenses_extra_query_from_filters(filters: dict) -> str:
         ("source", filters.get("source_filter", "")),
         ("account", filters.get("account_filter", "")),
         ("cashbox", filters.get("cashbox_filter", "")),
+        ("deposit", filters.get("deposit_filter", "")),
         ("q", filters.get("query_filter", "")),
         ("date_from", filters["date_from"].isoformat() if filters.get("date_from") else ""),
         ("date_to", filters["date_to"].isoformat() if filters.get("date_to") else ""),
@@ -18179,7 +18230,7 @@ def expense_entry_payment_source_label(entry, cashboxes: list[dict]) -> str:
 EXPENSE_COMMENT_SERVICE_MARKER_RE = re.compile(
     r"\[(?:Касса [^\]]+|Источник:\s*[^\]]+|Касса получателя:\s*[^\]]+|"
     r"Связанный расход:\s*\d+|Комиссия по выводу:\s*\d+|"
-    r"Процент комиссии:\s*[^\]]+|Сотрудник:\s*[^\]]+)\]"
+    r"Процент комиссии:\s*[^\]]+|Залог:\s*[^\]]+|Возврат залога:\s*\d+|Сотрудник:\s*[^\]]+)\]"
 )
 
 
@@ -18194,6 +18245,8 @@ def expense_comment_service_markers(comment: str, keep_cashbox: bool = False, ke
         marker = match.group(0)
         marker_lower = marker.casefold()
         if marker_lower.startswith("[комиссия по выводу:") or marker_lower.startswith("[процент комиссии:"):
+            continue
+        if marker_lower.startswith("[залог:") or marker_lower.startswith("[возврат залога:"):
             continue
         if not keep_cashbox and marker.casefold().startswith("[касса "):
             continue
@@ -18211,6 +18264,62 @@ def expense_comment_with_cashbox_marker(comment: str, cashbox_label_value: str, 
     markers = [f"[{cashbox_label_value}]"] if cashbox_label_value else []
     markers.extend(preserved_markers or [])
     return " ".join(part for part in [*markers, expense_comment_without_service_markers(comment)] if part)
+
+
+def deposit_amount_from_entry(entry) -> float:
+    match = re.search(r"\[Залог:\s*([^\]]+)\]", entry.comment or "", flags=re.IGNORECASE)
+    if not match:
+        return 0.0
+    try:
+        return round(parse_amount(match.group(1).replace("₽", "")), 2)
+    except ValueError:
+        return 0.0
+
+
+def deposit_return_source_id(entry) -> int:
+    match = re.search(r"\[Возврат залога:\s*(\d+)\]", entry.comment or "", flags=re.IGNORECASE)
+    return int(match.group(1)) if match else 0
+
+
+def deposit_markers(deposit_amount: float = 0.0, deposit_return_id: int = 0) -> list[str]:
+    markers = []
+    if deposit_amount > 0:
+        markers.append(f"[{DEPOSIT_MARKER}: {format_amount_input(deposit_amount)}]")
+    if deposit_return_id > 0:
+        markers.append(f"[{DEPOSIT_RETURN_MARKER}: {deposit_return_id}]")
+    return markers
+
+
+def deposit_returned_amount(entries, source_entry_id: int, exclude_entry_id: int = 0) -> float:
+    return round(sum(
+        entry.amount or 0
+        for entry in entries
+        if entry.id != exclude_entry_id
+        and entry.deleted_at is None
+        and deposit_return_source_id(entry) == source_entry_id
+    ), 2)
+
+
+def deposit_open_amount(entry, entries, exclude_entry_id: int = 0) -> float:
+    deposit_amount = deposit_amount_from_entry(entry)
+    if deposit_amount <= 0:
+        return 0.0
+    return round(max(0.0, deposit_amount - deposit_returned_amount(entries, entry.id, exclude_entry_id)), 2)
+
+
+def deposit_return_option_items(entries, current_entry=None) -> list[tuple[int, str]]:
+    selected_source_id = deposit_return_source_id(current_entry) if current_entry is not None else 0
+    current_entry_id = current_entry.id if current_entry is not None else 0
+    items: list[tuple[int, str]] = []
+    for entry in entries:
+        if entry.deleted_at is not None or deposit_amount_from_entry(entry) <= 0:
+            continue
+        open_amount = deposit_open_amount(entry, entries, current_entry_id)
+        if open_amount <= 0 and entry.id != selected_source_id:
+            continue
+        label = f"{format_date(entry.expense_date)} · {entry.title or 'Залог'} · остаток {format_amount(open_amount)}"
+        items.append((entry.id, label))
+    return sorted(items, key=lambda item: item[1].casefold())
 
 
 def parse_commission_percent(raw_value: str) -> float:
@@ -18495,7 +18604,7 @@ def expense_status_control(owner_chat_id: int, entry, current_user: dict | None,
     """
 
 
-def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None, bank_account_balances: list[dict] | None = None, category_group_map: dict[str, set[str]] | None = None, payroll_employee_options_list: list[tuple[int, str]] | None = None) -> str:
+def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, active_tab: str, project_options_list: list[tuple[str, str]], category_options_list: list[tuple[str, str]], project_filter: str = "", category_filter: str = "", selected_day: date | None = None, day_anchor: date | None = None, base_path: str = "/expenses", adjustment_filter: str = "", summary_html: str | None = None, clear_adjustment_on_open: bool = False, extra_query: str = "", cashboxes: list[dict] | None = None, bank_account_balances: list[dict] | None = None, category_group_map: dict[str, set[str]] | None = None, payroll_employee_options_list: list[tuple[int, str]] | None = None, deposit_return_options_list: list[tuple[int, str]] | None = None) -> str:
     if not has_permission(current_user, "expenses", "edit"):
         return summary_html or f'<div class="timeline-title">{escape(entry.title)}</div>'
     cashboxes = cashboxes or []
@@ -18580,6 +18689,19 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         and display_category_code == CASH_WITHDRAWAL_CATEGORY_CODE
         and (entry.payment_source or "bank") == "bank"
     )
+    entry_deposit_amount = deposit_amount_from_entry(entry)
+    show_deposit_fields = (
+        not is_income_operation
+        and display_group_code != "transfer"
+        and display_category_code != CASH_WITHDRAWAL_CATEGORY_CODE
+        and not is_cash_transfer_category(display_category_code, category_labels)
+    )
+    entry_deposit_return_source_id = deposit_return_source_id(entry)
+    show_deposit_return_fields = is_income_operation and display_category_code == INCOME_DEPOSIT_RETURN_CATEGORY_CODE
+    deposit_return_options = '<option value="">Выберите залог</option>' + "".join(
+        f'<option value="{source_id}"{" selected" if source_id == entry_deposit_return_source_id else ""}>{escape(label)}</option>'
+        for source_id, label in (deposit_return_options_list or [])
+    )
     bank_account_number = bank_account_number_from_expense_entry(entry)
     bank_account_label = bank_account_label_for_number(bank_account_number, bank_account_balances)
     is_imported_bank_entry = bool(entry.import_source) and (entry.payment_source or "bank") == "bank" and bool(bank_account_label)
@@ -18607,7 +18729,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     <details id="expense-entry-{entry.id}" class="status-menu expense-editor-menu" data-expense-editor-id="{entry.id}">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
       <div class="status-popover expense-editor-popover" data-modal-title="Редактирование операции ДДС">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-operation-type="{escape(effective_operation_type)}" data-needs-adjustment="{'1' if form_needs_attention else '0'}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-deposit-return-category-code="{INCOME_DEPOSIT_RETURN_CATEGORY_CODE}" data-operation-type="{escape(effective_operation_type)}" data-needs-adjustment="{'1' if form_needs_attention else '0'}">
           <input type="hidden" name="operation_type" value="{escape(effective_operation_type)}">
           <div class="field">
             <label>Дата операции</label>
@@ -18650,6 +18772,17 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
           <div class="field payroll-employee-field{' is-hidden' if not show_payroll_employee else ''}{payroll_employee_attention_class}" data-dds-payroll-employee-field>
             <label>Сотрудник</label>
             <select name="payroll_employee_id" {'disabled' if not show_payroll_employee else ''} {'required' if show_payroll_employee else ''}>{payroll_employee_options}</select>
+          </div>
+          <label class="advance-toggle span-2 deposit-field{' is-hidden' if not show_deposit_fields else ''}" data-dds-deposit-field>
+            <input class="toggle-checkbox" type="checkbox" name="has_deposit" value="1" {'checked' if entry_deposit_amount > 0 else ''} {'disabled' if not show_deposit_fields else ''}> В сумме есть залог
+          </label>
+          <div class="field deposit-field{' is-hidden' if not show_deposit_fields else ''}" data-dds-deposit-field>
+            <label>Сумма залога</label>
+            <input type="text" name="deposit_amount" data-money-input="1" value="{escape(format_amount_input(entry_deposit_amount)) if entry_deposit_amount > 0 else ''}" {'disabled' if not (show_deposit_fields and entry_deposit_amount > 0) else ''}>
+          </div>
+          <div class="field deposit-return-field{' is-hidden' if not show_deposit_return_fields else ''}" data-dds-deposit-return-field>
+            <label>Какой залог вернулся</label>
+            <select name="deposit_return_source_id" {'disabled' if not show_deposit_return_fields else ''} {'required' if show_deposit_return_fields else ''}>{deposit_return_options}</select>
           </div>
           <div class="field span-2">
             <label>Наименование операции</label>
@@ -23639,6 +23772,7 @@ def render_expenses_section(
     source_filter: str = "",
     account_filter: str = "",
     cashbox_filter: str = "",
+    deposit_filter: str = "",
     query_filter: str = "",
     date_from: date | None = None,
     date_to: date | None = None,
@@ -23674,6 +23808,8 @@ def render_expenses_section(
         account_filter = ""
     if source_filter != "cash" or cashbox_filter not in {str(item.get("code", "")) for item in cashboxes}:
         cashbox_filter = ""
+    if deposit_filter not in {"", "1"}:
+        deposit_filter = ""
     query_filter = " ".join(query_filter.split())
     if date_from and date_to and date_from > date_to:
         date_from, date_to = date_to, date_from
@@ -23757,6 +23893,10 @@ def render_expenses_section(
         if selected_day is not None and date_from is None and date_to is None and entry.expense_date != selected_day:
             return False
         return (date_from is None or entry.expense_date >= date_from) and (date_to is None or entry.expense_date <= date_to)
+    def entry_matches_deposit_filter(entry) -> bool:
+        if not deposit_filter:
+            return True
+        return deposit_amount_from_entry(entry) > 0 or deposit_return_source_id(entry) > 0
     def entry_matches_registry_filter(entry, include_group: bool = True, include_query: bool = True) -> bool:
         return (
             (not project_filter or entry.project_code == project_filter)
@@ -23765,6 +23905,7 @@ def render_expenses_section(
             and entry_matches_source_filter(entry)
             and entry_matches_account_filter(entry)
             and (not cashbox_filter or cashbox_code_from_entry(entry, cashboxes) == cashbox_filter)
+            and entry_matches_deposit_filter(entry)
             and (not include_query or entry_matches_query(entry))
             and entry_matches_date_filter(entry)
         )
@@ -23880,6 +24021,10 @@ def render_expenses_section(
         f'<option value="{employee_id}">{escape(employee_name)}</option>'
         for employee_id, employee_name in payroll_employee_options_list
     )
+    form_deposit_return_options = '<option value="">Выберите залог</option>' + "".join(
+        f'<option value="{source_id}">{escape(label)}</option>'
+        for source_id, label in deposit_return_option_items(source_entries)
+    )
     expense_group_options = "".join(
         f'<option value="{code}"{" selected" if code == "object" else ""}>{escape(label)}</option>'
         for code, label in sorted_expense_groups(["admin", "object", "transfer"])
@@ -23936,14 +24081,15 @@ def render_expenses_section(
     )
     active_filter_count = sum(
         1
-        for value in [project_filter, category_filter, adjustment_filter, source_filter, account_filter, cashbox_filter, query_filter, date_from, date_to]
+        for value in [project_filter, category_filter, adjustment_filter, source_filter, account_filter, cashbox_filter, deposit_filter, query_filter, date_from, date_to]
         if value
     )
-    def build_extra_filter_query(*, include_dates: bool = True) -> str:
+    def build_extra_filter_query(*, include_dates: bool = True, deposit_value: str | None = None) -> str:
         parts = [
             ("source", source_filter),
             ("account", account_filter),
             ("cashbox", cashbox_filter),
+            ("deposit", deposit_filter if deposit_value is None else deposit_value),
             ("q", query_filter),
         ]
         if include_dates:
@@ -23953,7 +24099,7 @@ def render_expenses_section(
             ])
         return "".join(f"&{name}={quote_plus(value)}" for name, value in parts if value)
     extra_filter_query = build_extra_filter_query()
-    def build_expenses_href(*, tab: str | None = None, project: str | None = None, category: str | None = None, adjustment: str | None = None, day: date | None = None, include_dates: bool = True) -> str:
+    def build_expenses_href(*, tab: str | None = None, project: str | None = None, category: str | None = None, adjustment: str | None = None, deposit: str | None = None, day: date | None = None, include_dates: bool = True) -> str:
         return (
             f"/expenses?owner={owner_chat_id}"
             f"&tab={quote_plus(tab or active_tab)}"
@@ -23961,7 +24107,7 @@ def render_expenses_section(
             f"&category={quote_plus(category if category is not None else category_filter)}"
             f"&adjustment={quote_plus(adjustment if adjustment is not None else adjustment_filter)}"
             f"&day={quote_plus(day.isoformat() if day else '')}"
-            f"{build_extra_filter_query(include_dates=include_dates)}"
+            f"{build_extra_filter_query(include_dates=include_dates, deposit_value=deposit)}"
         )
     can_bulk_delete = has_permission(current_user, "expenses", "edit")
     bulk_delete_action = (
@@ -24038,7 +24184,7 @@ def render_expenses_section(
             entry_has_adjustment = entry_needs_adjustment(entry)
             status_html = f'<span class="chip warn">Требует корректировки</span>' if entry_has_adjustment else '<span class="chip ok">Разнесено</span>'
             if has_permission(current_user, "expenses", "edit"):
-                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry_has_adjustment, extra_filter_query, cashboxes, bank_account_balances, category_group_map, payroll_employee_options_list)
+                return expense_entry_editor(owner_chat_id, entry, current_user, active_tab, project_options_list, category_options_list, project_filter, category_filter, selected_day, None, "/expenses", adjustment_filter, status_html, entry_has_adjustment, extra_filter_query, cashboxes, bank_account_balances, category_group_map, payroll_employee_options_list, deposit_return_option_items(source_entries, entry))
             return status_html
         def row_is_income_display(entry) -> bool:
             return (entry.operation_type or "expense") == "income" or (cash_withdrawal_as_income and is_cash_income_display(entry))
@@ -24070,6 +24216,17 @@ def render_expenses_section(
             ):
                 return '<span class="chip danger">Сотрудник не выбран</span>'
             return ""
+        def deposit_chip(entry) -> str:
+            deposit_amount = deposit_amount_from_entry(entry)
+            if deposit_amount > 0:
+                open_amount = deposit_open_amount(entry, source_entries)
+                css = "warn" if open_amount > 0 else "ok"
+                label = f"Залог открыт: {format_amount(open_amount)}" if open_amount > 0 else "Залог возвращен"
+                return f'<span class="chip {css}">{escape(label)}</span>'
+            source_id = deposit_return_source_id(entry)
+            if source_id:
+                return f'<span class="chip ok">Возврат залога #{source_id}</span>'
+            return ""
         def render_single_entry(entry) -> str:
             amount_is_income = row_is_income_display(entry)
             return f"""
@@ -24083,6 +24240,7 @@ def render_expenses_section(
                       {project_chip(entry)}
                       {category_chip(entry)}
                       {payroll_employee_chip(entry)}
+                      {deposit_chip(entry)}
                     </div>
                   </td>
                   <td class="nowrap"><span class="dds-amount{' income' if amount_is_income else ''}">{"+" if amount_is_income else "-"}{format_amount(entry.amount)}</span></td>
@@ -24174,7 +24332,7 @@ def render_expenses_section(
                   <div class="panel-sub">Ручное добавление списания в ДДС: объект, группа, сумма, источник и комментарий.</div>
                 </div>
               </div>
-              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-operation-type="expense" data-needs-adjustment="0">
+              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-deposit-return-category-code="{INCOME_DEPOSIT_RETURN_CATEGORY_CODE}" data-operation-type="expense" data-needs-adjustment="0">
                 <div class="field">
                   <label>Дата операции</label>
                   <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
@@ -24232,6 +24390,17 @@ def render_expenses_section(
                   <label>Сотрудник</label>
                   <select name="payroll_employee_id" disabled>{form_payroll_employee_options}</select>
                 </div>
+                <label class="advance-toggle span-2 deposit-field" data-dds-deposit-field>
+                  <input class="toggle-checkbox" type="checkbox" name="has_deposit" value="1"> В сумме есть залог
+                </label>
+                <div class="field deposit-field" data-dds-deposit-field>
+                  <label>Сумма залога</label>
+                  <input type="text" name="deposit_amount" data-money-input="1" placeholder="Например, 5000" disabled>
+                </div>
+                <div class="field deposit-return-field is-hidden" data-dds-deposit-return-field>
+                  <label>Какой залог вернулся</label>
+                  <select name="deposit_return_source_id" disabled>{form_deposit_return_options}</select>
+                </div>
                 <div class="field span-2">
                   <label>Комментарий</label>
                   <textarea name="comment" placeholder="Коротко фиксируем, на что именно ушли деньги"></textarea>
@@ -24261,6 +24430,7 @@ def render_expenses_section(
         <input type="hidden" name="tab" value="{escape(active_tab)}">
         <input type="hidden" name="day" value="{escape(selected_day_input)}">
         {f'<input type="hidden" name="adjustment" value="{escape(adjustment_filter)}">' if adjustment_filter else ''}
+        {f'<input type="hidden" name="deposit" value="{escape(deposit_filter)}">' if deposit_filter else ''}
         <div class="field">
           <label>Поиск</label>
           <input type="search" name="q" value="{escape(query_filter)}" placeholder="Связь, контрагент, номер, автор">
@@ -24378,7 +24548,8 @@ def render_expenses_section(
         <div class="action-row dds-top-actions">
           {dds_actions_html}
           <a class="secondary-btn mini{' attention' if needs_adjustment_count else ''}" href="{build_expenses_href(adjustment='needs', day=None)}">Неразнесенные</a>
-          <a class="secondary-btn mini" href="{build_expenses_href(adjustment='', day=None)}">Все операции</a>
+          <a class="secondary-btn mini{' is-active' if deposit_filter else ''}" href="{build_expenses_href(deposit='' if deposit_filter else '1', day=None)}">Залоги</a>
+          <a class="secondary-btn mini" href="{build_expenses_href(adjustment='', deposit='', day=None)}">Все операции</a>
         </div>
       </div>
       <div class="expenses-day-carousel" data-expenses-day-carousel="1">
@@ -31324,6 +31495,30 @@ self.addEventListener("notificationclick", (event) => {
                     raise ValueError("Выберите кассу получателя")
                 if target_cashbox_code == selected_cashbox_code:
                     raise ValueError("Касса списания и касса получателя должны отличаться")
+            entry_deposit_amount = 0.0
+            entry_deposit_return_source_id = 0
+            can_mark_deposit = (
+                not is_income_operation
+                and not is_transfer_operation
+                and category_code != CASH_WITHDRAWAL_CATEGORY_CODE
+                and form.get("has_deposit", "").strip() == "1"
+            )
+            if can_mark_deposit:
+                entry_deposit_amount = parse_amount(form.get("deposit_amount", "").strip())
+                if entry_deposit_amount <= 0:
+                    raise ValueError("Укажите сумму залога")
+                if entry_deposit_amount > amount:
+                    raise ValueError("Сумма залога не может быть больше суммы операции")
+            if is_income_operation and category_code == INCOME_DEPOSIT_RETURN_CATEGORY_CODE:
+                try:
+                    entry_deposit_return_source_id = int(form.get("deposit_return_source_id", "0") or "0")
+                except ValueError:
+                    entry_deposit_return_source_id = 0
+                deposit_source = next((entry for entry in entries if entry.id == entry_deposit_return_source_id and deposit_amount_from_entry(entry) > 0), None)
+                if deposit_source is None:
+                    raise ValueError("Выберите залог, который вернулся")
+                if amount > deposit_open_amount(deposit_source, entries):
+                    raise ValueError("Возврат залога не может быть больше открытого остатка")
             needs_payroll_period = (not is_income_operation) and (category_code == "salary" or is_labor_force_category(category_code, category_labels))
             if needs_payroll_period and not payroll_period_raw:
                 raise ValueError("Укажите период ФОТ")
@@ -31341,7 +31536,12 @@ self.addEventListener("notificationclick", (event) => {
             if not title and not is_transfer_operation:
                 raise ValueError("Укажите наименование операции")
             selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
-            comment = expense_comment_with_cashbox_marker(raw_comment, selected_cashbox_label) if payment_source == "cash" else expense_comment_without_service_markers(raw_comment)
+            extra_markers = deposit_markers(entry_deposit_amount, entry_deposit_return_source_id)
+            comment = (
+                expense_comment_with_cashbox_marker(raw_comment, selected_cashbox_label, extra_markers)
+                if payment_source == "cash"
+                else " ".join(part for part in [*extra_markers, expense_comment_without_service_markers(raw_comment)] if part)
+            )
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             if is_transfer_operation:
                 target_cashbox_label = cashbox_label_from_directory(cashboxes, target_cashbox_code)
@@ -31712,6 +31912,30 @@ self.addEventListener("notificationclick", (event) => {
             linked_commission = linked_cash_withdrawal_commission_entry(entries, existing_entry.id)
             if linked_commission is not None:
                 storage.delete_expense_entry(current_owner, linked_commission.id)
+            entry_deposit_amount = 0.0
+            entry_deposit_return_source_id = 0
+            can_mark_deposit = (
+                not is_income_operation
+                and not is_transfer_operation
+                and category_code != CASH_WITHDRAWAL_CATEGORY_CODE
+                and form.get("has_deposit", "").strip() == "1"
+            )
+            if can_mark_deposit:
+                entry_deposit_amount = parse_amount(form.get("deposit_amount", "").strip())
+                if entry_deposit_amount <= 0:
+                    raise ValueError("Укажите сумму залога")
+                if entry_deposit_amount > amount:
+                    raise ValueError("Сумма залога не может быть больше суммы операции")
+            if is_income_operation and category_code == INCOME_DEPOSIT_RETURN_CATEGORY_CODE:
+                try:
+                    entry_deposit_return_source_id = int(form.get("deposit_return_source_id", "0") or "0")
+                except ValueError:
+                    entry_deposit_return_source_id = 0
+                deposit_source = next((entry for entry in entries if entry.id == entry_deposit_return_source_id and deposit_amount_from_entry(entry) > 0), None)
+                if deposit_source is None:
+                    raise ValueError("Выберите залог, который вернулся")
+                if amount > deposit_open_amount(deposit_source, entries, entry_id):
+                    raise ValueError("Возврат залога не может быть больше открытого остатка")
             needs_payroll_period = (not is_income_operation) and (category_code == "salary" or is_labor_force_category(category_code, category_labels))
             if needs_payroll_period and not payroll_period_raw:
                 raise ValueError("Укажите период ФОТ")
@@ -31727,6 +31951,7 @@ self.addEventListener("notificationclick", (event) => {
                 payroll_employee_id = payroll_employee.id
                 payroll_employee_name = payroll_employee.full_name
             preserved_markers = expense_comment_service_markers(existing_entry.comment, keep_transfer_markers=not existing_was_transfer_pair)
+            preserved_markers.extend(deposit_markers(entry_deposit_amount, entry_deposit_return_source_id))
             selected_cashbox_label = cashbox_label_from_directory(cashboxes, selected_cashbox_code) if selected_cashbox_code else ""
             comment = (
                 expense_comment_with_cashbox_marker(raw_comment, selected_cashbox_label, preserved_markers)

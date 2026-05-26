@@ -30,6 +30,7 @@ DEFAULT_EXPENSE_CATEGORIES = (
     ("income_unallocated", "Поступление"),
     ("income_work_payment", "Оплата работ"),
     ("income_loan", "Займ"),
+    ("income_deposit_return", "Возврат залога"),
     ("other", "Прочее"),
 )
 EXPENSE_CATEGORY_GROUP_CODES = ("object", "admin", "transfer", "income")
@@ -50,6 +51,7 @@ DEFAULT_EXPENSE_CATEGORY_GROUPS = {
     "income_unallocated": "income",
     "income_work_payment": "income",
     "income_loan": "income",
+    "income_deposit_return": "income",
     "other": "object,admin",
 }
 
