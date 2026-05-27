@@ -11071,9 +11071,37 @@ function syncDdsSourceDetail(form) {{
   syncDdsFilterDefaults(form);
 }}
 
+function syncDdsSubcategoryFilter(form) {{
+  if (!form) {{
+    return;
+  }}
+  const groupSelect = form.querySelector("[data-dds-group-filter]");
+  const subcategorySelect = form.querySelector("[data-dds-subcategory-filter]");
+  if (!subcategorySelect) {{
+    return;
+  }}
+  const selectedGroup = groupSelect ? groupSelect.value : "";
+  Array.from(subcategorySelect.options).forEach((option) => {{
+    if (!option.value) {{
+      option.hidden = false;
+      option.disabled = false;
+      return;
+    }}
+    const optionGroups = (option.dataset.expenseGroups || "").split(/\\s+/).filter(Boolean);
+    const isVisible = !selectedGroup || optionGroups.includes(selectedGroup);
+    option.hidden = !isVisible;
+    option.disabled = !isVisible;
+  }});
+  if (subcategorySelect.selectedOptions.length && subcategorySelect.selectedOptions[0].disabled) {{
+    subcategorySelect.value = "";
+  }}
+  syncDdsFilterDefaults(form);
+}}
+
 function initDdsFilterForms() {{
   document.querySelectorAll('[data-dds-filter-form="1"]').forEach((form) => {{
     syncDdsSourceDetail(form);
+    syncDdsSubcategoryFilter(form);
     syncDdsFilterDefaults(form);
   }});
 }}
@@ -11580,6 +11608,11 @@ document.addEventListener("change", (event) => {{
   const sourceFilter = event.target.closest("[data-dds-source-filter]");
   if (sourceFilter) {{
     syncDdsSourceDetail(sourceFilter.closest('[data-dds-filter-form="1"]'));
+    return;
+  }}
+  const groupFilter = event.target.closest("[data-dds-group-filter]");
+  if (groupFilter) {{
+    syncDdsSubcategoryFilter(groupFilter.closest('[data-dds-filter-form="1"]'));
     return;
   }}
   const ddsControl = event.target.closest("[data-dds-group-select], [data-dds-category-select], [data-dds-expense-form='1'] select[name='project_code'], [data-dds-expense-form='1'] select[name='payment_source'], [data-dds-expense-form='1'] select[name='payroll_employee_id'], [data-dds-expense-form='1'] input[name='has_deposit'], [data-dds-expense-form='1'] select[name='deposit_return_source_id']");
@@ -18035,6 +18068,7 @@ def expenses_filter_args_from_query(query: dict[str, list[str]]) -> dict:
         "account_filter": query.get("account", [""])[0].strip(),
         "cashbox_filter": query.get("cashbox", [""])[0].strip(),
         "deposit_filter": query.get("deposit", [""])[0].strip(),
+        "subcategory_filter": query.get("subcategory", [""])[0].strip(),
         "query_filter": query.get("q", [""])[0].strip(),
         "date_from": date_from,
         "date_to": date_to,
@@ -18047,6 +18081,7 @@ def expenses_extra_query_from_filters(filters: dict) -> str:
         ("account", filters.get("account_filter", "")),
         ("cashbox", filters.get("cashbox_filter", "")),
         ("deposit", filters.get("deposit_filter", "")),
+        ("subcategory", filters.get("subcategory_filter", "")),
         ("q", filters.get("query_filter", "")),
         ("date_from", filters["date_from"].isoformat() if filters.get("date_from") else ""),
         ("date_to", filters["date_to"].isoformat() if filters.get("date_to") else ""),
@@ -24246,6 +24281,7 @@ def render_expenses_section(
     account_filter: str = "",
     cashbox_filter: str = "",
     deposit_filter: str = "",
+    subcategory_filter: str = "",
     query_filter: str = "",
     date_from: date | None = None,
     date_to: date | None = None,
@@ -24259,6 +24295,12 @@ def render_expenses_section(
     project_labels = dict(project_options_list)
     category_labels = dict(category_options_list)
     category_group_map = expense_category_group_map(storage, owner_chat_id, entries)
+    filter_category_group_map = {code: set(groups) for code, groups in category_group_map.items()}
+    for entry in source_entries:
+        entry_category_code = (entry.category_code or "").strip()
+        entry_group_code = infer_expense_group_code(entry, category_labels)
+        if entry_category_code and entry_group_code in EXPENSE_GROUP_META:
+            filter_category_group_map.setdefault(entry_category_code, set()).add(entry_group_code)
     category_deposit_map = expense_category_deposit_map(storage, owner_chat_id)
     deposit_category_codes = {code for code, allowed in category_deposit_map.items() if allowed}
     project_colors = expense_project_color_map(storage, owner_chat_id)
@@ -24278,8 +24320,14 @@ def render_expenses_section(
     if project_filter and project_filter not in project_labels:
         project_filter = ""
     if category_filter and category_filter not in EXPENSE_GROUP_META:
-        legacy_groups = category_groups_for_code(category_filter, category_labels, category_group_map) if category_filter in category_labels else set()
+        legacy_groups = category_groups_for_code(category_filter, category_labels, filter_category_group_map) if category_filter in category_labels else set()
+        if category_filter in category_labels and not subcategory_filter:
+            subcategory_filter = category_filter
         category_filter = next(iter(legacy_groups), "") if len(legacy_groups) == 1 else ""
+    if subcategory_filter and subcategory_filter not in category_labels:
+        subcategory_filter = ""
+    if category_filter and subcategory_filter and category_filter not in category_groups_for_code(subcategory_filter, category_labels, filter_category_group_map):
+        subcategory_filter = ""
     if adjustment_filter not in {"", "needs"}:
         adjustment_filter = ""
     if source_filter not in {"", "bank", "cash"}:
@@ -24377,10 +24425,11 @@ def render_expenses_section(
         if not deposit_filter:
             return True
         return deposit_amount_from_entry(entry) > 0 or deposit_return_source_id(entry) > 0
-    def entry_matches_registry_filter(entry, include_group: bool = True, include_query: bool = True) -> bool:
+    def entry_matches_registry_filter(entry, include_group: bool = True, include_query: bool = True, include_subcategory: bool = True) -> bool:
         return (
             (not project_filter or entry.project_code == project_filter)
             and (not include_group or not category_filter or infer_expense_group_code(entry, category_labels) == category_filter)
+            and (not include_subcategory or not subcategory_filter or entry.category_code == subcategory_filter)
             and (adjustment_filter != "needs" or entry_needs_adjustment(entry))
             and entry_matches_source_filter(entry)
             and entry_matches_account_filter(entry)
@@ -24395,7 +24444,7 @@ def render_expenses_section(
         if entry_matches_registry_filter(entry)
     ]
     def expand_linked_transfer_entries(row_entries) -> list:
-        if not category_filter or source_filter or account_filter or cashbox_filter:
+        if not (category_filter or subcategory_filter) or source_filter or account_filter or cashbox_filter:
             return list(row_entries)
         entries_by_id = {entry.id: entry for entry in source_entries}
         linked_income_by_source_id: dict[int, list] = {}
@@ -24412,7 +24461,7 @@ def render_expenses_section(
         def maybe_add(entry) -> None:
             if entry is None or entry.id in expanded_ids:
                 return
-            if not entry_matches_registry_filter(entry, include_group=False, include_query=False):
+            if not entry_matches_registry_filter(entry, include_group=False, include_query=False, include_subcategory=False):
                 return
             expanded_ids.add(entry.id)
             queue.append(entry)
@@ -24493,6 +24542,10 @@ def render_expenses_section(
         f'<option value="{code}"{" selected" if code == category_filter else ""}>{escape(label)}</option>'
         for code, label in sorted_expense_groups(["admin", "income", "object", "transfer"])
     )
+    subcategory_options = "".join(
+        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, filter_category_group_map))))}"{" selected" if code == subcategory_filter else ""}>{escape(label)}</option>'
+        for code, label in sorted_dds_options(category_options_list)
+    )
     form_category_options = "".join(
         f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map))))}" data-allow-deposit="{"1" if category_deposit_map.get(code, False) else "0"}">{escape(label)}</option>'
         for code, label in sorted_dds_options(category_options_list)
@@ -24559,13 +24612,14 @@ def render_expenses_section(
     )
     filter_project_options = '<option value="">Все объекты</option>' + project_options
     filter_category_options = '<option value="">Все группы</option>' + category_options
+    filter_subcategory_options = '<option value="">Все статьи</option>' + subcategory_options
     adjustment_options = "".join(
         f'<option value="{code}"{" selected" if code == adjustment_filter else ""}>{escape(label)}</option>'
         for code, label in [("", "Все операции"), ("needs", "Неразнесенные")]
     )
     active_filter_count = sum(
         1
-        for value in [project_filter, category_filter, adjustment_filter, source_filter, account_filter, cashbox_filter, deposit_filter, query_filter, date_from, date_to]
+        for value in [project_filter, category_filter, subcategory_filter, adjustment_filter, source_filter, account_filter, cashbox_filter, deposit_filter, query_filter, date_from, date_to]
         if value
     )
     def build_extra_filter_query(*, include_dates: bool = True, deposit_value: str | None = None) -> str:
@@ -24574,6 +24628,7 @@ def render_expenses_section(
             ("account", account_filter),
             ("cashbox", cashbox_filter),
             ("deposit", deposit_filter if deposit_value is None else deposit_value),
+            ("subcategory", subcategory_filter),
             ("q", query_filter),
         ]
         if include_dates:
@@ -24916,9 +24971,9 @@ def render_expenses_section(
     date_to_input = date_to.isoformat() if date_to else ""
     filter_summary = (
         f"Активных фильтров: {active_filter_count}. "
-        "Поиск смотрит контрагента, назначение, номер документа, автора, объект и группу."
+        "Поиск смотрит контрагента, назначение, номер документа, автора, объект, группу и статью."
         if active_filter_count
-        else "Поиск смотрит контрагента, назначение, номер документа, автора, объект и группу."
+        else "Поиск смотрит контрагента, назначение, номер документа, автора, объект, группу и статью."
     )
     def dds_filter_select_class(value: str) -> str:
         return "dds-filter-control" + (" is-filter-default" if not value else "")
@@ -24959,7 +25014,11 @@ def render_expenses_section(
         </div>
         <div class="field">
           <label>Группа</label>
-          <select class="{dds_filter_select_class(category_filter)}" name="category">{filter_category_options}</select>
+          <select class="{dds_filter_select_class(category_filter)}" name="category" data-dds-group-filter>{filter_category_options}</select>
+        </div>
+        <div class="field">
+          <label>Статья</label>
+          <select class="{dds_filter_select_class(subcategory_filter)}" name="subcategory" data-dds-subcategory-filter>{filter_subcategory_options}</select>
         </div>
         <div class="dds-filter-actions">
           <button class="secondary-btn mini" type="submit">Найти</button>
