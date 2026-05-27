@@ -19408,7 +19408,7 @@ def render_cashoperations_body(
             open_amount = deposit_open_amount(entry, entries)
             deposit_line = (
                 f'<span class="cash-mobile-op-deposit{" closed" if open_amount <= 0 else ""}">'
-                f'{escape("Залог возвращен" if open_amount <= 0 else f"Залог возврата: {format_amount(open_amount)}")}'
+                f'{escape("Залог возвращен" if open_amount <= 0 else "Залог")}'
                 f'</span>'
             )
         receipt_line = (
@@ -24705,7 +24705,7 @@ def render_expenses_section(
             if deposit_amount > 0:
                 open_amount = deposit_open_amount(entry, source_entries)
                 css = "warn" if open_amount > 0 else "ok"
-                label = f"Залог возврата: {format_amount(open_amount)}" if open_amount > 0 else "Залог возвращен"
+                label = "Залог" if open_amount > 0 else "Залог возвращен"
                 return f'<span class="chip {css}">{escape(label)}</span>'
             source_id = deposit_return_source_id(entry)
             if source_id:
