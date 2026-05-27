@@ -6708,6 +6708,14 @@ def layout(
       align-items: center;
       font-size: 14px;
     }}
+    .dashboard-category-link {{
+      border-radius: 6px;
+      transition: color .16s ease, background .16s ease;
+    }}
+    .dashboard-category-link:hover {{
+      color: var(--brand);
+      background: rgba(29, 92, 99, 0.06);
+    }}
     .dashboard-dot {{
       width: 10px;
       height: 10px;
@@ -22435,10 +22443,11 @@ def dashboard_filter_query(owner_chat_id: int, project_code: str, date_from: dat
     return "?" + "&".join(parts)
 
 
-def dashboard_dds_href(owner_chat_id: int, project_code: str, date_from: date | None = None, date_to: date | None = None, category_group: str = "") -> str:
+def dashboard_dds_href(owner_chat_id: int, project_code: str, date_from: date | None = None, date_to: date | None = None, category_group: str = "", subcategory_code: str = "") -> str:
     return (
         f"/expenses?owner={owner_chat_id}&tab=active&project={quote_plus(project_code)}"
         f"&category={quote_plus(category_group)}&adjustment=&day="
+        f"{f'&subcategory={quote_plus(subcategory_code)}' if subcategory_code else ''}"
         f"{f'&date_from={quote_plus(date_from.isoformat())}' if date_from else ''}"
         f"{f'&date_to={quote_plus(date_to.isoformat())}' if date_to else ''}"
     )
@@ -22547,6 +22556,12 @@ def render_object_dashboards_section(
             bucket["last_date"] = item["expense_date"]
     category_rows = sorted(category_totals.items(), key=lambda item: float(item[1]["amount"]), reverse=True)
     category_total = sum(float(item["amount"]) for _code, item in category_rows)
+    def dashboard_category_label(code: str) -> str:
+        return DASHBOARD_WORKFORCE_CATEGORY_LABEL if code == DASHBOARD_WORKFORCE_CATEGORY_CODE else expense_category_label(code, category_labels)
+    def dashboard_category_link(code: str) -> str:
+        if code == DASHBOARD_WORKFORCE_CATEGORY_CODE:
+            return f"/workforce?owner={owner_chat_id}&project={quote_plus(selected_project)}"
+        return dashboard_dds_href(owner_chat_id, selected_project, date_from, date_to, subcategory_code=code)
     donut_segments = []
     donut_start = 0.0
     for index, (_code, item) in enumerate(category_rows):
@@ -22562,7 +22577,7 @@ def render_object_dashboards_section(
         f"""
         <div class="dashboard-legend-row">
           <span class="dashboard-dot" style="background:{DASHBOARD_CATEGORY_COLORS[index % len(DASHBOARD_CATEGORY_COLORS)]};"></span>
-          <span>{escape(DASHBOARD_WORKFORCE_CATEGORY_LABEL if code == DASHBOARD_WORKFORCE_CATEGORY_CODE else expense_category_label(code, category_labels))}</span>
+          <a class="contract-table-link dashboard-category-link" href="{dashboard_category_link(code)}">{escape(dashboard_category_label(code))}</a>
           <strong>{format_percent(float(item["amount"]) / category_total * 100) if category_total > 0 else "0,0%"}</strong>
         </div>
         """
@@ -22571,8 +22586,8 @@ def render_object_dashboards_section(
     category_table_rows = "".join(
         f"""
         <tr>
-          <td>{escape(DASHBOARD_WORKFORCE_CATEGORY_LABEL if code == DASHBOARD_WORKFORCE_CATEGORY_CODE else expense_category_label(code, category_labels))}</td>
-          <td class="nowrap">{format_amount(float(item["amount"]))}</td>
+          <td><a class="contract-table-link dashboard-category-link" href="{dashboard_category_link(code)}">{escape(dashboard_category_label(code))}</a></td>
+          <td class="nowrap"><a class="contract-table-link dashboard-category-link" href="{dashboard_category_link(code)}">{format_amount(float(item["amount"]))}</a></td>
           <td class="nowrap">{format_percent(float(item["amount"]) / category_total * 100) if category_total > 0 else "0,0%"}</td>
           <td class="nowrap">{int(item["count"])}</td>
           <td class="nowrap">{format_amount(float(item["amount"]) / int(item["count"])) if int(item["count"]) else "—"}</td>
