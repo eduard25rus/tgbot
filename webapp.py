@@ -24058,6 +24058,10 @@ def render_access_section(
         cash_enabled = bool(user_access["enabled"])
         cash_settings_hidden = " hidden"
         allowed_codes = set(user_access["allowed_cashbox_codes"])
+        personal_cashbox_code = storage.personal_cashbox_code_for_user(user["id"])
+        personal_cashbox = next((cashbox for cashbox in cashboxes if cashbox["code"] == personal_cashbox_code), None)
+        personal_cashbox_label = personal_cashbox["label"] if personal_cashbox else storage.personal_cashbox_label_for_user(user)
+        personal_cashbox_checked = personal_cashbox_code in allowed_codes
         cashbox_default_hidden = cash_settings_hidden if allowed_codes else " hidden"
         default_screen = user_access.get("default_screen") if user_access.get("default_screen") in {"home", "history", "letters", "work"} else "home"
         default_screen_labels = {
@@ -24085,6 +24089,7 @@ def render_access_section(
             </label>
             """
             for cashbox in cashboxes
+            if cashbox["code"] != personal_cashbox_code
         )
         cash_access_cards.append(
             f"""
@@ -24146,8 +24151,18 @@ def render_access_section(
                     <div class="field-hint">Сейчас: {"задан" if user_access["preview_password_hash"] else "не задан"}. Работает только для мобильной кассы.</div>
                   </div>
                   <div class="permission-box cash-setting"{cash_settings_hidden}>
+                    <strong>Личная касса сотрудника</strong>
+                    <div class="check-row">
+                      <label>
+                        <input type="checkbox" name="personal_cashbox" value="1" {"checked" if personal_cashbox_checked else ""}>
+                        {escape(personal_cashbox_label)}
+                      </label>
+                    </div>
+                    <div class="field-hint">Если кассы еще нет, она создастся при сохранении и сразу попадет в доступные кассы сотрудника. Снимите галочку, чтобы отключить доступ к личной кассе.</div>
+                  </div>
+                  <div class="permission-box cash-setting"{cash_settings_hidden}>
                     <strong>Доступные кассы для просмотра</strong>
-                    <div class="check-row">{cashbox_checks}</div>
+                    <div class="check-row">{cashbox_checks or '<span class="contract-table-subtle">Других касс пока нет.</span>'}</div>
                   </div>
                   <div class="permission-box cash-setting"{cash_settings_hidden}>
                     <strong>Права в приложении</strong>
@@ -29738,11 +29753,21 @@ self.addEventListener("notificationclick", (event) => {
             user_id = int(path.split("/")[4])
             form = read_post_data(environ)
             cashboxes = storage.list_cashbox_directory(current_owner)
+            personal_cashbox_code = storage.personal_cashbox_code_for_user(user_id)
             allowed_cashbox_codes = [
                 cashbox["code"]
                 for cashbox in cashboxes
                 if form.get(f"cashbox_{cashbox['code']}") == "1"
+                and cashbox["code"] != personal_cashbox_code
             ]
+            if form.get("personal_cashbox") == "1":
+                created_personal_code = storage.ensure_personal_cashbox_for_user(current_owner, user_id)
+                if not created_personal_code:
+                    raise ValueError("Не удалось создать личную кассу сотрудника")
+                if created_personal_code not in allowed_cashbox_codes:
+                    allowed_cashbox_codes.append(created_personal_code)
+                if form.get("default_cashbox_code", "") not in allowed_cashbox_codes:
+                    form["default_cashbox_code"] = created_personal_code
             updated = storage.update_mobile_cash_access(
                 current_owner,
                 user_id,

@@ -2293,6 +2293,57 @@ class Storage:
             )
         return code
 
+    @staticmethod
+    def personal_cashbox_code_for_user(user_id: int) -> str:
+        return f"user_{int(user_id)}_cashbox"
+
+    @staticmethod
+    def personal_cashbox_label_for_user(user: dict) -> str:
+        user_name = (user.get("full_name") or user.get("login") or "").strip()
+        return f"Касса сотрудника: {user_name}" if user_name else "Касса сотрудника"
+
+    def ensure_personal_cashbox_for_user(self, owner_chat_id: int, user_id: int) -> str | None:
+        user = self.get_web_user_by_id(user_id)
+        if user is None or int(user["owner_chat_id"]) != owner_chat_id:
+            return None
+        code = self.personal_cashbox_code_for_user(user_id)
+        label = self.personal_cashbox_label_for_user(user)
+        now = datetime.utcnow().isoformat()
+        with self.connection() as conn:
+            self._ensure_default_cashboxes(conn, owner_chat_id)
+            row = conn.execute(
+                """
+                SELECT id
+                FROM cashbox_directory
+                WHERE owner_chat_id = ? AND code = ?
+                """,
+                (owner_chat_id, code),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    UPDATE cashbox_directory
+                    SET label = ?, is_active = 1, updated_at = ?
+                    WHERE owner_chat_id = ? AND code = ?
+                    """,
+                    (label, now, owner_chat_id, code),
+                )
+            else:
+                max_sort = conn.execute(
+                    "SELECT COALESCE(MAX(sort_order), 0) AS max_sort FROM cashbox_directory WHERE owner_chat_id = ?",
+                    (owner_chat_id,),
+                ).fetchone()
+                conn.execute(
+                    """
+                    INSERT INTO cashbox_directory (
+                        owner_chat_id, code, label, sort_order, is_active, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (owner_chat_id, code, label, int(max_sort["max_sort"] or 0) + 10, now, now),
+                )
+        return code
+
     def list_mobile_cash_access(self, owner_chat_id: int) -> list[dict]:
         users = self.list_web_users(owner_chat_id)
         with self.connection() as conn:

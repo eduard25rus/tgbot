@@ -169,7 +169,8 @@ def main() -> int:
     ]
 
     with tempfile.TemporaryDirectory(prefix="crm-smoke-") as temp_dir:
-        token = seed_demo_data(Path(temp_dir) / "smoke.db")
+        db_path = Path(temp_dir) / "smoke.db"
+        token = seed_demo_data(db_path)
 
         failures: list[str] = []
         for path in paths:
@@ -208,6 +209,65 @@ def main() -> int:
             status, _headers, body = call_app(f"/access?owner={OWNER_CHAT_ID}&mode=general", token)
             if not status.startswith("200") or b"Smoke workforce user" not in body:
                 failures.append("/access/users/new workforce: user was not rendered after add")
+            from storage import Storage
+
+            storage = Storage(str(db_path))
+            user = next(
+                (item for item in storage.list_web_users(OWNER_CHAT_ID) if item["login"] == "smoke.workforce"),
+                None,
+            )
+            if user is None:
+                failures.append("/access/users/new workforce: user was not saved")
+            else:
+                cash_form_body = urlencode(
+                    {
+                        "enabled": "1",
+                        "role": "limited",
+                        "default_screen": "home",
+                        "personal_cashbox": "1",
+                        "preview_login": "smoke.workforce",
+                        "can_add_expense": "1",
+                    }
+                ).encode("utf-8")
+                status, _headers, _body = call_app(
+                    f"/access/cash/users/{user['id']}/update?owner={OWNER_CHAT_ID}&mode=cash",
+                    token,
+                    method="POST",
+                    body=cash_form_body,
+                )
+                status_code = int(status.split(" ", 1)[0] or "0")
+                if status_code not in {302, 303}:
+                    failures.append(f"/access/cash/users update personal cashbox: {status}")
+                personal_cashbox_code = storage.personal_cashbox_code_for_user(user["id"])
+                access = storage.get_mobile_cash_access_for_user(user["id"])
+                cashbox_codes = {item["code"] for item in storage.list_cashbox_directory(OWNER_CHAT_ID)}
+                if personal_cashbox_code not in cashbox_codes:
+                    failures.append("/access/cash/users update personal cashbox: cashbox was not created")
+                if personal_cashbox_code not in set(access["allowed_cashbox_codes"] if access else []):
+                    failures.append("/access/cash/users update personal cashbox: cashbox was not allowed")
+                if access and access["default_cashbox_code"] != personal_cashbox_code:
+                    failures.append("/access/cash/users update personal cashbox: cashbox was not selected by default")
+                cash_form_body = urlencode(
+                    {
+                        "enabled": "1",
+                        "role": "limited",
+                        "default_screen": "home",
+                        "preview_login": "smoke.workforce",
+                        "can_add_expense": "1",
+                    }
+                ).encode("utf-8")
+                status, _headers, _body = call_app(
+                    f"/access/cash/users/{user['id']}/update?owner={OWNER_CHAT_ID}&mode=cash",
+                    token,
+                    method="POST",
+                    body=cash_form_body,
+                )
+                status_code = int(status.split(" ", 1)[0] or "0")
+                if status_code not in {302, 303}:
+                    failures.append(f"/access/cash/users update personal cashbox off: {status}")
+                access = storage.get_mobile_cash_access_for_user(user["id"])
+                if personal_cashbox_code in set(access["allowed_cashbox_codes"] if access else []):
+                    failures.append("/access/cash/users update personal cashbox off: cashbox remained allowed")
         except Exception as exc:
             failures.append(f"/access/users/new workforce: exception {type(exc).__name__}: {exc}")
 
