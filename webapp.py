@@ -23947,11 +23947,11 @@ def render_access_section(
                   <strong>{escape(label)}</strong>
                   <div class="check-row">
                     <label>
-                      <input type="checkbox" name="view_{section_id}" {"checked" if item["can_view"] else ""} {"disabled" if user["is_super_admin"] else ""}>
+                      <input type="checkbox" name="view_{section_id}" form="user-form-{user["id"]}" {"checked" if item["can_view"] else ""} {"disabled" if user["is_super_admin"] else ""}>
                       Просмотр
                     </label>
                     <label>
-                      <input type="checkbox" name="edit_{section_id}" {"checked" if item["can_edit"] else ""} {"disabled" if user["is_super_admin"] else ""}>
+                      <input type="checkbox" name="edit_{section_id}" form="user-form-{user["id"]}" {"checked" if item["can_edit"] else ""} {"disabled" if user["is_super_admin"] else ""}>
                       Редактирование
                     </label>
                   </div>
@@ -23966,7 +23966,7 @@ def render_access_section(
         setup_token = storage.ensure_password_setup_token(user["id"], secrets.token_urlsafe(24))
         setup_link = f"{base_setup_url}{setup_token}"
         reset_button = f"""
-        <button class="secondary-btn" type="submit" formaction="/access/users/{user["id"]}/reset-password?owner={owner_chat_id}&mode=general" formmethod="post">
+        <button class="secondary-btn" type="submit" form="user-form-{user["id"]}" formaction="/access/users/{user["id"]}/reset-password?owner={owner_chat_id}&mode=general" formmethod="post">
           Сбросить пароль и обновить ссылку
         </button>
         """
@@ -23976,7 +23976,7 @@ def render_access_section(
           <div class="settings-popover access-permissions-popover">
             <div class="permissions-grid">{''.join(permission_boxes)}</div>
             <div class="action-row" style="justify-content:flex-end;">
-              <button class="submit-btn" type="submit">Сохранить</button>
+              <button class="submit-btn" type="submit" form="user-form-{user["id"]}">Сохранить</button>
             </div>
           </div>
         </details>
