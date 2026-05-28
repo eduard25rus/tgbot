@@ -2239,6 +2239,7 @@ class Storage:
     def list_cashbox_directory(self, owner_chat_id: int) -> list[dict]:
         with self.connection() as conn:
             self._ensure_default_cashboxes(conn, owner_chat_id)
+            self._sync_personal_cashbox_labels(conn, owner_chat_id)
             rows = conn.execute(
                 """
                 SELECT id, owner_chat_id, code, label, sort_order, is_active, created_at, updated_at
@@ -2300,7 +2301,63 @@ class Storage:
     @staticmethod
     def personal_cashbox_label_for_user(user: dict) -> str:
         user_name = (user.get("full_name") or user.get("login") or "").strip()
-        return f"Касса сотрудника: {user_name}" if user_name else "Касса сотрудника"
+        first_name = user_name.split()[0] if user_name else ""
+        if not first_name:
+            return "Касса сотрудника"
+        lower_name = first_name.casefold()
+        genitive_exceptions = {
+            "илья": "Ильи",
+            "никита": "Никиты",
+            "данила": "Данилы",
+            "данил": "Данила",
+            "павел": "Павла",
+            "лев": "Льва",
+        }
+        if lower_name in genitive_exceptions:
+            cashbox_owner = genitive_exceptions[lower_name]
+        elif lower_name.endswith(("й", "ь")):
+            cashbox_owner = f"{first_name[:-1]}я"
+        elif lower_name.endswith("а"):
+            cashbox_owner = f"{first_name[:-1]}ы"
+        elif lower_name.endswith("я"):
+            cashbox_owner = f"{first_name[:-1]}и"
+        elif lower_name.endswith(("е", "ё", "и", "о", "у", "ы", "э", "ю")):
+            cashbox_owner = first_name
+        else:
+            cashbox_owner = f"{first_name}а"
+        return f"Касса {cashbox_owner}"
+
+    def _sync_personal_cashbox_labels(self, conn: sqlite3.Connection, owner_chat_id: int) -> None:
+        rows = conn.execute(
+            """
+            SELECT c.code, c.label, u.id AS user_id, u.email, u.full_name
+            FROM cashbox_directory c
+            JOIN web_users u
+              ON c.code = 'user_' || u.id || '_cashbox'
+             AND u.owner_chat_id = c.owner_chat_id
+            WHERE c.owner_chat_id = ?
+            """,
+            (owner_chat_id,),
+        ).fetchall()
+        now = datetime.utcnow().isoformat()
+        for row in rows:
+            expected_label = self.personal_cashbox_label_for_user(
+                {
+                    "id": int(row["user_id"]),
+                    "login": row["email"],
+                    "full_name": row["full_name"],
+                }
+            )
+            if row["label"] == expected_label:
+                continue
+            conn.execute(
+                """
+                UPDATE cashbox_directory
+                SET label = ?, updated_at = ?
+                WHERE owner_chat_id = ? AND code = ?
+                """,
+                (expected_label, now, owner_chat_id, row["code"]),
+            )
 
     def ensure_personal_cashbox_for_user(self, owner_chat_id: int, user_id: int) -> str | None:
         user = self.get_web_user_by_id(user_id)

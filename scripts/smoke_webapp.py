@@ -190,7 +190,7 @@ def main() -> int:
         try:
             form_body = urlencode(
                 {
-                    "full_name": "Smoke workforce user",
+                    "full_name": "Александр Волкотруб",
                     "login": "smoke.workforce",
                     "role_name": "Менеджер проектов",
                     "view_workforce": "on",
@@ -207,7 +207,7 @@ def main() -> int:
             if status_code not in {302, 303}:
                 failures.append(f"/access/users/new workforce: {status}")
             status, _headers, body = call_app(f"/access?owner={OWNER_CHAT_ID}&mode=general", token)
-            if not status.startswith("200") or b"Smoke workforce user" not in body:
+            if not status.startswith("200") or "Александр Волкотруб".encode("utf-8") not in body:
                 failures.append("/access/users/new workforce: user was not rendered after add")
             from storage import Storage
 
@@ -241,8 +241,14 @@ def main() -> int:
                 personal_cashbox_code = storage.personal_cashbox_code_for_user(user["id"])
                 access = storage.get_mobile_cash_access_for_user(user["id"])
                 cashbox_codes = {item["code"] for item in storage.list_cashbox_directory(OWNER_CHAT_ID)}
+                cashbox_labels = {
+                    item["code"]: item["label"]
+                    for item in storage.list_cashbox_directory(OWNER_CHAT_ID)
+                }
                 if personal_cashbox_code not in cashbox_codes:
                     failures.append("/access/cash/users update personal cashbox: cashbox was not created")
+                if cashbox_labels.get(personal_cashbox_code) != "Касса Александра":
+                    failures.append("/access/cash/users update personal cashbox: cashbox label was not normalized")
                 if personal_cashbox_code not in set(access["allowed_cashbox_codes"] if access else []):
                     failures.append("/access/cash/users update personal cashbox: cashbox was not allowed")
                 if access and access["default_cashbox_code"] != personal_cashbox_code:
