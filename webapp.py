@@ -10342,7 +10342,7 @@ document.addEventListener("click", (event) => {{
     window.sessionStorage.setItem("auctionScrollY", String(window.scrollY));
     return;
   }}
-  if (event.target.closest && event.target.closest(".status-popover")) {{
+  if (event.target.closest && event.target.closest(floatingPopoverSelector)) {{
     return;
   }}
   const selection = window.getSelection ? window.getSelection() : null;
