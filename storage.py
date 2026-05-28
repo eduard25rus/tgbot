@@ -589,6 +589,47 @@ class Storage:
         finally:
             conn.close()
 
+    def _ensure_web_user_section_access_schema(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(web_user_section_access)").fetchall()
+        }
+        required_columns = {"user_id", "section_id", "can_view", "can_edit"}
+        if not required_columns.issubset(columns):
+            return
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'web_user_section_access'"
+        ).fetchone()
+        table_sql = (row["sql"] if row else "") or ""
+        if "CHECK" not in table_sql.upper():
+            return
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("ALTER TABLE web_user_section_access RENAME TO web_user_section_access__old")
+        conn.execute(
+            """
+            CREATE TABLE web_user_section_access (
+                user_id INTEGER NOT NULL,
+                section_id TEXT NOT NULL,
+                can_view INTEGER NOT NULL DEFAULT 0,
+                can_edit INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, section_id),
+                FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        valid_sections = tuple(WEB_SECTION_IDS)
+        placeholders = ",".join("?" for _ in valid_sections)
+        conn.execute(
+            f"""
+            INSERT OR REPLACE INTO web_user_section_access (user_id, section_id, can_view, can_edit)
+            SELECT user_id, section_id, can_view, can_edit
+            FROM web_user_section_access__old
+            WHERE section_id IN ({placeholders})
+            """,
+            valid_sections,
+        )
+        conn.execute("DROP TABLE web_user_section_access__old")
+        conn.execute("PRAGMA foreign_keys = ON")
+
     def _init_db(self) -> None:
         with self.connection() as conn:
             conn.executescript(
@@ -1290,6 +1331,7 @@ class Storage:
                 );
                 """
             )
+            self._ensure_web_user_section_access_schema(conn)
             columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(stages)").fetchall()
             }

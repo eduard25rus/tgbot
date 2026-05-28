@@ -14,7 +14,7 @@ import sys
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -100,7 +100,13 @@ def seed_demo_data(db_path: Path) -> str:
     return token
 
 
-def call_app(path: str, session_token: str) -> tuple[str, list[tuple[str, str]], bytes]:
+def call_app(
+    path: str,
+    session_token: str,
+    method: str = "GET",
+    body: bytes = b"",
+    content_type: str = "application/x-www-form-urlencoded",
+) -> tuple[str, list[tuple[str, str]], bytes]:
     import webapp
 
     target = urlsplit(path)
@@ -111,7 +117,7 @@ def call_app(path: str, session_token: str) -> tuple[str, list[tuple[str, str]],
         captured["headers"] = headers
 
     environ = {
-        "REQUEST_METHOD": "GET",
+        "REQUEST_METHOD": method,
         "SCRIPT_NAME": "",
         "PATH_INFO": target.path or "/",
         "QUERY_STRING": target.query,
@@ -121,12 +127,13 @@ def call_app(path: str, session_token: str) -> tuple[str, list[tuple[str, str]],
         "REMOTE_ADDR": "127.0.0.1",
         "wsgi.version": (1, 0),
         "wsgi.url_scheme": "http",
-        "wsgi.input": io.BytesIO(b""),
+        "wsgi.input": io.BytesIO(body),
         "wsgi.errors": sys.stderr,
         "wsgi.multithread": False,
         "wsgi.multiprocess": False,
         "wsgi.run_once": False,
-        "CONTENT_LENGTH": "0",
+        "CONTENT_LENGTH": str(len(body)),
+        "CONTENT_TYPE": content_type,
         "HTTP_COOKIE": f"{webapp.SESSION_COOKIE}={session_token}",
     }
     body = b"".join(webapp.app(environ, start_response))
@@ -178,6 +185,31 @@ def main() -> int:
                 continue
             if body.startswith(b"A server error occurred") or b"Traceback" in body:
                 failures.append(f"{path}: error marker in response")
+
+        try:
+            form_body = urlencode(
+                {
+                    "full_name": "Smoke workforce user",
+                    "login": "smoke.workforce",
+                    "role_name": "Менеджер проектов",
+                    "view_workforce": "on",
+                    "edit_workforce": "on",
+                }
+            ).encode("utf-8")
+            status, _headers, _body = call_app(
+                f"/access/users/new?owner={OWNER_CHAT_ID}&mode=general",
+                token,
+                method="POST",
+                body=form_body,
+            )
+            status_code = int(status.split(" ", 1)[0] or "0")
+            if status_code not in {302, 303}:
+                failures.append(f"/access/users/new workforce: {status}")
+            status, _headers, body = call_app(f"/access?owner={OWNER_CHAT_ID}&mode=general", token)
+            if not status.startswith("200") or b"Smoke workforce user" not in body:
+                failures.append("/access/users/new workforce: user was not rendered after add")
+        except Exception as exc:
+            failures.append(f"/access/users/new workforce: exception {type(exc).__name__}: {exc}")
 
         if failures:
             print("Smoke check failed:")
