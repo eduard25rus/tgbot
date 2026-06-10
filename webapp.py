@@ -14802,14 +14802,14 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
             <th></th>
             <th class="nowrap">{escape(format_amount(total_amount))}</th>
             <th class="nowrap">{escape(format_amount(total_paid))}</th>
-            <th class="nowrap">
-              <span class="payroll-balance{' ok' if abs(total_debt) <= 0.009 else ' danger' if total_debt < -0.009 else ''}">{escape(format_amount(total_debt))}</span>
-              <div class="contract-table-subtle">из них к доплате: <span class="payroll-balance">{escape(format_amount(total_to_pay))}</span></div>
-              <div class="contract-table-subtle">не отработанных денег: <span class="payroll-balance danger">{escape(format_amount(total_unearned))}</span></div>
-            </th>
+            <th class="nowrap">{escape(format_amount(total_debt))}</th>
           </tr>
         </tfoot>
       </table>
+      <div class="contract-table-subtle" style="display:flex; justify-content:flex-end; gap:18px; flex-wrap:wrap; margin-top:12px; text-align:right;">
+        <span>Из них к доплате: <span style="font-weight:600; color:var(--warn);">{escape(format_amount(total_to_pay))}</span></span>
+        <span>Не отработанных денег: <span style="font-weight:600; color:var(--danger);">{escape(format_amount(total_unearned))}</span></span>
+      </div>
     </section>
     """
 
