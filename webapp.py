@@ -7048,6 +7048,82 @@ def layout(
       margin-right: auto;
       text-align: center;
     }}
+    .payroll-print-title {{
+      display: none;
+    }}
+    .payroll-print-details {{
+      display: flex;
+      justify-content: flex-end;
+      gap: 18px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+      text-align: right;
+    }}
+    .payroll-print-btn svg {{
+      width: 18px;
+      height: 18px;
+      margin-right: 8px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }}
+    @media print {{
+      @page {{
+        size: landscape;
+        margin: 10mm;
+      }}
+      body.payroll-printing * {{
+        visibility: hidden !important;
+      }}
+      body.payroll-printing .payroll-print-area,
+      body.payroll-printing .payroll-print-area * {{
+        visibility: visible !important;
+      }}
+      body.payroll-printing .payroll-print-area {{
+        position: absolute;
+        inset: 0 auto auto 0;
+        width: 100%;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        box-shadow: none !important;
+        background: white !important;
+      }}
+      body.payroll-printing .payroll-screen-only {{
+        display: none !important;
+      }}
+      body.payroll-printing .payroll-print-title {{
+        display: block;
+        margin-bottom: 12px;
+        color: #111827;
+      }}
+      body.payroll-printing .payroll-print-title h1 {{
+        margin: 0 0 4px;
+        font-size: 20px;
+        line-height: 1.2;
+      }}
+      body.payroll-printing .payroll-print-title div {{
+        font-size: 13px;
+        color: #4b5563;
+      }}
+      body.payroll-printing .payroll-print-area table {{
+        width: 100% !important;
+        font-size: 11px;
+      }}
+      body.payroll-printing .payroll-print-area th,
+      body.payroll-printing .payroll-print-area td {{
+        padding: 7px 8px !important;
+      }}
+      body.payroll-printing .payroll-print-area a {{
+        color: inherit !important;
+        text-decoration: none !important;
+      }}
+      body.payroll-printing .payroll-print-details {{
+        font-size: 12px;
+      }}
+    }}
     .payroll-selection-toolbar {{
       display: flex;
       justify-content: space-between;
@@ -14641,7 +14717,17 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
         <label>Месяц</label>
         <select name="month">{''.join(month_options)}</select>
       </div>
-      <button class="secondary-btn" type="submit">Показать месяц</button>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+        <button class="secondary-btn" type="submit">Показать месяц</button>
+        <button class="secondary-btn payroll-print-btn" type="button" onclick="document.body.classList.add('payroll-printing'); window.print(); setTimeout(() => document.body.classList.remove('payroll-printing'), 1000);">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M6 9V3h12v6"></path>
+            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+            <path d="M6 14h12v7H6z"></path>
+          </svg>
+          Распечатать
+        </button>
+      </div>
     </form>
     """
 
@@ -14769,16 +14855,20 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
     </section>
     {stats}
     {render_payroll_without_period_warning(storage, owner_chat_id)}
-    <section class="card panel" style="margin-top:22px;">
-      <div class="panel-head">
+    <section class="card panel payroll-print-area" style="margin-top:22px;">
+      <div class="payroll-print-title">
+        <h1>ФОТ рабочих на объектах</h1>
+        <div>Месяц расчета: {escape(format_month_label(selected_month))}</div>
+      </div>
+      <div class="panel-head payroll-screen-only">
         <div>
           <h2 class="panel-title">Рабочие на объектах</h2>
           <div class="panel-sub">Сводник зарплаты по рабочим за выбранный месяц: смены, объекты, ставки, начислено и уже выдано через кассу/ДДС.</div>
         </div>
         <a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime('%Y-%m')}">Открыть смены</a>
       </div>
-      {month_form}
-      {flash_html}
+      <div class="payroll-screen-only">{month_form}</div>
+      <div class="payroll-screen-only">{flash_html}</div>
       <table class="table contract-table payroll-table" style="margin-top:18px;">
         <thead>
           <tr>
@@ -14806,7 +14896,7 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
           </tr>
         </tfoot>
       </table>
-      <div class="contract-table-subtle" style="display:flex; justify-content:flex-end; gap:18px; flex-wrap:wrap; margin-top:12px; text-align:right;">
+      <div class="contract-table-subtle payroll-print-details">
         <span>Из них к доплате: <span style="font-weight:600; color:var(--warn);">{escape(format_amount(total_to_pay))}</span></span>
         <span>Не отработанных денег: <span style="font-weight:600; color:var(--danger);">{escape(format_amount(total_unearned))}</span></span>
       </div>
