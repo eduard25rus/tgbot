@@ -14620,6 +14620,12 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
         summary[employee_id]["payments"] = links
     total_paid = round(sum(float(item["paid"]) for item in summary.values()), 2)
     total_debt = round(total_amount - total_paid, 2)
+    worker_balances = [
+        round(float(item["amount"]) - float(item["paid"]), 2)
+        for item in summary.values()
+    ]
+    total_to_pay = round(sum(balance for balance in worker_balances if balance > 0.009), 2)
+    total_unearned = round(sum(balance for balance in worker_balances if balance < -0.009), 2)
 
     month_options = []
     for offset in range(-2, 4):
@@ -14796,7 +14802,11 @@ def render_payroll_workers_section(storage: Storage, owner_chat_id: int, current
             <th></th>
             <th class="nowrap">{escape(format_amount(total_amount))}</th>
             <th class="nowrap">{escape(format_amount(total_paid))}</th>
-            <th class="nowrap">{escape(format_amount(total_debt))}</th>
+            <th class="nowrap">
+              <span class="payroll-balance{' ok' if abs(total_debt) <= 0.009 else ' danger' if total_debt < -0.009 else ''}">{escape(format_amount(total_debt))}</span>
+              <div class="contract-table-subtle">из них к доплате: <span class="payroll-balance">{escape(format_amount(total_to_pay))}</span></div>
+              <div class="contract-table-subtle">не отработанных денег: <span class="payroll-balance danger">{escape(format_amount(total_unearned))}</span></div>
+            </th>
           </tr>
         </tfoot>
       </table>
