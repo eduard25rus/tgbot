@@ -7090,38 +7090,56 @@ def layout(
         border: 0 !important;
         box-shadow: none !important;
         background: white !important;
+        color: #000 !important;
       }}
       body.payroll-printing .payroll-screen-only {{
         display: none !important;
       }}
+      body.payroll-printing .payroll-print-area * {{
+        color: #000 !important;
+        text-shadow: none !important;
+      }}
       body.payroll-printing .payroll-print-title {{
         display: block;
         margin-bottom: 12px;
-        color: #111827;
+        color: #000;
       }}
       body.payroll-printing .payroll-print-title h1 {{
         margin: 0 0 4px;
-        font-size: 20px;
+        font-size: 22px;
         line-height: 1.2;
       }}
       body.payroll-printing .payroll-print-title div {{
-        font-size: 13px;
-        color: #4b5563;
+        font-size: 14px;
+        color: #000;
       }}
       body.payroll-printing .payroll-print-area table {{
         width: 100% !important;
-        font-size: 11px;
+        font-size: 13px;
+        color: #000 !important;
       }}
       body.payroll-printing .payroll-print-area th,
       body.payroll-printing .payroll-print-area td {{
-        padding: 7px 8px !important;
+        padding: 8px 9px !important;
+        color: #000 !important;
+        border-color: #d1d5db !important;
       }}
       body.payroll-printing .payroll-print-area a {{
-        color: inherit !important;
+        color: #000 !important;
         text-decoration: none !important;
       }}
-      body.payroll-printing .payroll-print-details {{
+      body.payroll-printing .payroll-print-area .contract-table-subtle {{
+        color: #000 !important;
         font-size: 12px;
+      }}
+      body.payroll-printing .payroll-print-area .payroll-amount,
+      body.payroll-printing .payroll-print-area .payroll-balance {{
+        color: #000 !important;
+        font-weight: 600;
+      }}
+      body.payroll-printing .payroll-print-details {{
+        font-size: 13px;
+        color: #000 !important;
       }}
     }}
     .payroll-selection-toolbar {{
