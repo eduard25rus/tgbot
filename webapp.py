@@ -7505,6 +7505,7 @@ def layout(
       display: grid;
       align-content: start;
       gap: 8px;
+      position: relative;
       transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
     }}
     .workforce-calendar-day:hover {{
@@ -7532,20 +7533,15 @@ def layout(
       letter-spacing: 0;
       font-variant-numeric: proportional-nums;
     }}
-    .workforce-calendar-date-row {{
-      display: flex;
-      align-items: flex-start;
-      gap: 6px;
-      min-height: 18px;
-    }}
     .workforce-calendar-report-dot {{
+      position: absolute;
+      top: 14px;
+      right: 14px;
       width: 7px;
       height: 7px;
       border-radius: 999px;
       background: #b4433f;
       box-shadow: 0 0 0 2px rgba(180, 67, 63, 0.14);
-      flex: 0 0 auto;
-      margin-top: 1px;
     }}
     .workforce-calendar-metrics {{
       display: flex;
@@ -17745,10 +17741,8 @@ def render_workforce_section(
         calendar_cells.append(
             f"""
             <a class="{' '.join(day_classes)}" href="{day_href}">
-              <div class="workforce-calendar-date-row">
-                <div class="workforce-calendar-date">{day_number}</div>
-                {missing_report_dot}
-              </div>
+              <div class="workforce-calendar-date">{day_number}</div>
+              {missing_report_dot}
               {cell_body}
             </a>
             """
