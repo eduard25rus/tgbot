@@ -19409,6 +19409,7 @@ def render_cashoperations_body(
           </section>
         </section>
         """
+    cash_design_version = cash_access.get("design_version") if cash_access.get("design_version") in {"classic", "v2"} else "classic"
     push_public_key = cash_push_public_key(storage)
     push_allowed = bool(cash_access.get("can_receive_push") and push_public_key)
     allowed_cashboxes = [
@@ -20246,7 +20247,7 @@ def render_cashoperations_body(
     if has_cashbox_access:
         home_screen_html = f"""
       <section id="cashScreenHome" class="cash-mobile-screen{" active" if initial_screen == "home" else ""}">
-        <section class="cash-mobile-panel">
+        <section class="cash-mobile-panel cash-mobile-balance-panel">
         <div class="cash-mobile-sub">{escape(cashbox_labels.get(selected_cashbox, "Касса"))}</div>
           <div class="cash-mobile-balance{" negative" if balance < -0.009 else ""}">{escape(format_amount(balance))}</div>
           <div class="cash-mobile-metrics">
@@ -20256,10 +20257,10 @@ def render_cashoperations_body(
           </div>
           {warning_html}
         </section>
-        <div class="cash-mobile-actions">
+        <div class="cash-mobile-actions cash-mobile-command-dock">
           {cash_action_buttons}
         </div>
-        <section class="cash-mobile-panel">
+        <section class="cash-mobile-panel cash-mobile-ledger-panel">
           <div class="cash-mobile-section-head"><h2>Последние операции</h2></div>
           {latest_rows}
         </section>
@@ -21121,6 +21122,233 @@ def render_cashoperations_body(
       .cash-android .cash-labor-allocation-row {{
         grid-template-columns: minmax(0, 1fr) 104px 38px;
       }}
+      .cash-mobile.is-v2 {{
+        max-width: 560px;
+        padding: 10px 0 104px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-tabs {{
+        display: flex;
+        gap: 7px;
+        overflow-x: auto;
+        margin: 2px 0 12px;
+        padding: 2px 2px 5px;
+        scrollbar-width: none;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-tabs::-webkit-scrollbar {{
+        display: none;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-tab {{
+        flex: 0 0 auto;
+        min-height: 40px;
+        min-width: 128px;
+        border-radius: 999px;
+        padding: 0 16px;
+        border-color: rgba(34, 45, 38, .10);
+        background: rgba(255, 255, 255, .66);
+        color: #5f6962;
+        font-size: 13px;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .72);
+        backdrop-filter: blur(18px);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-tab.active {{
+        background: #18211d;
+        color: #fff;
+        border-color: #18211d;
+        box-shadow: 0 12px 24px rgba(18, 24, 21, .18);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-panel {{
+        border-radius: 18px;
+        border-color: rgba(34, 45, 38, .10);
+        background: rgba(255, 255, 255, .82);
+        box-shadow:
+          0 18px 44px rgba(18, 24, 21, .10),
+          inset 0 1px 0 rgba(255, 255, 255, .86);
+        backdrop-filter: blur(20px);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance-panel {{
+        position: relative;
+        overflow: hidden;
+        padding: 18px;
+        background:
+          linear-gradient(145deg, #1b211f 0%, #29312d 64%, #151a18 100%);
+        color: #fff;
+        border-color: rgba(255, 255, 255, .12);
+        box-shadow: 0 22px 52px rgba(18, 24, 21, .26);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance-panel::before {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(90deg, rgba(199, 151, 45, .28), transparent 34%),
+          linear-gradient(180deg, rgba(255, 255, 255, .12), transparent 42%);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance-panel > * {{
+        position: relative;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-sub {{
+        color: rgba(255, 255, 255, .70);
+        font-weight: 750;
+        text-transform: uppercase;
+        letter-spacing: .08em;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance {{
+        margin-top: 12px;
+        font-size: clamp(38px, 12vw, 54px);
+        font-weight: 850;
+        color: #fff;
+        text-shadow: 0 12px 28px rgba(0, 0, 0, .22);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance.income {{
+        color: #1a724b;
+        text-shadow: none;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance.negative {{
+        color: #ffcbc8;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metrics {{
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 18px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metric {{
+        border-color: rgba(255, 255, 255, .12);
+        border-radius: 14px;
+        padding: 10px 8px;
+        background: rgba(255, 255, 255, .08);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metric span {{
+        color: rgba(255, 255, 255, .62);
+        font-size: 10px;
+        min-height: 25px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metric b {{
+        color: #fff;
+        font-size: 12px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-command-dock {{
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-action {{
+        min-height: 52px;
+        border-radius: 16px;
+        border-color: rgba(34, 45, 38, .10);
+        background: rgba(255, 255, 255, .78);
+        color: #202923;
+        box-shadow:
+          0 12px 26px rgba(18, 24, 21, .08),
+          inset 0 1px 0 rgba(255, 255, 255, .76);
+        font-size: 15px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-action.expense {{
+        background: linear-gradient(180deg, #a73535, #8f2d2d);
+        border-color: rgba(143, 45, 45, .24);
+        color: #fff;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-action.income {{
+        background: linear-gradient(180deg, #1d7a50, #16633f);
+        border-color: rgba(22, 99, 63, .24);
+        color: #fff;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-command-dock .cash-mobile-action:nth-child(n+3) {{
+        min-height: 46px;
+        background: rgba(255, 255, 255, .64);
+        color: #445049;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .68);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-section-head h2,
+      .cash-mobile.is-v2 .cash-mobile-panel h2 {{
+        font-size: 20px;
+        font-weight: 850;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel {{
+        padding-top: 17px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-op {{
+        align-items: center;
+        min-height: 70px;
+        padding: 13px 0;
+        border-top-color: rgba(34, 45, 38, .10);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-op-title {{
+        font-size: 13px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-op-title strong {{
+        font-size: 14px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-op-side b {{
+        font-size: 16px;
+        font-weight: 850;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-op b.income {{
+        color: #176b46;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-op b.expense {{
+        color: #a23333;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-warning,
+      .cash-mobile.is-v2 .cash-mobile-flash {{
+        border-radius: 14px;
+        border: 1px solid rgba(199, 151, 45, .22);
+        background: rgba(255, 244, 216, .86);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-flash.ok {{
+        border-color: rgba(26, 114, 75, .16);
+        background: rgba(226, 242, 232, .86);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-work-head h2 {{
+        text-align: left;
+        font-size: 22px;
+        padding-left: 2px;
+      }}
+      .cash-mobile.is-v2 .cash-work-month-card {{
+        padding: 18px;
+      }}
+      .cash-mobile.is-v2 .cash-work-summary {{
+        border-radius: 16px;
+        background: rgba(226, 242, 232, .9);
+        border: 1px solid rgba(24, 104, 68, .10);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-form input,
+      .cash-mobile.is-v2 .cash-mobile-form select,
+      .cash-mobile.is-v2 .cash-mobile-form textarea,
+      .cash-mobile.is-v2 .cash-date-input-wrap {{
+        border-radius: 14px;
+        border-color: rgba(34, 45, 38, .12);
+        background: rgba(255, 255, 255, .86);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-form button,
+      .cash-mobile.is-v2 .cash-mobile-date-filter button {{
+        border-radius: 14px;
+        background: #176b46;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-form button.danger,
+      .cash-mobile.is-v2 .cash-mobile-form button.cash-mobile-danger {{
+        background: #a23333;
+      }}
+      .cash-design-v2 .cash-mobile-bottom-tabs {{
+        width: min(calc(100% - 18px), 542px);
+        bottom: 9px;
+        border: 1px solid rgba(34, 45, 38, .10);
+        border-radius: 22px;
+        padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+        background: rgba(255, 255, 255, .82);
+        box-shadow: 0 18px 44px rgba(18, 24, 21, .14);
+      }}
+      .cash-design-v2 .cash-mobile-nav {{
+        min-height: 46px;
+        border-radius: 16px;
+        font-size: 12px;
+      }}
+      .cash-design-v2 .cash-mobile-nav.active {{
+        background: #1a724b;
+        color: #fff;
+        box-shadow: 0 10px 20px rgba(26, 114, 75, .22);
+      }}
       .cash-receipt-viewer {{
         position: fixed;
         inset: 0;
@@ -21209,7 +21437,7 @@ def render_cashoperations_body(
         display: block;
       }}
     </style>
-    <section class="cash-mobile">
+    <section class="cash-mobile{" is-v2" if cash_design_version == "v2" else ""}">
       <div class="cash-mobile-tabs{cashbox_tabs_extra_class}" data-cashbox-tabs>{cashbox_tabs}</div>
       {flash_html}
       {edit_back_html}
@@ -22215,12 +22443,15 @@ def render_cashoperations_body(
     """
 
 
-def render_cashoperations_standalone_page(body: str, current_user: dict | None = None) -> str:
+def render_cashoperations_standalone_page(body: str, current_user: dict | None = None, design_version: str = "classic") -> str:
     user_label = ""
     logout_html = ""
     if current_user:
         user_label = (current_user.get("full_name") or current_user.get("login") or "").strip()
         logout_html = '<div class="cash-shell-actions"><button class="cash-shell-refresh" type="button" data-cash-refresh title="Обновить" aria-label="Обновить">↻</button><a class="cash-shell-logout" href="/cashoperations/logout">Выйти</a></div>'
+    design_version = design_version if design_version in {"classic", "v2"} else "classic"
+    body_class = ' class="cash-design-v2"' if design_version == "v2" else ""
+    shell_class = 'cash-shell is-v2' if design_version == "v2" else "cash-shell"
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -22308,10 +22539,57 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
       font-size: 22px;
       line-height: 1;
     }}
+    body.cash-design-v2 {{
+      --bg: #f5f4ef;
+      --panel: rgba(255, 255, 255, .88);
+      --ink: #151a18;
+      --muted: #66706a;
+      --line: rgba(39, 49, 43, .12);
+      background:
+        linear-gradient(180deg, rgba(30, 36, 35, .06), transparent 220px),
+        var(--bg);
+    }}
+    .cash-shell.is-v2 {{
+      padding-left: 12px;
+      padding-right: 12px;
+    }}
+    .cash-shell.is-v2 .cash-shell-top {{
+      margin: 0 -12px;
+      padding: calc(10px + env(safe-area-inset-top)) 12px 12px;
+      background: rgba(245, 244, 239, .86);
+      border-bottom-color: rgba(39, 49, 43, .08);
+      box-shadow: 0 12px 36px rgba(18, 24, 21, .08);
+    }}
+    .cash-shell.is-v2 .cash-shell-top::after {{
+      content: "";
+      display: block;
+      height: 1px;
+      margin-top: 10px;
+      background: linear-gradient(90deg, transparent, rgba(199, 151, 45, .46), transparent);
+    }}
+    .cash-shell.is-v2 .cash-shell-user {{
+      font-size: 12px;
+      font-weight: 750;
+      color: #6b726d;
+    }}
+    .cash-shell.is-v2 h1 {{
+      font-size: 28px;
+      letter-spacing: 0;
+    }}
+    .cash-shell.is-v2 .cash-shell-refresh,
+    .cash-shell.is-v2 .cash-shell-logout {{
+      min-height: 44px;
+      border-radius: 14px;
+      border-color: rgba(39, 49, 43, .12);
+      background: rgba(255, 255, 255, .76);
+      color: #3c4640;
+      box-shadow: 0 8px 22px rgba(18, 24, 21, .08);
+      backdrop-filter: blur(18px);
+    }}
   </style>
 </head>
-<body>
-  <main class="cash-shell">
+<body{body_class}>
+  <main class="{shell_class}">
     <header class="cash-shell-top">
       <div class="cash-shell-row">
         <div>
@@ -24216,11 +24494,16 @@ def render_access_section(
         personal_cashbox_checked = personal_cashbox_code in allowed_codes
         cashbox_default_hidden = cash_settings_hidden if allowed_codes else " hidden"
         default_screen = user_access.get("default_screen") if user_access.get("default_screen") in {"home", "history", "letters", "work"} else "home"
+        design_version = user_access.get("design_version") if user_access.get("design_version") in {"classic", "v2"} else "classic"
         default_screen_labels = {
             "home": "Касса",
             "history": "История",
             "letters": "Письма",
             "work": "Работа",
+        }
+        design_version_labels = {
+            "classic": "Classic",
+            "v2": "V2 preview",
         }
         push_device_count = storage.count_cash_push_subscriptions_for_user(owner_chat_id, user["id"])
         push_detail_mode = user_access.get("push_detail_mode") if user_access.get("push_detail_mode") in {"safe", "amount"} else "safe"
@@ -24259,6 +24542,7 @@ def render_access_section(
                     <span class="badge">Пуши: {push_mode_label}</span>
                     <span class="badge">Группы пушей: {escape(push_groups_label)}</span>
                     <span class="badge">Старт: {escape(default_screen_labels.get(default_screen, "Касса"))}</span>
+                    <span class="badge{" warn" if design_version == "v2" else ""}">Дизайн: {escape(design_version_labels.get(design_version, "Classic"))}</span>
                     <span class="badge">Письма: {"да" if user_access.get("can_view_letters") else "нет"}</span>
                     <span class="badge">Работа: {"да" if user_access.get("can_view_work_reports") else "нет"}</span>
                   </div>
@@ -24287,6 +24571,14 @@ def render_access_section(
                       <option value="work"{" selected" if default_screen == "work" else ""}>Работа</option>
                     </select>
                     <div class="field-hint">Что открывать первым после входа в мобильное приложение.</div>
+                  </div>
+                  <div class="field cash-setting"{cash_settings_hidden}>
+                    <label>Дизайн приложения</label>
+                    <select name="design_version">
+                      <option value="classic"{" selected" if design_version == "classic" else ""}>Classic / текущий</option>
+                      <option value="v2"{" selected" if design_version == "v2" else ""}>V2 preview / новый дизайн</option>
+                    </select>
+                    <div class="field-hint">V2 включится только для этого пользователя. Остальные продолжат видеть текущий дизайн.</div>
                   </div>
                   <div class="field cash-setting"{cashbox_default_hidden}>
                     <label>Касса по умолчанию для раздела «Касса»</label>
@@ -26314,7 +26606,9 @@ self.addEventListener("notificationclick", (event) => {
             selected_work_month,
             show_work_stats,
         )
-        html = render_cashoperations_standalone_page(body, current_user)
+        cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"])) if current_user else None
+        design_version = cash_access.get("design_version", "classic") if cash_access else "classic"
+        html = render_cashoperations_standalone_page(body, current_user, design_version)
         start_response("200 OK", [
             ("Content-Type", "text/html; charset=utf-8"),
             ("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"),
@@ -29927,6 +30221,7 @@ self.addEventListener("notificationclick", (event) => {
                 form.get("role", "limited"),
                 form.get("default_cashbox_code", ""),
                 form.get("default_screen", "home"),
+                form.get("design_version", "classic"),
                 allowed_cashbox_codes,
                 form.get("preview_login", ""),
                 hash_password(form.get("preview_password", "").strip()) if form.get("preview_password", "").strip() else None,
