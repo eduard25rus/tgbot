@@ -7532,6 +7532,21 @@ def layout(
       letter-spacing: 0;
       font-variant-numeric: proportional-nums;
     }}
+    .workforce-calendar-date-row {{
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      min-height: 18px;
+    }}
+    .workforce-calendar-report-dot {{
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: #b4433f;
+      box-shadow: 0 0 0 2px rgba(180, 67, 63, 0.14);
+      flex: 0 0 auto;
+      margin-top: 1px;
+    }}
     .workforce-calendar-metrics {{
       display: flex;
       gap: 6px;
@@ -17177,6 +17192,7 @@ def workforce_query_suffix(
     project_filter: str = "",
     employee_filter: int = 0,
     selected_day: date | None = None,
+    missing_reports_filter: bool = False,
 ) -> str:
     parts = [
         f"owner={owner_chat_id}",
@@ -17188,6 +17204,8 @@ def workforce_query_suffix(
         parts.append(f"employee={employee_filter}")
     if selected_day is not None:
         parts.append(f"day={selected_day.isoformat()}")
+    if missing_reports_filter:
+        parts.append("missing_reports=1")
     return "?" + "&".join(parts)
 
 
@@ -17437,6 +17455,7 @@ def render_workforce_section(
     employee_filter: int = 0,
     selected_day: date | None = None,
     summary_scope: str = "day",
+    missing_reports_filter: bool = False,
     flash_message: str = "",
     success: bool = False,
 ) -> str:
@@ -17448,6 +17467,7 @@ def render_workforce_section(
         selected_day is None
         and not project_filter
         and not employee_filter
+        and not missing_reports_filter
         and selected_month == today.replace(day=1)
     ):
         selected_day = today
@@ -17478,10 +17498,16 @@ def render_workforce_section(
         if (not project_filter or report.project_code == project_filter)
         and (not employee_filter or any(int(worker["employee_id"]) == employee_filter for worker in report.workers))
     ]
-    reports = [
-        report for report in calendar_reports
-        if selected_day is None or report.report_date == selected_day
-    ]
+    def workforce_report_needs_work_report(report) -> bool:
+        return bool(report.workers) and not (report.work_description or "").strip() and not report.files
+    reports = (
+        [report for report in calendar_reports if workforce_report_needs_work_report(report)]
+        if missing_reports_filter
+        else [
+            report for report in calendar_reports
+            if selected_day is None or report.report_date == selected_day
+        ]
+    )
     month_options = []
     for offset in range(-2, 4):
         month_value = month_add(selected_month, offset)
@@ -17577,7 +17603,7 @@ def render_workforce_section(
     """
     filter_reset = (
         f'<a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}">Сбросить</a>'
-        if project_filter or employee_filter or selected_day is not None else ""
+        if project_filter or employee_filter or selected_day is not None or missing_reports_filter else ""
     )
     add_form = ""
     detail_add_shift_form = ""
@@ -17607,10 +17633,12 @@ def render_workforce_section(
           </div>
         </details>
         """
-    detail_active = selected_day is not None or bool(project_filter) or bool(employee_filter)
+    detail_active = selected_day is not None or bool(project_filter) or bool(employee_filter) or missing_reports_filter
     current_employee_label = employee_lookup.get(employee_filter).full_name if employee_filter in employee_lookup else ""
     detail_title_parts = []
-    if selected_day is not None:
+    if missing_reports_filter:
+        detail_title_parts.append("Смены без отчетов")
+    elif selected_day is not None:
         detail_title_parts.append(format_date(selected_day))
     if project_filter:
         detail_title_parts.append(project_labels.get(project_filter, project_filter))
@@ -17618,18 +17646,21 @@ def render_workforce_section(
         detail_title_parts.append(current_employee_label or f"Сотрудник #{employee_filter}")
     detail_title = " · ".join(detail_title_parts) if detail_title_parts else "Реестр за месяц"
     detail_filter_caption = "Текущий фильтр: " + detail_title if detail_active else ""
+    missing_reports_href = f"/workforce{workforce_query_suffix(owner_chat_id, selected_month, project_filter, employee_filter, None, True)}#workforce-detail"
     month_form = f"""
     <form class="workforce-calendar-toolbar" method="get" action="/workforce">
       <input type="hidden" name="owner" value="{owner_chat_id}">
       <input type="hidden" name="project" value="{escape(project_filter)}">
       <input type="hidden" name="employee" value="{employee_filter if employee_filter else ''}">
       <input type="hidden" name="summary" value="{escape(summary_scope)}">
+      {f'<input type="hidden" name="missing_reports" value="1">' if missing_reports_filter else ''}
       <div class="field">
         <label>Месяц</label>
         <select name="month">{''.join(month_options)}</select>
       </div>
       <div class="action-row" style="gap:10px; margin:0;">
         <button class="secondary-btn mini" type="submit">Показать месяц</button>
+        <a class="secondary-btn mini" href="{missing_reports_href}">Смены без отчетов</a>
         {f'<a class="secondary-btn mini" href="/workforce?owner={owner_chat_id}&month={selected_month.strftime("%Y-%m")}">Сбросить фильтр</a>' if detail_active else ''}
       </div>
     </form>
@@ -17663,9 +17694,11 @@ def render_workforce_section(
     """
     daily_stats: dict[date, dict] = {}
     for report in calendar_reports:
-        day_bucket = daily_stats.setdefault(report.report_date, {"people": set(), "units": 0.0, "projects": {}})
+        day_bucket = daily_stats.setdefault(report.report_date, {"people": set(), "units": 0.0, "projects": {}, "missing_report": False})
         project_label = workforce_report_project_label(report)
         project_bucket = day_bucket["projects"].setdefault(project_label, {"people": set(), "units": 0.0})
+        if workforce_report_needs_work_report(report):
+            day_bucket["missing_report"] = True
         for worker in report.workers:
             employee_id = int(worker["employee_id"])
             day_part = float(worker["day_part"])
@@ -17688,6 +17721,10 @@ def render_workforce_section(
             day_classes.append("is-today")
         if selected_day == day_value:
             day_classes.append("is-selected")
+        missing_report_dot = (
+            '<span class="workforce-calendar-report-dot" title="Не хватает отчета о работе" aria-label="Не хватает отчета о работе"></span>'
+            if day_stats and day_stats.get("missing_report") else ""
+        )
         if day_stats:
             project_lines = "".join(
                 f'<span>{escape(project_label)}</span>'
@@ -17708,7 +17745,10 @@ def render_workforce_section(
         calendar_cells.append(
             f"""
             <a class="{' '.join(day_classes)}" href="{day_href}">
-              <div class="workforce-calendar-date">{day_number}</div>
+              <div class="workforce-calendar-date-row">
+                <div class="workforce-calendar-date">{day_number}</div>
+                {missing_report_dot}
+              </div>
               {cell_body}
             </a>
             """
@@ -32906,6 +32946,7 @@ self.addEventListener("notificationclick", (event) => {
         except ValueError:
             selected_day = None
         summary_scope = query.get("summary", ["day"])[0].strip()
+        missing_reports_filter = query.get("missing_reports", ["0"])[0].strip() == "1"
         flash_message = query.get("flash", [""])[0].strip()
         success = query.get("ok", ["0"])[0] == "1"
         body = render_workforce_section(
@@ -32917,6 +32958,7 @@ self.addEventListener("notificationclick", (event) => {
             employee_filter,
             selected_day,
             summary_scope,
+            missing_reports_filter,
             flash_message,
             success,
         )
