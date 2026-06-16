@@ -19616,7 +19616,7 @@ def render_cashoperations_body(
         receipt_kind = "pdf" if receipt_name.endswith(".pdf") else "image"
         if kind == "income" and can_edit and not is_transfer_entry:
             return f"""
-            <button class="cash-mobile-op editable" type="button"
+            <button class="cash-mobile-op cash-mobile-op-{kind} editable" type="button"
               data-edit-income="1"
               data-income-id="{entry.id}"
               data-income-amount="{escape(str(entry.amount))}"
@@ -19635,7 +19635,7 @@ def render_cashoperations_body(
             """
         if kind == "expense" and can_edit:
             return f"""
-            <button class="cash-mobile-op editable" type="button"
+            <button class="cash-mobile-op cash-mobile-op-{kind} editable" type="button"
               data-edit-expense="1"
 	              data-expense-id="{entry.id}"
 	              data-expense-amount="{escape(str(entry.amount))}"
@@ -19667,7 +19667,7 @@ def render_cashoperations_body(
             </button>
             """
         return f"""
-        <article class="cash-mobile-op">
+        <article class="cash-mobile-op cash-mobile-op-{kind}">
           <div class="cash-mobile-op-main">
             <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
             <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
@@ -19792,7 +19792,7 @@ def render_cashoperations_body(
           </section>
         </section>
         """
-        letters_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="letters">Письма</button>'
+        letters_nav_html = '<button class="cash-mobile-nav cash-mobile-nav-letters" type="button" data-cash-screen="letters">Письма</button>'
 
     work_report_date = selected_work_report_date or today
     work_month = (selected_work_month or work_report_date).replace(day=1)
@@ -20206,13 +20206,19 @@ def render_cashoperations_body(
 
     cash_action_buttons = ""
     if has_cashbox_access:
-        cash_action_buttons = f"""
+        if can_edit and cash_design_version == "v2":
+            cash_action_buttons = """
+          <button class="cash-mobile-action income" type="button" data-cash-screen="income" data-cash-new-income="1">Добавить поступление</button>
+          <button class="cash-mobile-action expense" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
+            """
+        elif can_edit:
+            cash_action_buttons = """
           <button class="cash-mobile-action expense" type="button" data-cash-screen="expense" data-cash-new-expense="1">Добавить расход</button>
           <button class="cash-mobile-action income" type="button" data-cash-screen="income" data-cash-new-income="1">Добавить поступление</button>
-        """ if can_edit else ""
-        cash_action_buttons += '<button class="cash-mobile-action" type="button" data-cash-screen="history">История</button>'
+            """
+        cash_action_buttons += '<button class="cash-mobile-action history" type="button" data-cash-screen="history">История</button>'
     if can_view_work_reports:
-        cash_action_buttons += '<button class="cash-mobile-action" type="button" data-cash-screen="work">Отчеты о работе</button>'
+        cash_action_buttons += '<button class="cash-mobile-action reports" type="button" data-cash-screen="work">Отчеты о работе</button>'
 
     reconcile_screen = (
     f"""
@@ -20245,10 +20251,28 @@ def render_cashoperations_body(
     cash_nav_html = ""
     history_nav_html = ""
     if has_cashbox_access:
+        v2_balance_panel_intro = ""
+        v2_balance_sheet_open = ""
+        v2_balance_sheet_close = ""
+        if cash_design_version == "v2":
+            v2_balance_panel_intro = f"""
+          <div class="cash-v2-balance-head">
+            <div class="cash-v2-cashbox-id">
+              <span class="cash-v2-cashbox-icon" aria-hidden="true"></span>
+              <strong>{escape(cashbox_labels.get(selected_cashbox, "Касса"))}</strong>
+              <span class="cash-v2-chevron" aria-hidden="true"></span>
+            </div>
+            <a class="cash-v2-cashbox-switch" href="/cashoperations?cashbox={quote_plus(selected_cashbox)}">Сменить кассу</a>
+          </div>
+            """
+            v2_balance_sheet_open = '<div class="cash-v2-balance-sheet">'
+            v2_balance_sheet_close = '</div>'
         home_screen_html = f"""
       <section id="cashScreenHome" class="cash-mobile-screen{" active" if initial_screen == "home" else ""}">
         <section class="cash-mobile-panel cash-mobile-balance-panel">
-        <div class="cash-mobile-sub">{escape(cashbox_labels.get(selected_cashbox, "Касса"))}</div>
+          {v2_balance_panel_intro}
+          {v2_balance_sheet_open}
+        <div class="cash-mobile-sub">{"Доступно на начало дня" if cash_design_version == "v2" else escape(cashbox_labels.get(selected_cashbox, "Касса"))}</div>
           <div class="cash-mobile-balance{" negative" if balance < -0.009 else ""}">{escape(format_amount(balance))}</div>
           <div class="cash-mobile-metrics">
             <div class="cash-mobile-metric"><span>Поступило сегодня</span><b>{escape(format_amount(today_income))}</b></div>
@@ -20256,12 +20280,13 @@ def render_cashoperations_body(
             <div class="cash-mobile-metric"><span>На начало дня</span><b>{escape(format_amount(start_balance))}</b></div>
           </div>
           {warning_html}
+          {v2_balance_sheet_close}
         </section>
         <div class="cash-mobile-actions cash-mobile-command-dock">
           {cash_action_buttons}
         </div>
         <section class="cash-mobile-panel cash-mobile-ledger-panel">
-          <div class="cash-mobile-section-head"><h2>Последние операции</h2></div>
+          <div class="cash-mobile-section-head"><h2>Последние операции</h2><button class="cash-v2-see-all" type="button" data-cash-screen="history">Смотреть все</button></div>
           {latest_rows}
         </section>
         {push_status_html}
@@ -20277,8 +20302,8 @@ def render_cashoperations_body(
         </section>
       </section>
         """
-        cash_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="home">Касса</button>'
-        history_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="history">История</button>'
+        cash_nav_html = '<button class="cash-mobile-nav cash-mobile-nav-cash" type="button" data-cash-screen="home">Касса</button>'
+        history_nav_html = '<button class="cash-mobile-nav cash-mobile-nav-history" type="button" data-cash-screen="history">История</button>'
     empty_screen_html = ""
     if initial_screen == "none":
         empty_screen_html = """
@@ -20289,11 +20314,53 @@ def render_cashoperations_body(
         </section>
       </section>
         """
-    work_nav_html = '<button class="cash-mobile-nav" type="button" data-cash-screen="work">Работа</button>' if can_view_work_reports else ""
+    work_nav_html = '<button class="cash-mobile-nav cash-mobile-nav-work" type="button" data-cash-screen="work">Работа</button>' if can_view_work_reports else ""
     bottom_nav_items = "".join([cash_nav_html, letters_nav_html, history_nav_html, work_nav_html])
     bottom_nav_count = sum(1 for item in [cash_nav_html, letters_nav_html, history_nav_html, work_nav_html] if item)
     bottom_nav_html = f'<nav class="cash-mobile-bottom-tabs">{bottom_nav_items}</nav>' if bottom_nav_items else ""
     work_screen_class = f'cash-mobile-screen cash-work-screen{" active" if initial_screen == "work" else ""}{" is-stats-mode" if show_work_stats else ""}'
+    v2_unsubmitted_reports = sum(
+        1
+        for report in work_reports
+        if not ((report.work_description or "").strip() or len(report.files))
+    ) if can_view_work_reports else 0
+    v2_top_summary_html = ""
+    v2_mode_switch_html = ""
+    if cash_design_version == "v2":
+        v2_top_summary_html = f"""
+      <section class="cash-v2-overview" aria-label="Сводка">
+        <div class="cash-v2-overview-item balance">
+          <span class="cash-v2-overview-icon" aria-hidden="true"></span>
+          <span class="cash-v2-overview-text">
+            <small>Баланс на начало дня</small>
+            <strong>{escape(format_amount(start_balance))}</strong>
+            <em>На {escape(format_date(today))}</em>
+          </span>
+        </div>
+        <div class="cash-v2-overview-item people">
+          <span class="cash-v2-overview-icon" aria-hidden="true"></span>
+          <span class="cash-v2-overview-text">
+            <small>Работает сегодня</small>
+            <strong>{work_total_people} чел.</strong>
+            <em>{escape(work_units_label(work_total_units))} смен</em>
+          </span>
+        </div>
+        <div class="cash-v2-overview-item reports">
+          <span class="cash-v2-overview-icon" aria-hidden="true"></span>
+          <span class="cash-v2-overview-text">
+            <small>Отчетов не сдано</small>
+            <strong>{v2_unsubmitted_reports}</strong>
+            <em>Из {len(work_reports)} объектов</em>
+          </span>
+        </div>
+      </section>
+        """
+        v2_mode_switch_html = f"""
+      <div class="cash-v2-mode-switch" role="tablist" aria-label="Раздел">
+        <button class="cash-v2-mode active" type="button" data-cash-screen="home">Касса</button>
+        {'<button class="cash-v2-mode" type="button" data-cash-screen="work">Работа</button>' if can_view_work_reports else ''}
+      </div>
+        """
 
     return f"""
     <style>
@@ -21126,11 +21193,132 @@ def render_cashoperations_body(
         max-width: 560px;
         padding: 10px 0 104px;
       }}
+      .cash-mobile.is-v2 .cash-v2-mode-switch {{
+        width: min(340px, 100%);
+        margin: 0 0 14px auto;
+        padding: 3px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 3px;
+        border: 1px solid rgba(34, 45, 38, .10);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, .66);
+        box-shadow:
+          0 14px 34px rgba(18, 24, 21, .07),
+          inset 0 1px 0 rgba(255, 255, 255, .82);
+        backdrop-filter: blur(18px);
+      }}
+      .cash-mobile.is-v2 .cash-v2-mode {{
+        min-height: 38px;
+        border: 0;
+        border-radius: 11px;
+        background: transparent;
+        color: #2f3933;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 850;
+      }}
+      .cash-mobile.is-v2 .cash-v2-mode.active {{
+        background: linear-gradient(145deg, #1a221f, #27312d);
+        color: #fff;
+        box-shadow: 0 10px 22px rgba(18, 24, 21, .18);
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview {{
+        display: grid;
+        grid-template-columns: minmax(0, 1.22fr) minmax(0, .9fr) minmax(0, .88fr);
+        gap: 0;
+        margin-bottom: 14px;
+        padding: 14px 10px;
+        border: 1px solid rgba(34, 45, 38, .09);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, .80);
+        box-shadow:
+          0 18px 42px rgba(18, 24, 21, .08),
+          inset 0 1px 0 rgba(255, 255, 255, .90);
+        backdrop-filter: blur(20px);
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item {{
+        min-width: 0;
+        display: grid;
+        grid-template-columns: 30px minmax(0, 1fr);
+        gap: 7px;
+        align-items: center;
+        padding: 0 8px;
+        border-left: 1px solid rgba(34, 45, 38, .09);
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item:first-child {{
+        border-left: 0;
+        padding-left: 4px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item:last-child {{
+        padding-right: 4px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-icon {{
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-weight: 900;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item.balance .cash-v2-overview-icon {{
+        background: #e7f2ec;
+        color: #157349;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item.balance .cash-v2-overview-icon::before {{
+        content: "▭";
+        font-size: 18px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item.people .cash-v2-overview-icon {{
+        background: #fff2d8;
+        color: #c38a00;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item.people .cash-v2-overview-icon::before {{
+        content: "◌";
+        font-size: 21px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item.reports .cash-v2-overview-icon {{
+        background: #fde8e8;
+        color: #c62228;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item.reports .cash-v2-overview-icon::before {{
+        content: "□";
+        font-size: 17px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-text {{
+        min-width: 0;
+        display: block;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-text small,
+      .cash-mobile.is-v2 .cash-v2-overview-text em {{
+        display: block;
+        color: #657069;
+        font-style: normal;
+        font-size: 9.5px;
+        line-height: 1.25;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-text strong {{
+        display: block;
+        margin: 2px 0;
+        color: #111916;
+        font-size: 13px;
+        line-height: 1.12;
+        font-weight: 900;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: clip;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item.balance .cash-v2-overview-text strong {{
+        color: #157349;
+      }}
+      .cash-mobile.is-v2 .cash-v2-overview-item.reports .cash-v2-overview-text strong {{
+        color: #c62228;
+      }}
       .cash-mobile.is-v2 .cash-mobile-tabs {{
         display: flex;
         gap: 7px;
         overflow-x: auto;
-        margin: 2px 0 12px;
+        margin: 2px 0 14px;
         padding: 2px 2px 5px;
         scrollbar-width: none;
       }}
@@ -21168,7 +21356,7 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-mobile-balance-panel {{
         position: relative;
         overflow: hidden;
-        padding: 18px;
+        padding: 0;
         background:
           linear-gradient(145deg, #1b211f 0%, #29312d 64%, #151a18 100%);
         color: #fff;
@@ -21187,18 +21375,86 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-mobile-balance-panel > * {{
         position: relative;
       }}
+      .cash-mobile.is-v2 .cash-v2-balance-head {{
+        min-height: 82px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 20px 18px 18px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-cashbox-id {{
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: #fff;
+      }}
+      .cash-mobile.is-v2 .cash-v2-cashbox-id strong {{
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 17px;
+        font-weight: 900;
+      }}
+      .cash-mobile.is-v2 .cash-v2-cashbox-icon {{
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, .20);
+        display: grid;
+        place-items: center;
+        color: #fff;
+        background: rgba(255, 255, 255, .05);
+      }}
+      .cash-mobile.is-v2 .cash-v2-cashbox-icon::before {{
+        content: "▣";
+        font-size: 17px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-chevron {{
+        width: 8px;
+        height: 8px;
+        border-right: 2px solid rgba(255, 255, 255, .72);
+        border-bottom: 2px solid rgba(255, 255, 255, .72);
+        transform: rotate(45deg) translateY(-2px);
+        flex: 0 0 auto;
+      }}
+      .cash-mobile.is-v2 .cash-v2-cashbox-switch {{
+        flex: 0 0 auto;
+        min-height: 38px;
+        display: inline-grid;
+        place-items: center;
+        padding: 0 14px;
+        border: 1px solid rgba(255, 255, 255, .20);
+        border-radius: 14px;
+        color: #fff;
+        text-decoration: none;
+        font-size: 12px;
+        font-weight: 800;
+        background: rgba(255, 255, 255, .06);
+      }}
+      .cash-mobile.is-v2 .cash-v2-balance-sheet {{
+        margin-top: 0;
+        padding: 21px 18px 18px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, .96);
+        color: #111916;
+        box-shadow: 0 -1px 0 rgba(255, 255, 255, .70);
+      }}
       .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-sub {{
-        color: rgba(255, 255, 255, .70);
-        font-weight: 750;
-        text-transform: uppercase;
-        letter-spacing: .08em;
+        color: #626d66;
+        font-weight: 650;
+        text-transform: none;
+        letter-spacing: 0;
+        font-size: 13px;
       }}
       .cash-mobile.is-v2 .cash-mobile-balance {{
         margin-top: 12px;
         font-size: clamp(38px, 12vw, 54px);
         font-weight: 850;
-        color: #fff;
-        text-shadow: 0 12px 28px rgba(0, 0, 0, .22);
+        color: #04080f;
+        text-shadow: 0 10px 24px rgba(13, 23, 19, .10);
       }}
       .cash-mobile.is-v2 .cash-mobile-balance.income {{
         color: #1a724b;
@@ -21209,56 +21465,107 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metrics {{
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 8px;
+        gap: 0;
         margin-top: 18px;
+        border-top: 1px solid rgba(34, 45, 38, .09);
       }}
       .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metric {{
-        border-color: rgba(255, 255, 255, .12);
-        border-radius: 14px;
-        padding: 10px 8px;
-        background: rgba(255, 255, 255, .08);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10);
+        border: 0;
+        border-left: 1px solid rgba(34, 45, 38, .09);
+        border-radius: 0;
+        padding: 15px 12px 0;
+        background: transparent;
+        box-shadow: none;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metric:first-child {{
+        border-left: 0;
+        padding-left: 0;
       }}
       .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metric span {{
-        color: rgba(255, 255, 255, .62);
-        font-size: 10px;
+        color: #626d66;
+        font-size: 10.5px;
         min-height: 25px;
       }}
       .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metric b {{
-        color: #fff;
-        font-size: 12px;
+        color: #14201a;
+        font-size: 13px;
       }}
       .cash-mobile.is-v2 .cash-mobile-command-dock {{
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0;
         margin-top: 12px;
+        padding: 12px 10px;
+        border: 1px solid rgba(34, 45, 38, .09);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, .82);
+        box-shadow:
+          0 18px 42px rgba(18, 24, 21, .08),
+          inset 0 1px 0 rgba(255, 255, 255, .86);
+        backdrop-filter: blur(20px);
       }}
       .cash-mobile.is-v2 .cash-mobile-action {{
-        min-height: 52px;
-        border-radius: 16px;
-        border-color: rgba(34, 45, 38, .10);
-        background: rgba(255, 255, 255, .78);
-        color: #202923;
-        box-shadow:
-          0 12px 26px rgba(18, 24, 21, .08),
-          inset 0 1px 0 rgba(255, 255, 255, .76);
-        font-size: 15px;
+        min-height: 78px;
+        border: 0;
+        border-left: 1px solid rgba(34, 45, 38, .09);
+        border-radius: 0;
+        padding: 2px 8px 0;
+        display: grid;
+        align-content: center;
+        justify-items: center;
+        gap: 7px;
+        background: transparent;
+        color: #18211d;
+        box-shadow: none;
+        font-size: 12px;
+        line-height: 1.15;
+        font-weight: 850;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-command-dock .cash-mobile-action:first-child {{
+        border-left: 0;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-action::before {{
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-size: 25px;
+        line-height: 1;
+        box-shadow: 0 8px 18px rgba(18, 24, 21, .12);
       }}
       .cash-mobile.is-v2 .cash-mobile-action.expense {{
-        background: linear-gradient(180deg, #a73535, #8f2d2d);
-        border-color: rgba(143, 45, 45, .24);
-        color: #fff;
+        color: #c62228;
       }}
       .cash-mobile.is-v2 .cash-mobile-action.income {{
-        background: linear-gradient(180deg, #1d7a50, #16633f);
-        border-color: rgba(22, 99, 63, .24);
-        color: #fff;
+        color: #157349;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-action.income::before {{
+        content: "+";
+        background: linear-gradient(180deg, #198553, #116b42);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-action.expense::before {{
+        content: "−";
+        background: linear-gradient(180deg, #db1b25, #b9141c);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-action.history::before {{
+        content: "◷";
+        background: #26322e;
+        font-size: 22px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-action.reports::before {{
+        content: "▥";
+        background: transparent;
+        color: #4c5952;
+        border-radius: 0;
+        box-shadow: none;
+        font-size: 29px;
       }}
       .cash-mobile.is-v2 .cash-mobile-command-dock .cash-mobile-action:nth-child(n+3) {{
-        min-height: 46px;
-        background: rgba(255, 255, 255, .64);
-        color: #445049;
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, .68);
+        min-height: 78px;
+        background: transparent;
+        color: #26322e;
+        box-shadow: none;
       }}
       .cash-mobile.is-v2 .cash-mobile-section-head h2,
       .cash-mobile.is-v2 .cash-mobile-panel h2 {{
@@ -21266,13 +21573,87 @@ def render_cashoperations_body(
         font-weight: 850;
       }}
       .cash-mobile.is-v2 .cash-mobile-ledger-panel {{
-        padding-top: 17px;
+        padding: 17px 16px 10px;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-section-head {{
+        margin-bottom: 7px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-see-all {{
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 0;
+        background: transparent;
+        color: #5b6660;
+        padding: 4px 0;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 650;
+      }}
+      .cash-mobile.is-v2 .cash-v2-see-all::after {{
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-right: 2px solid currentColor;
+        border-bottom: 2px solid currentColor;
+        transform: rotate(-45deg);
       }}
       .cash-mobile.is-v2 .cash-mobile-op {{
         align-items: center;
         min-height: 70px;
-        padding: 13px 0;
+        padding: 14px 18px 14px 50px;
         border-top-color: rgba(34, 45, 38, .10);
+        position: relative;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op::before {{
+        content: "";
+        position: absolute;
+        left: 2px;
+        top: 50%;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        transform: translateY(-50%);
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-size: 17px;
+        font-weight: 900;
+        z-index: 1;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op::after {{
+        content: "";
+        position: absolute;
+        right: 2px;
+        top: 50%;
+        width: 8px;
+        height: 8px;
+        border-right: 2px solid rgba(80, 91, 84, .62);
+        border-bottom: 2px solid rgba(80, 91, 84, .62);
+        transform: translateY(-50%) rotate(-45deg);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op-main::before {{
+        content: "";
+        position: absolute;
+        left: 15px;
+        top: -50%;
+        bottom: -50%;
+        width: 1px;
+        background: rgba(34, 45, 38, .10);
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op:first-of-type .cash-mobile-op-main::before {{
+        top: 50%;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op:last-of-type .cash-mobile-op-main::before {{
+        bottom: 50%;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op-income::before {{
+        content: "↓";
+        background: #0f8752;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op-expense::before {{
+        content: "↑";
+        background: #d21520;
       }}
       .cash-mobile.is-v2 .cash-mobile-op-title {{
         font-size: 13px;
@@ -21334,20 +21715,88 @@ def render_cashoperations_body(
         width: min(calc(100% - 18px), 542px);
         bottom: 9px;
         border: 1px solid rgba(34, 45, 38, .10);
-        border-radius: 22px;
-        padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
-        background: rgba(255, 255, 255, .82);
+        border-radius: 24px;
+        padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+        background: rgba(255, 255, 255, .90);
         box-shadow: 0 18px 44px rgba(18, 24, 21, .14);
       }}
       .cash-design-v2 .cash-mobile-nav {{
-        min-height: 46px;
+        min-height: 54px;
         border-radius: 16px;
-        font-size: 12px;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 4px;
+        font-size: 11px;
+        background: transparent;
+        position: relative;
       }}
+      .cash-design-v2 .cash-mobile-nav::before {{
+        display: block;
+        color: #6a756f;
+        font-size: 22px;
+        line-height: 1;
+      }}
+      .cash-design-v2 .cash-mobile-nav-cash::before {{ content: "▰"; }}
+      .cash-design-v2 .cash-mobile-nav-letters::before {{ content: "▱"; }}
+      .cash-design-v2 .cash-mobile-nav-history::before {{ content: "◷"; }}
+      .cash-design-v2 .cash-mobile-nav-work::before {{ content: "▣"; }}
       .cash-design-v2 .cash-mobile-nav.active {{
-        background: #1a724b;
-        color: #fff;
-        box-shadow: 0 10px 20px rgba(26, 114, 75, .22);
+        background: transparent;
+        color: #126f45;
+        box-shadow: none;
+      }}
+      .cash-design-v2 .cash-mobile-nav.active::before {{
+        color: #126f45;
+      }}
+      .cash-design-v2 .cash-mobile-nav.active::after {{
+        content: "";
+        position: absolute;
+        left: 50%;
+        bottom: 1px;
+        width: 26px;
+        height: 3px;
+        border-radius: 999px;
+        transform: translateX(-50%);
+        background: #126f45;
+      }}
+      @media (max-width: 420px) {{
+        .cash-mobile.is-v2 .cash-v2-mode-switch {{
+          margin-left: 0;
+        }}
+        .cash-mobile.is-v2 .cash-v2-overview {{
+          grid-template-columns: 1fr;
+          gap: 10px;
+          padding: 12px;
+        }}
+        .cash-mobile.is-v2 .cash-v2-overview-item {{
+          border-left: 0;
+          border-top: 1px solid rgba(34, 45, 38, .09);
+          padding: 10px 0 0;
+        }}
+        .cash-mobile.is-v2 .cash-v2-overview-item:first-child {{
+          border-top: 0;
+          padding-top: 0;
+        }}
+        .cash-mobile.is-v2 .cash-mobile-balance {{
+          font-size: clamp(38px, 11vw, 48px);
+        }}
+        .cash-mobile.is-v2 .cash-mobile-command-dock {{
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }}
+        .cash-mobile.is-v2 .cash-mobile-action {{
+          min-height: 72px;
+          padding-left: 4px;
+          padding-right: 4px;
+          font-size: 10.5px;
+        }}
+        .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metrics {{
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }}
+        .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metric {{
+          padding-left: 8px;
+          padding-right: 8px;
+        }}
       }}
       .cash-receipt-viewer {{
         position: fixed;
@@ -21438,6 +21887,8 @@ def render_cashoperations_body(
       }}
     </style>
     <section class="cash-mobile{" is-v2" if cash_design_version == "v2" else ""}">
+      {v2_mode_switch_html}
+      {v2_top_summary_html}
       <div class="cash-mobile-tabs{cashbox_tabs_extra_class}" data-cashbox-tabs>{cashbox_tabs}</div>
       {flash_html}
       {edit_back_html}
@@ -22445,9 +22896,14 @@ def render_cashoperations_body(
 
 def render_cashoperations_standalone_page(body: str, current_user: dict | None = None, design_version: str = "classic") -> str:
     user_label = ""
+    user_role = ""
+    user_initials = "К"
     logout_html = ""
     if current_user:
         user_label = (current_user.get("full_name") or current_user.get("login") or "").strip()
+        user_role = (current_user.get("role_name") or "").strip()
+        initials_source = user_label or current_user.get("login") or "Касса"
+        user_initials = "".join(part[:1] for part in initials_source.split()[:2]).upper() or "К"
         logout_html = '<div class="cash-shell-actions"><button class="cash-shell-refresh" type="button" data-cash-refresh title="Обновить" aria-label="Обновить">↻</button><a class="cash-shell-logout" href="/cashoperations/logout">Выйти</a></div>'
     design_version = design_version if design_version in {"classic", "v2"} else "classic"
     body_class = ' class="cash-design-v2"' if design_version == "v2" else ""
@@ -22507,6 +22963,18 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
       color: var(--muted);
       font-size: 12px;
       line-height: 1.2;
+    }}
+    .cash-shell-profile {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }}
+    .cash-shell-avatar {{
+      display: none;
+    }}
+    .cash-shell-nameblock {{
+      min-width: 0;
     }}
     .cash-shell h1 {{
       margin: 2px 0 0;
@@ -22572,6 +23040,33 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
       font-weight: 750;
       color: #6b726d;
     }}
+    .cash-shell.is-v2 .cash-shell-profile {{
+      align-items: flex-start;
+      gap: 10px;
+    }}
+    .cash-shell.is-v2 .cash-shell-avatar {{
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      background:
+        radial-gradient(circle at 34% 26%, rgba(255, 255, 255, .95), transparent 0 18%),
+        linear-gradient(145deg, #202a26, #0f1513);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 850;
+      box-shadow:
+        0 10px 22px rgba(18, 24, 21, .14),
+        inset 0 1px 0 rgba(255, 255, 255, .24);
+    }}
+    .cash-shell.is-v2 .cash-shell-role {{
+      margin-top: 2px;
+      color: #3d4641;
+      font-size: 11px;
+      font-weight: 600;
+    }}
     .cash-shell.is-v2 h1 {{
       font-size: 28px;
       letter-spacing: 0;
@@ -22592,9 +23087,13 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
   <main class="{shell_class}">
     <header class="cash-shell-top">
       <div class="cash-shell-row">
-        <div>
+        <div class="cash-shell-profile">
+          <div class="cash-shell-avatar" aria-hidden="true">{escape(user_initials[:2])}</div>
+          <div class="cash-shell-nameblock">
           <div class="cash-shell-user">{escape(user_label) if user_label else "Касса"}</div>
+          {f'<div class="cash-shell-role">{escape(user_role)}</div>' if user_role and design_version == "v2" else ''}
           <h1>Моя касса</h1>
+          </div>
         </div>
         {logout_html}
       </div>
