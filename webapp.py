@@ -21100,6 +21100,8 @@ def render_cashoperations_body(
         font-size: 13px;
         display: grid;
         gap: 6px;
+        min-width: 0;
+        max-width: 100%;
       }}
       .cash-mobile-form label.cash-mobile-check {{
         min-height: 50px;
@@ -21118,7 +21120,9 @@ def render_cashoperations_body(
       .cash-mobile-form select,
       .cash-mobile-form textarea {{
         width: 100%;
+        inline-size: 100%;
         max-width: 100%;
+        max-inline-size: 100%;
         min-width: 0;
         border: 1px solid var(--line);
         border-radius: 8px;
@@ -21131,6 +21135,25 @@ def render_cashoperations_body(
       .cash-mobile-form input[type="date"] {{
         -webkit-appearance: none;
         appearance: none;
+      }}
+      .cash-mobile-form input[type="month"] {{
+        display: block;
+        width: 100%;
+        inline-size: 100%;
+        max-width: 100%;
+        max-inline-size: 100%;
+        min-width: 0;
+        -webkit-appearance: none;
+        appearance: none;
+        overflow: hidden;
+      }}
+      .cash-mobile-form input[type="date"]::-webkit-date-and-time-value,
+      .cash-mobile-form input[type="month"]::-webkit-date-and-time-value,
+      .cash-mobile-form input[type="date"]::-webkit-datetime-edit,
+      .cash-mobile-form input[type="month"]::-webkit-datetime-edit {{
+        max-width: 100%;
+        min-width: 0;
+        overflow: hidden;
       }}
       .cash-mobile-form label.cash-mobile-check input[type="checkbox"] {{
         width: 24px;
