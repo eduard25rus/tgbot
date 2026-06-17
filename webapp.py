@@ -19396,9 +19396,17 @@ def render_cashoperations_body(
     selected_work_report_date: date | None = None,
     selected_work_month: date | None = None,
     show_work_stats: bool = False,
+    selected_history_date: date | None = None,
 ) -> str:
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     cashbox_labels = {item["code"]: item["label"] for item in cashboxes}
+
+    def cashbox_history_label(code: str) -> str:
+        label = cashbox_labels.get(code, "кассе").strip()
+        if label.casefold().startswith("касса "):
+            return "кассе " + label[6:]
+        return label
+
     cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"])) if current_user else None
     if not cash_access or not cash_access["enabled"]:
         return """
@@ -19687,9 +19695,14 @@ def render_cashoperations_body(
         operation_card(kind, entry)
         for kind, entry in latest_operations[:8]
     ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
+    history_operations = [
+        (kind, entry)
+        for kind, entry in operations
+        if selected_history_date is None or entry.expense_date == selected_history_date
+    ]
     history_rows = "".join(
         operation_card(kind, entry)
-        for kind, entry in operations
+        for kind, entry in history_operations
     ) or '<div class="cash-mobile-empty">Операций по этой кассе пока нет.</div>'
     can_view_letters = bool(cash_access.get("can_view_letters"))
     can_view_work_reports = bool(cash_access.get("can_view_work_reports"))
@@ -19755,7 +19768,7 @@ def render_cashoperations_body(
                 else ""
             )
             return f"""
-            <article class="cash-mobile-op cash-mobile-letter">
+            <article class="cash-mobile-op cash-mobile-letter cash-mobile-letter-{direction_class}">
               <div class="cash-mobile-op-main">
                 <span class="cash-mobile-letter-head">
                   <strong>{escape(format_date(letter.letter_date))}</strong>
@@ -19774,7 +19787,7 @@ def render_cashoperations_body(
         letters_rows = "".join(letter_card(letter) for letter in legal_letters) or '<div class="cash-mobile-empty">Писем пока нет.</div>'
         letters_screen_html = f"""
         <section id="cashScreenLetters" class="cash-mobile-screen{" active" if initial_screen == "letters" else ""}">
-          <section class="cash-mobile-panel">
+          <section class="cash-mobile-panel{" cash-mobile-ledger-panel cash-v2-letters-panel" if cash_design_version == "v2" else ""}">
             <div class="cash-mobile-section-head"><h2>Письма</h2></div>
             <form class="cash-mobile-letter-filter" method="get" action="/cashoperations">
               <input type="hidden" name="screen" value="letters">
@@ -19814,6 +19827,27 @@ def render_cashoperations_body(
         return str(int(value)) if abs(value - int(value)) < 0.001 else str(value).replace(".", ",")
     def work_day_part_label(value: float) -> str:
         return "половина дня" if float(value) <= 0.5 else "полный день"
+
+    def v2_icon(name: str, extra_class: str = "") -> str:
+        paths = {
+            "wallet": '<rect x="3" y="6" width="18" height="14" rx="3"></rect><path d="M16 10h5v6h-5a3 3 0 0 1 0-6z"></path><path d="M6 6V4h11v2"></path>',
+            "users": '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>',
+            "upload": '<path d="M12 3v12"></path><path d="m7 8 5-5 5 5"></path><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"></path>',
+            "briefcase": '<rect x="3" y="7" width="18" height="13" rx="2"></rect><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M3 12h18"></path>',
+            "plus": '<path d="M12 5v14"></path><path d="M5 12h14"></path>',
+            "minus": '<path d="M5 12h14"></path>',
+            "clock": '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l4 2"></path>',
+            "chart": '<path d="M4 20V10"></path><path d="M10 20V4"></path><path d="M16 20v-7"></path><path d="M22 20H2"></path>',
+            "mail": '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path>',
+            "square": '<rect x="5" y="5" width="14" height="14" rx="2"></rect>',
+            "cash": '<path d="M4 7h16v10H4z"></path><path d="M8 11h8"></path>',
+            "down": '<path d="M12 5v14"></path><path d="m19 12-7 7-7-7"></path>',
+            "up": '<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>',
+            "logout": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path>',
+        }
+        class_attr = f' class="cash-v2-icon {escape(extra_class)}"' if extra_class else ' class="cash-v2-icon"'
+        return f'<svg{class_attr} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{paths.get(name, paths["square"])}</svg>'
+
     def work_project_label(report) -> str:
         return project_labels.get(report.project_code) or EXPENSE_PROJECT_META.get(report.project_code) or report.project_label or report.project_code or "Без объекта"
     def work_project_key(report) -> str:
@@ -19935,6 +19969,21 @@ def render_cashoperations_body(
     work_report_rows = "".join(work_report_card(report) for report in work_reports) or '<div class="cash-mobile-empty">За этот день отчетов пока нет.</div>'
     work_report_screen = '<section class="cash-mobile-panel"><h2>Работа недоступна</h2><div class="cash-mobile-sub">Администратор должен включить доступ к отчетам о работе.</div></section>'
     if can_view_work_reports:
+        work_primary_actions_html = (
+            f"""
+          <div class="cash-mobile-actions cash-mobile-command-dock cash-work-primary-actions">
+            <button class="cash-mobile-action expense" type="button" data-work-toggle-form><span class="cash-v2-action-mark">{v2_icon("plus")}</span><span>Добавить смену</span></button>
+            <button class="cash-mobile-action income" type="button" data-work-toggle-description><span class="cash-v2-action-mark">{v2_icon("upload")}</span><span>Добавить отчет</span></button>
+          </div>
+            """
+            if cash_design_version == "v2"
+            else """
+          <div class="cash-mobile-actions cash-work-primary-actions">
+            <button class="cash-mobile-action expense" type="button" data-work-toggle-form>Добавить смену</button>
+            <button class="cash-mobile-action income" type="button" data-work-toggle-description>Добавить отчет</button>
+          </div>
+            """
+        )
         work_report_screen = f"""
         <section class="cash-mobile-work-head" data-work-overview>
           <h2>Учет рабочей силы</h2>
@@ -19949,10 +19998,7 @@ def render_cashoperations_body(
           </div>
         </section>
         <section class="cash-mobile-work-head" data-work-overview>
-          <div class="cash-mobile-actions cash-work-primary-actions">
-            <button class="cash-mobile-action expense" type="button" data-work-toggle-form>Добавить смену</button>
-            <button class="cash-mobile-action income" type="button" data-work-toggle-description>Добавить отчет</button>
-          </div>
+          {work_primary_actions_html}
           <div class="cash-mobile-actions cash-work-secondary-actions">
             <button class="cash-mobile-action" type="button" data-work-toggle-stats>Смотреть статистику</button>
           </div>
@@ -20080,7 +20126,7 @@ def render_cashoperations_body(
 
     push_status_html = ""
     if cash_access.get("can_receive_push"):
-        if push_public_key:
+        if push_public_key and cash_design_version != "v2":
             push_status_html = """
             <section class="cash-mobile-panel cash-push-panel">
               <div class="cash-mobile-section-head"><h2>Уведомления</h2></div>
@@ -20088,33 +20134,15 @@ def render_cashoperations_body(
               <button class="cash-mobile-action secondary" type="button" data-cash-push-enable>Включить уведомления</button>
             </section>
             """
-        else:
+        elif cash_design_version != "v2":
             push_status_html = """
             <section class="cash-mobile-panel cash-push-panel">
               <div class="cash-mobile-section-head"><h2>Уведомления</h2></div>
               <div class="cash-mobile-sub">Получение пушей разрешено, но на сервере еще не настроены VAPID-ключи.</div>
             </section>
             """
-
-    def v2_icon(name: str, extra_class: str = "") -> str:
-        paths = {
-            "wallet": '<rect x="3" y="6" width="18" height="14" rx="3"></rect><path d="M16 10h5v6h-5a3 3 0 0 1 0-6z"></path><path d="M6 6V4h11v2"></path>',
-            "users": '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>',
-            "upload": '<path d="M12 3v12"></path><path d="m7 8 5-5 5 5"></path><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"></path>',
-            "briefcase": '<rect x="3" y="7" width="18" height="13" rx="2"></rect><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M3 12h18"></path>',
-            "plus": '<path d="M12 5v14"></path><path d="M5 12h14"></path>',
-            "minus": '<path d="M5 12h14"></path>',
-            "clock": '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l4 2"></path>',
-            "chart": '<path d="M4 20V10"></path><path d="M10 20V4"></path><path d="M16 20v-7"></path><path d="M22 20H2"></path>',
-            "mail": '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path>',
-            "square": '<rect x="5" y="5" width="14" height="14" rx="2"></rect>',
-            "cash": '<path d="M4 7h16v10H4z"></path><path d="M8 11h8"></path>',
-            "down": '<path d="M12 5v14"></path><path d="m19 12-7 7-7-7"></path>',
-            "up": '<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>',
-            "logout": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path>',
-        }
-        class_attr = f' class="cash-v2-icon {escape(extra_class)}"' if extra_class else ' class="cash-v2-icon"'
-        return f'<svg{class_attr} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{paths.get(name, paths["square"])}</svg>'
+    if cash_design_version == "v2":
+        push_status_html = '<div class="cash-v2-push-status" data-cash-push-status aria-live="polite"></div>'
 
     expense_screen = '<div class="cash-mobile-empty">Нет прав на добавление расходов.</div>'
     if can_edit:
@@ -20332,8 +20360,19 @@ def render_cashoperations_body(
         income_screen_html = f'<section id="cashScreenIncome" class="cash-mobile-screen{" active" if initial_screen == "income" else ""}">{income_screen}</section>'
         history_screen_html = f"""
       <section id="cashScreenHistory" class="cash-mobile-screen{" active" if initial_screen == "history" else ""}">
-        <section class="cash-mobile-panel">
-          <div class="cash-mobile-section-head"><h2>История операций</h2></div>
+        <section class="cash-mobile-panel{" cash-mobile-ledger-panel cash-v2-history-panel" if cash_design_version == "v2" else ""}">
+          <div class="cash-mobile-section-head"><h2>История операций по {escape(cashbox_history_label(selected_cashbox))}</h2></div>
+          <form class="cash-mobile-date-filter cash-mobile-history-filter" method="get" action="/cashoperations">
+            <input type="hidden" name="screen" value="history">
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <label>Дата
+              <span class="cash-date-input-wrap">
+                <input type="date" name="history_date" value="{selected_history_date.isoformat() if selected_history_date else ""}">
+              </span>
+            </label>
+            <button type="submit">Показать</button>
+            {f'<a class="cash-mobile-filter-reset" href="/cashoperations?screen=history&cashbox={quote_plus(selected_cashbox)}">Сбросить</a>' if selected_history_date else ''}
+          </form>
           {history_rows}
         </section>
       </section>
@@ -20432,12 +20471,7 @@ def render_cashoperations_body(
         </div>
       </section>
         """
-        v2_mode_switch_html = f"""
-      <div class="cash-v2-mode-switch" role="tablist" aria-label="Раздел">
-        <button class="cash-v2-mode active" type="button" data-cash-screen="home">Касса</button>
-        {'<button class="cash-v2-mode" type="button" data-cash-screen="work">Работа</button>' if can_view_work_reports else ''}
-      </div>
-        """
+        v2_mode_switch_html = ""
 
     return f"""
     <style>
@@ -20974,6 +21008,10 @@ def render_cashoperations_body(
         align-items: end;
         margin: 8px 0 10px;
       }}
+      .cash-mobile-history-filter {{
+        grid-template-columns: minmax(0, 1fr) 96px auto;
+        margin-bottom: 8px;
+      }}
       .cash-mobile-date-filter label {{
         display: grid;
         gap: 6px;
@@ -21032,6 +21070,11 @@ def render_cashoperations_body(
         font: inherit;
         font-size: 13px;
         font-weight: 800;
+      }}
+      .cash-mobile-history-filter .cash-mobile-filter-reset {{
+        height: 48px;
+        min-height: 48px;
+        align-self: end;
       }}
       .cash-work-summary {{
         margin-top: 12px;
@@ -21541,7 +21584,7 @@ def render_cashoperations_body(
         text-shadow: none;
       }}
       .cash-mobile.is-v2 .cash-mobile-balance.negative {{
-        color: #ffcbc8;
+        color: #d71924;
       }}
       .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metrics {{
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -21582,6 +21625,13 @@ def render_cashoperations_body(
           0 18px 42px rgba(18, 24, 21, .08),
           inset 0 1px 0 rgba(255, 255, 255, .86);
         backdrop-filter: blur(20px);
+      }}
+      .cash-mobile.is-v2 .cash-work-primary-actions.cash-mobile-command-dock {{
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }}
+      .cash-mobile.is-v2 .cash-work-primary-actions.cash-mobile-command-dock .cash-mobile-action {{
+        min-height: 66px;
+        font-size: 12.5px;
       }}
       .cash-mobile.is-v2 .cash-mobile-action {{
         min-height: 66px;
@@ -21667,6 +21717,10 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-mobile-ledger-panel {{
         padding: 17px 16px 10px;
       }}
+      .cash-mobile.is-v2 .cash-v2-history-panel,
+      .cash-mobile.is-v2 .cash-v2-letters-panel {{
+        padding-bottom: 14px;
+      }}
       .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-section-head {{
         margin-bottom: 7px;
       }}
@@ -21747,6 +21801,17 @@ def render_cashoperations_body(
         content: "↑";
         background: #d21520;
       }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-letter-incoming::before {{
+        content: "↓";
+        background: #d21520;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-letter-outgoing::before {{
+        content: "↑";
+        background: #0f8752;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-letter .cash-mobile-op-side {{
+        align-self: center;
+      }}
       .cash-mobile.is-v2 .cash-mobile-op-title {{
         font-size: 13px;
       }}
@@ -21772,6 +21837,13 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-mobile-flash.ok {{
         border-color: rgba(26, 114, 75, .16);
         background: rgba(226, 242, 232, .86);
+      }}
+      .cash-mobile.is-v2 .cash-v2-push-status {{
+        position: fixed;
+        left: -9999px;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
       }}
       .cash-mobile.is-v2 .cash-mobile-work-head h2 {{
         text-align: left;
@@ -21995,6 +22067,9 @@ def render_cashoperations_body(
         .cash-mobile.is-v2 .cash-mobile-command-dock {{
           grid-template-columns: repeat(4, minmax(0, 1fr));
         }}
+        .cash-mobile.is-v2 .cash-work-primary-actions.cash-mobile-command-dock {{
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }}
         .cash-mobile.is-v2 .cash-mobile-action {{
           min-height: 72px;
           padding-left: 4px;
@@ -22007,6 +22082,12 @@ def render_cashoperations_body(
         .cash-mobile.is-v2 .cash-mobile-balance-panel .cash-mobile-metric {{
           padding-left: 8px;
           padding-right: 8px;
+        }}
+        .cash-mobile-history-filter {{
+          grid-template-columns: minmax(0, 1fr) 96px;
+        }}
+        .cash-mobile-history-filter .cash-mobile-filter-reset {{
+          grid-column: 1 / -1;
         }}
       }}
       .cash-receipt-viewer {{
@@ -22349,6 +22430,10 @@ def render_cashoperations_body(
         }}
         function setPushStatus(message) {{
           if (pushStatus) pushStatus.textContent = message;
+          if (pushEnable) {{
+            pushEnable.title = message || "Включить уведомления";
+            pushEnable.setAttribute("aria-label", message || "Включить уведомления");
+          }}
         }}
         async function enableCashPush() {{
           if (!cashPushAllowed || !cashPushPublicKey) {{
@@ -22380,7 +22465,10 @@ def render_cashoperations_body(
             }});
             if (!response.ok) throw new Error("subscribe_failed");
             setPushStatus("Уведомления включены на этом телефоне.");
-            if (pushEnable) pushEnable.textContent = "Уведомления включены";
+            if (pushEnable) {{
+              pushEnable.classList.add("active");
+              if (!pushEnable.classList.contains("cash-shell-notify")) pushEnable.textContent = "Уведомления включены";
+            }}
           }} catch (_err) {{
             setPushStatus("Не удалось включить уведомления. Проверьте, что касса открыта с иконки на экране Домой.");
           }}
@@ -23133,13 +23221,24 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
     user_role = ""
     user_initials = "К"
     logout_html = ""
+    design_version = design_version if design_version in {"classic", "v2"} else "classic"
     if current_user:
         user_label = (current_user.get("full_name") or current_user.get("login") or "").strip()
         user_role = (current_user.get("role_name") or "").strip()
         initials_source = user_label or current_user.get("login") or "Касса"
         user_initials = "".join(part[:1] for part in initials_source.split()[:2]).upper() or "К"
-        logout_html = '<div class="cash-shell-actions"><button class="cash-shell-refresh" type="button" data-cash-refresh title="Обновить" aria-label="Обновить">↻</button><a class="cash-shell-logout" href="/cashoperations/logout">Выйти</a></div>'
-    design_version = design_version if design_version in {"classic", "v2"} else "classic"
+        if design_version == "v2":
+            logout_html = """
+            <div class="cash-shell-actions">
+              <button class="cash-shell-refresh" type="button" data-cash-refresh title="Обновить" aria-label="Обновить">↻</button>
+              <button class="cash-shell-notify" type="button" data-cash-push-enable title="Включить уведомления" aria-label="Включить уведомления">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+              </button>
+              <a class="cash-shell-logout" href="/cashoperations/logout">Выйти</a>
+            </div>
+            """
+        else:
+            logout_html = '<div class="cash-shell-actions"><button class="cash-shell-refresh" type="button" data-cash-refresh title="Обновить" aria-label="Обновить">↻</button><a class="cash-shell-logout" href="/cashoperations/logout">Выйти</a></div>'
     body_class = ' class="cash-design-v2"' if design_version == "v2" else ""
     shell_class = 'cash-shell is-v2' if design_version == "v2" else "cash-shell"
     return f"""<!doctype html>
@@ -23300,10 +23399,14 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
       font-weight: 600;
     }}
     .cash-shell.is-v2 h1 {{
-      font-size: 27px;
+      margin-top: 3px;
+      font-size: 13px;
       letter-spacing: 0;
+      font-weight: 650;
+      color: #222b26;
     }}
     .cash-shell.is-v2 .cash-shell-refresh,
+    .cash-shell.is-v2 .cash-shell-notify,
     .cash-shell.is-v2 .cash-shell-logout {{
       min-height: 44px;
       border-radius: 13px;
@@ -23312,6 +23415,26 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
       color: #3c4640;
       box-shadow: 0 8px 20px rgba(18, 24, 21, .06);
       backdrop-filter: blur(18px);
+    }}
+    .cash-shell.is-v2 .cash-shell-notify {{
+      width: 44px;
+      padding: 0;
+      display: inline-grid;
+      place-items: center;
+    }}
+    .cash-shell.is-v2 .cash-shell-notify svg {{
+      width: 21px;
+      height: 21px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2.1;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }}
+    .cash-shell.is-v2 .cash-shell-notify.active {{
+      color: #126f45;
+      border-color: rgba(18, 111, 69, .20);
+      background: rgba(226, 242, 232, .86);
     }}
   </style>
 </head>
@@ -23324,7 +23447,7 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
           <div class="cash-shell-nameblock">
           <div class="cash-shell-user">{escape(user_label) if user_label else "Касса"}</div>
           {f'<div class="cash-shell-role">{escape(user_role)}</div>' if user_role and design_version == "v2" else ''}
-          <h1>Моя касса</h1>
+          <h1>{'ООО «СК "ФЕЛИС ГРУПП"»' if design_version == "v2" else "Моя касса"}</h1>
           </div>
         </div>
         {logout_html}
@@ -27314,11 +27437,16 @@ self.addEventListener("notificationclick", (event) => {
         initial_screen = query.get("screen", [""])[0].strip()
         work_date_raw = query.get("work_date", [""])[0].strip()
         work_month_raw = query.get("work_month", [""])[0].strip()
+        history_date_raw = query.get("history_date", [""])[0].strip()
         selected_work_month = parse_month_key(work_month_raw)
         try:
             selected_work_report_date = parse_date(work_date_raw) if work_date_raw else None
         except ValueError:
             selected_work_report_date = None
+        try:
+            selected_history_date = parse_date(history_date_raw) if history_date_raw else None
+        except ValueError:
+            selected_history_date = None
         if selected_work_report_date is None and selected_work_month is not None:
             selected_work_report_date = selected_work_month
         show_work_stats = query.get("work_stats", ["0"])[0] == "1"
@@ -27336,6 +27464,7 @@ self.addEventListener("notificationclick", (event) => {
             selected_work_report_date,
             selected_work_month,
             show_work_stats,
+            selected_history_date,
         )
         cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"])) if current_user else None
         design_version = cash_access.get("design_version", "classic") if cash_access else "classic"
