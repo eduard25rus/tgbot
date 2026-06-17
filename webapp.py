@@ -19840,6 +19840,11 @@ def render_cashoperations_body(
             "chart": '<path d="M4 20V10"></path><path d="M10 20V4"></path><path d="M16 20v-7"></path><path d="M22 20H2"></path>',
             "mail": '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path>',
             "square": '<rect x="5" y="5" width="14" height="14" rx="2"></rect>',
+            "calendar": '<rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4"></path><path d="M8 2v4"></path><path d="M3 10h18"></path>',
+            "monument": '<path d="M12 3v13"></path><path d="M9 6h6"></path><path d="M7 16h10"></path><path d="M5 21h14"></path><path d="M9 21v-5"></path><path d="M15 21v-5"></path>',
+            "book": '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16"></path><path d="M12 3v16"></path>',
+            "crane": '<path d="M4 21h8"></path><path d="M8 21V7"></path><path d="M5 7h14l-4 4"></path><path d="M19 7v5"></path><path d="M17 12h4"></path><path d="M8 11h4"></path>',
+            "building": '<path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16"></path><path d="M16 8h2a2 2 0 0 1 2 2v11"></path><path d="M8 7h4"></path><path d="M8 11h4"></path><path d="M8 15h4"></path><path d="M3 21h18"></path>',
             "cash": '<path d="M4 7h16v10H4z"></path><path d="M8 11h8"></path>',
             "down": '<path d="M12 5v14"></path><path d="m19 12-7 7-7-7"></path>',
             "up": '<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>',
@@ -19945,6 +19950,46 @@ def render_cashoperations_body(
             """
         else:
             work_report_html = '<button class="cash-work-missing" type="button" data-edit-work-description>Нужно приложить отчет о работе</button>'
+        if cash_design_version == "v2":
+            project_title = work_project_label(report)
+            project_title_folded = project_title.casefold()
+            project_icon = (
+                "monument" if "площад" in project_title_folded
+                else "book" if "библиот" in project_title_folded
+                else "crane" if "стадион" in project_title_folded or "строител" in project_title_folded
+                else "building" if "жк" in project_title_folded or "парк" in project_title_folded
+                else "briefcase"
+            )
+            worker_names = [str(worker["employee_name"]).strip() for worker in workers if str(worker["employee_name"]).strip()]
+            worker_preview = ", ".join(worker_names[:3])
+            if len(worker_names) > 3:
+                worker_preview = f"{worker_preview} и ещё {len(worker_names) - 3}" if worker_preview else f"Ещё {len(worker_names)}"
+            if not worker_preview:
+                worker_preview = "Сотрудники не указаны"
+            report_ready = bool(work_description or files_count)
+            status_label = "Отчет сдан" if report_ready else "Ожидается"
+            status_class = "done" if report_ready else "pending"
+            return f"""
+        <article class="cash-work-v2-row editable" role="button" tabindex="0"
+          data-edit-work-report="1"
+          data-work-report-id="{report.id}"
+          data-work-report-date="{report.report_date.isoformat()}"
+          data-work-report-project="{escape(report.project_code)}"
+          data-work-report-comment="{escape(report.comment)}"
+          data-work-report-description="{escape(work_description, quote=True)}"
+          data-work-report-workers="{escape(worker_items_json, quote=True)}">
+          <span class="cash-work-v2-object-icon" aria-hidden="true">{v2_icon(project_icon)}</span>
+          <span class="cash-work-v2-object-main">
+            <span class="cash-work-v2-object-title"><strong>{escape(project_title)}</strong><em> · {len(workers)} чел.</em></span>
+            <span class="cash-work-v2-workers">{escape(worker_preview)}</span>
+          </span>
+          <span class="cash-work-v2-object-side">
+            <strong>{escape(work_units_label(report_units))}</strong>
+            <span class="cash-work-v2-status {status_class}" data-edit-work-description>{escape(status_label)}</span>
+          </span>
+          <span class="cash-work-v2-chevron" aria-hidden="true"></span>
+        </article>
+            """
         return f"""
         <article class="cash-mobile-op cash-work-report-card editable" role="button" tabindex="0"
           data-edit-work-report="1"
@@ -19967,6 +20012,61 @@ def render_cashoperations_body(
         </article>
         """
     work_report_rows = "".join(work_report_card(report) for report in work_reports) or '<div class="cash-mobile-empty">За этот день отчетов пока нет.</div>'
+    weekday_labels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    work_month_short_labels = {
+        1: "янв",
+        2: "фев",
+        3: "мар",
+        4: "апр",
+        5: "мая",
+        6: "июн",
+        7: "июл",
+        8: "авг",
+        9: "сен",
+        10: "окт",
+        11: "ноя",
+        12: "дек",
+    }
+    def v2_work_day_cell(day_value: date) -> str:
+        active = day_value == work_report_date
+        return f"""
+            <a class="cash-work-v2-day{" active" if active else ""}" href="{escape(work_day_url(day_value), quote=True)}" aria-current="{"date" if active else "false"}">
+              <span>{escape(weekday_labels[day_value.weekday()])}</span>
+              <strong>{day_value.day}</strong>
+              <em>{escape(work_month_short_labels[day_value.month])}</em>
+            </a>
+        """
+    v2_work_calendar_days = "".join(
+        v2_work_day_cell(work_report_date + timedelta(days=offset))
+        for offset in range(-2, 3)
+    )
+    v2_work_calendar_html = f"""
+        <section class="cash-work-v2-calendar" data-work-overview>
+          <div class="cash-work-v2-days">
+            <a class="cash-work-v2-arrow" href="{escape(work_day_url(work_report_date - timedelta(days=1)), quote=True)}" aria-label="Предыдущий день">{v2_icon("down")}</a>
+            {v2_work_calendar_days}
+            <a class="cash-work-v2-arrow next" href="{escape(work_day_url(work_report_date + timedelta(days=1)), quote=True)}" aria-label="Следующий день">{v2_icon("down")}</a>
+          </div>
+          <div class="cash-work-v2-day-summary" aria-label="Сводка за день">
+            <span>{v2_icon("calendar")}<b>{work_report_date.day} {escape(RU_MONTH_GENITIVE_NAMES[work_report_date.month])}</b></span>
+            <i></i>
+            <span>{v2_icon("users")}<b>{work_total_people} чел.</b></span>
+            <i></i>
+            <span>{v2_icon("clock")}<b>{escape(work_units_label(work_total_units))} смен</b></span>
+          </div>
+        </section>
+    """
+    v2_work_daily_panel_html = f"""
+        <section class="cash-work-v2-list-panel" data-work-overview data-work-daily-panel>
+          <div class="cash-work-v2-list-head">
+            <span>Объекты и сотрудники</span>
+            <span>Смены за день</span>
+          </div>
+          <div class="cash-work-v2-list">
+            {work_report_rows}
+          </div>
+        </section>
+    """
     work_report_screen = '<section class="cash-mobile-panel"><h2>Работа недоступна</h2><div class="cash-mobile-sub">Администратор должен включить доступ к отчетам о работе.</div></section>'
     if can_view_work_reports:
         work_primary_actions_html = (
@@ -19984,7 +20084,96 @@ def render_cashoperations_body(
           </div>
             """
         )
-        work_report_screen = f"""
+        if cash_design_version == "v2":
+            work_report_screen = f"""
+        <section class="cash-mobile-work-head cash-work-v2-head" data-work-overview>
+          <h2>Учет рабочей силы</h2>
+        </section>
+        {v2_work_calendar_html}
+        <section class="cash-mobile-work-head cash-work-v2-actions" data-work-overview>
+          {work_primary_actions_html}
+        </section>
+        <section class="cash-mobile-panel is-hidden" data-work-form-panel>
+          <div class="cash-mobile-section-head"><h2 data-work-form-title>Добавить смену</h2></div>
+          <form class="cash-mobile-form" method="post" action="/cashoperations/work-report">
+            <input type="hidden" name="report_id" value="" data-work-report-id-input>
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <label>Дата
+              <input type="date" name="report_date" value="{work_report_date.isoformat()}" required>
+            </label>
+            <label>Объект
+              <select name="project_code" required>{work_project_options}</select>
+            </label>
+            <div class="cash-work-workers" data-work-workers>
+              <div class="cash-work-worker-row" data-work-worker-row>
+                <label>Сотрудник
+                  <select name="employee_id" required>{builder_options}</select>
+                </label>
+                <label>День
+                  <select name="day_part">
+                    <option value="1" selected>Полный день</option>
+                    <option value="0.5">Половина дня</option>
+                  </select>
+                </label>
+                <button class="cash-work-row-remove" type="button" data-work-remove-worker aria-label="Убрать сотрудника">×</button>
+              </div>
+            </div>
+            <button class="secondary" type="button" data-work-add-worker{" disabled" if not builder_employees else ""}>Добавить сотрудника</button>
+            <label>Комментарий
+              <textarea name="comment" placeholder="Коротко, что делали на объекте"></textarea>
+            </label>
+            <button type="submit" data-work-submit{" disabled" if not builder_employees else ""}>Сохранить смену</button>
+            <button class="danger" type="button" data-work-cancel>Отменить</button>
+            <button class="cash-mobile-danger" type="submit" formaction="/cashoperations/work-report/delete" data-work-delete-report hidden>Удалить смену</button>
+          </form>
+          {'<div class="cash-mobile-sub" style="margin-top:10px;">В справочнике пока нет активных сотрудников-работяг.</div>' if not builder_employees else ''}
+        </section>
+        <section class="cash-mobile-panel is-hidden" data-work-description-panel>
+          <div class="cash-mobile-section-head"><h2>Добавить отчет</h2></div>
+          <form class="cash-mobile-form" method="post" action="/cashoperations/work-description" enctype="multipart/form-data">
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <label>Дата
+              <input type="date" name="report_date" value="{work_report_date.isoformat()}" required>
+            </label>
+            <label>Объект
+              <select name="project_code" required>{work_project_options}</select>
+            </label>
+            <label>Что сделали
+              <textarea name="work_description" placeholder="Что фактически сделали на объекте за день" required></textarea>
+            </label>
+            <label class="cash-receipt-button">Фото / видео
+              <input type="file" name="work_report_files" accept="image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp,video/mp4,.mp4,video/quicktime,.mov,video/webm,.webm,.m4v" multiple>
+              <span>Добавить фотоотчет</span>
+            </label>
+            <button type="submit">Сохранить отчет</button>
+            <button class="danger" type="button" data-work-description-cancel>Отменить</button>
+          </form>
+        </section>
+        <section class="cash-mobile-panel{" is-hidden" if not show_work_stats else ""}" data-work-stats-panel>
+          <button class="cash-work-back" type="button" data-work-stats-back>Назад к работе</button>
+          <div class="cash-mobile-section-head"><h2>Статистика</h2></div>
+          <form class="cash-mobile-date-filter cash-mobile-month-filter" method="get" action="/cashoperations">
+            <input type="hidden" name="screen" value="work">
+            <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
+            <input type="hidden" name="work_date" value="{work_report_date.isoformat()}">
+            <input type="hidden" name="work_stats" value="1">
+            <label>Месяц
+              <span class="cash-date-input-wrap">
+                <input type="month" name="work_month" value="{work_month.strftime('%Y-%m')}">
+              </span>
+            </label>
+            <button type="submit">Показать</button>
+          </form>
+          {work_stats_rows}
+          <div class="cash-work-summary">
+            <strong>Итого за месяц</strong>
+            <span>{len(work_month_people)} чел. · {len(work_month_projects)} объект. · {escape(work_units_label(work_month_units))} смен</span>
+          </div>
+        </section>
+        {v2_work_daily_panel_html}
+            """
+        else:
+            work_report_screen = f"""
         <section class="cash-mobile-work-head" data-work-overview>
           <h2>Учет рабочей силы</h2>
         </section>
@@ -21873,6 +22062,275 @@ def render_cashoperations_body(
         font-size: 22px;
         padding-left: 2px;
       }}
+      .cash-mobile.is-v2 .cash-work-v2-head {{
+        margin-top: 14px;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-head h2 {{
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.08;
+        font-weight: 820;
+        color: #0f1714;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-calendar {{
+        margin-top: 12px;
+        padding: 11px 10px 12px;
+        border: 1px solid rgba(34, 45, 38, .09);
+        border-radius: 19px;
+        background: rgba(255, 255, 255, .84);
+        box-shadow:
+          0 18px 42px rgba(18, 24, 21, .08),
+          inset 0 1px 0 rgba(255, 255, 255, .88);
+        backdrop-filter: blur(20px);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-days {{
+        display: grid;
+        grid-template-columns: 28px repeat(5, minmax(0, 1fr)) 28px;
+        align-items: center;
+        gap: 4px;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-arrow,
+      .cash-mobile.is-v2 .cash-work-v2-day {{
+        text-decoration: none;
+        color: #18211d;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-arrow {{
+        width: 28px;
+        height: 52px;
+        display: grid;
+        place-items: center;
+        border-radius: 13px;
+        color: #657069;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-arrow .cash-v2-icon {{
+        width: 18px;
+        height: 18px;
+        transform: rotate(90deg);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-arrow.next .cash-v2-icon {{
+        transform: rotate(-90deg);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day {{
+        min-width: 0;
+        min-height: 58px;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 2px;
+        border-radius: 15px;
+        color: #171f1b;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day span,
+      .cash-mobile.is-v2 .cash-work-v2-day em {{
+        display: block;
+        color: #68736d;
+        font-style: normal;
+        font-size: 10px;
+        line-height: 1.05;
+        font-weight: 650;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day strong {{
+        display: block;
+        font-size: 22px;
+        line-height: .98;
+        font-weight: 820;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day.active {{
+        color: #fff;
+        background: linear-gradient(145deg, #178452, #126f45);
+        box-shadow:
+          0 12px 26px rgba(18, 111, 69, .26),
+          inset 0 1px 0 rgba(255, 255, 255, .22);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day.active span,
+      .cash-mobile.is-v2 .cash-work-v2-day.active em {{
+        color: rgba(255, 255, 255, .82);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day-summary {{
+        margin: 10px auto 0;
+        padding-top: 9px;
+        border-top: 1px solid rgba(34, 45, 38, .09);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 11px;
+        color: #5d6962;
+        font-size: 12px;
+        line-height: 1;
+        font-weight: 680;
+        text-align: center;
+        white-space: nowrap;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day-summary span {{
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day-summary .cash-v2-icon {{
+        width: 15px;
+        height: 15px;
+        color: #657069;
+        stroke-width: 2.2;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day-summary b {{
+        color: #4f5b55;
+        font-weight: 720;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-day-summary i {{
+        width: 3px;
+        height: 3px;
+        border-radius: 50%;
+        background: rgba(91, 102, 96, .38);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-actions {{
+        margin-top: 10px;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-actions .cash-work-primary-actions.cash-mobile-command-dock {{
+        margin-top: 0;
+        padding: 9px 8px;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-actions .cash-work-primary-actions.cash-mobile-command-dock .cash-mobile-action {{
+        min-height: 58px;
+        grid-template-columns: auto auto;
+        align-content: center;
+        justify-content: center;
+        column-gap: 9px;
+        font-size: 12px;
+        line-height: 1.08;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-actions .cash-v2-action-mark {{
+        width: 33px;
+        height: 33px;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-list-panel {{
+        margin-top: 12px;
+        padding: 13px 0 6px;
+        border: 1px solid rgba(34, 45, 38, .09);
+        border-radius: 19px;
+        background: rgba(255, 255, 255, .86);
+        box-shadow:
+          0 18px 42px rgba(18, 24, 21, .08),
+          inset 0 1px 0 rgba(255, 255, 255, .88);
+        backdrop-filter: blur(20px);
+        overflow: hidden;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-list-head {{
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 98px;
+        gap: 10px;
+        padding: 0 16px 8px;
+        color: #657069;
+        font-size: 11px;
+        line-height: 1.1;
+        font-weight: 700;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-list-head span:last-child {{
+        text-align: right;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-list {{
+        display: grid;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-row {{
+        position: relative;
+        width: 100%;
+        min-height: 76px;
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr) 66px 12px;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px 10px 16px;
+        border-top: 1px solid rgba(34, 45, 38, .09);
+        color: inherit;
+        background: transparent;
+        text-align: left;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-row:first-child {{
+        border-top: 0;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-object-icon {{
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        color: #126f45;
+        background: rgba(18, 111, 69, .09);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-object-icon .cash-v2-icon {{
+        width: 19px;
+        height: 19px;
+        stroke-width: 2.1;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-object-main {{
+        min-width: 0;
+        display: block;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-object-title {{
+        display: block;
+        min-width: 0;
+        color: #141b18;
+        font-size: 13px;
+        line-height: 1.18;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-object-title strong {{
+        font-weight: 800;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-object-title em {{
+        color: #657069;
+        font-style: normal;
+        font-weight: 650;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-workers {{
+        display: -webkit-box;
+        margin-top: 4px;
+        color: #657069;
+        font-size: 11.5px;
+        line-height: 1.22;
+        overflow: hidden;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-object-side {{
+        min-width: 0;
+        display: grid;
+        justify-items: end;
+        gap: 5px;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-object-side strong {{
+        color: #126f45;
+        font-size: 16px;
+        line-height: 1;
+        font-weight: 850;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-status {{
+        display: inline-grid;
+        min-height: 23px;
+        align-items: center;
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 10px;
+        line-height: 1;
+        font-weight: 720;
+        white-space: nowrap;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-status.done {{
+        color: #126f45;
+        background: rgba(18, 111, 69, .10);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-status.pending {{
+        color: #b77700;
+        background: rgba(255, 185, 49, .18);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-chevron {{
+        width: 8px;
+        height: 8px;
+        border-right: 2px solid rgba(80, 91, 84, .48);
+        border-bottom: 2px solid rgba(80, 91, 84, .48);
+        transform: rotate(-45deg);
+      }}
       .cash-mobile.is-v2 .cash-work-month-card {{
         padding: 18px;
       }}
@@ -22092,6 +22550,48 @@ def render_cashoperations_body(
         }}
         .cash-mobile.is-v2 .cash-work-primary-actions.cash-mobile-command-dock {{
           grid-template-columns: repeat(2, minmax(0, 1fr));
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-calendar {{
+          padding-left: 8px;
+          padding-right: 8px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-days {{
+          grid-template-columns: 24px repeat(5, minmax(0, 1fr)) 24px;
+          gap: 3px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-arrow {{
+          width: 24px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-day {{
+          min-height: 56px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-day strong {{
+          font-size: 21px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-day-summary {{
+          gap: 8px;
+          font-size: 11.5px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-row {{
+          grid-template-columns: 34px minmax(0, 1fr) 58px 10px;
+          gap: 8px;
+          padding-left: 12px;
+          padding-right: 12px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-object-icon {{
+          width: 32px;
+          height: 32px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-object-title {{
+          font-size: 12.5px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-workers {{
+          font-size: 11px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-status {{
+          padding-left: 7px;
+          padding-right: 7px;
+          font-size: 9.5px;
         }}
         .cash-mobile.is-v2 .cash-mobile-action {{
           min-height: 72px;
