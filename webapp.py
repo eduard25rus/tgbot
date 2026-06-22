@@ -20119,22 +20119,25 @@ def render_cashoperations_body(
             else ""
         )
 
+        def letter_file_link(letter) -> str:
+            attachments = legal_attachment_map.get(letter.id, [])
+            file_count = len(attachments) or (1 if letter.file_path else 0)
+            if attachments:
+                first_attachment = attachments[0]
+                return (
+                    f'<a class="cash-mobile-letter-file" href="/contracts/letter-files/{first_attachment.id}/preview?owner={owner_chat_id}">Файлы: {file_count}</a>'
+                )
+            if letter.file_path:
+                return (
+                    f'<a class="cash-mobile-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}">Файл</a>'
+                )
+            return '<span class="cash-mobile-op-receipt">Файлов нет</span>'
+
         def letter_card(letter) -> str:
             direction_label = LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0]
             direction_class = "outgoing" if letter.direction == "outgoing" else "incoming"
             channel_label = LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта")
-            attachments = legal_attachment_map.get(letter.id, [])
-            file_count = len(attachments) or (1 if letter.file_path else 0)
-            file_link = '<span class="cash-mobile-op-receipt">Файлов нет</span>'
-            if attachments:
-                first_attachment = attachments[0]
-                file_link = (
-                    f'<a class="cash-mobile-letter-file" href="/contracts/letter-files/{first_attachment.id}/preview?owner={owner_chat_id}">Файлы: {file_count}</a>'
-                )
-            elif letter.file_path:
-                file_link = (
-                    f'<a class="cash-mobile-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}">Файл</a>'
-                )
+            file_link = letter_file_link(letter)
             comment_html = f'<span class="cash-mobile-op-comment">{escape(letter.comment)}</span>' if letter.comment else ""
             author_html = (
                 f'<span class="cash-mobile-op-meta">Добавил: {escape(letter.created_by_name.strip())}</span>'
@@ -20159,7 +20162,74 @@ def render_cashoperations_body(
             </article>
             """
 
-        letters_rows = "".join(letter_card(letter) for letter in legal_letters) or '<div class="cash-mobile-empty">Писем пока нет.</div>'
+        def v2_letter_row(letter) -> str:
+            direction_label = LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0]
+            direction_class = "outgoing" if letter.direction == "outgoing" else "incoming"
+            channel_label = LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта")
+            comment_html = f'<span class="cash-v2-letter-row-comment">{escape(letter.comment)}</span>' if letter.comment else ""
+            author_label = letter.created_by_name.strip() or "Автор не указан"
+            is_focused = selected_letter_id and letter.id == selected_letter_id
+            return f"""
+              <article id="letter-{letter.id}" class="cash-v2-letter-row {direction_class}{" cash-mobile-letter-focused" if is_focused else ""}">
+                <span class="cash-v2-letter-row-mark" aria-hidden="true"></span>
+                <span class="cash-v2-letter-row-main">
+                  <span class="cash-v2-letter-row-top">
+                    <strong>{escape(direction_label)}</strong>
+                    <em>{escape(format_date(letter.letter_date))}</em>
+                  </span>
+                  <span class="cash-v2-letter-row-subject">{escape(letter.subject or "Без темы")}</span>
+                  {comment_html}
+                  <span class="cash-v2-letter-row-meta">{escape(channel_label)} · {escape(author_label)}</span>
+                </span>
+                <span class="cash-v2-letter-row-side">
+                  {letter_file_link(letter)}
+                  <span class="cash-v2-chevron" aria-hidden="true"></span>
+                </span>
+              </article>
+            """
+
+        def v2_letters_group_html(group_label: str, group_letters: list) -> str:
+            latest_letter = group_letters[0]
+            latest_incoming = latest_letter.direction != "outgoing"
+            status_class = "incoming" if latest_incoming else "outgoing"
+            status_label = "Нужен ответ" if latest_incoming else "Ответ отправлен"
+            direction_label = "Входящее" if latest_incoming else "Исходящее"
+            incoming_count = sum(1 for letter in group_letters if letter.direction != "outgoing")
+            outgoing_count = len(group_letters) - incoming_count
+            is_open = any(selected_letter_id and letter.id == selected_letter_id for letter in group_letters)
+            return f"""
+            <details class="cash-v2-letter-group"{" open" if is_open else ""}>
+              <summary>
+                <span class="cash-v2-letter-status-dot {status_class}" aria-hidden="true"></span>
+                <span class="cash-v2-letter-group-main">
+                  <strong>{escape(group_label)}</strong>
+                  <em>{len(group_letters)} писем · {incoming_count} вход. · {outgoing_count} исх.</em>
+                </span>
+                <span class="cash-v2-letter-group-state {status_class}">
+                  <b>{escape(status_label)}</b>
+                  <em>{escape(direction_label)} · {escape(format_date(latest_letter.letter_date))}</em>
+                </span>
+                <span class="cash-v2-letter-group-chevron" aria-hidden="true"></span>
+              </summary>
+              <div class="cash-v2-letter-group-list">
+                {"".join(v2_letter_row(letter) for letter in group_letters)}
+              </div>
+            </details>
+            """
+
+        if cash_design_version == "v2":
+            letter_groups: dict[str, list] = {}
+            for letter in legal_letters:
+                letter_groups.setdefault(letter.object_label or "Без объекта", []).append(letter)
+            letters_rows = (
+                '<div class="cash-v2-letter-groups">'
+                + "".join(v2_letters_group_html(group_label, group_letters) for group_label, group_letters in letter_groups.items())
+                + "</div>"
+                if letter_groups
+                else '<div class="cash-v2-notification-empty"><strong>Писем пока нет</strong><span>Выберите другой объект или вернитесь позже.</span></div>'
+            )
+        else:
+            letters_rows = "".join(letter_card(letter) for letter in legal_letters) or '<div class="cash-mobile-empty">Писем пока нет.</div>'
         letters_screen_html = f"""
         <section id="cashScreenLetters" class="cash-mobile-screen{" active" if initial_screen == "letters" else ""}">
           <section class="cash-mobile-panel{" cash-mobile-ledger-panel cash-v2-letters-panel" if cash_design_version == "v2" else ""}">
@@ -22669,6 +22739,217 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-letter .cash-mobile-op-side {{
         align-self: center;
       }}
+      .cash-mobile.is-v2 .cash-v2-letters-panel {{
+        padding: 17px 14px 14px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-panel .cash-mobile-letter-filter {{
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: end;
+        margin: 8px 0 12px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-panel .cash-mobile-letter-filter label {{
+        gap: 5px;
+        font-size: 11px;
+        font-weight: 700;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-panel .cash-mobile-letter-filter select {{
+        min-height: 42px;
+        border-color: rgba(34, 45, 38, .10);
+        border-radius: 13px;
+        background: rgba(255, 255, 255, .78);
+        font-size: 13px;
+        font-weight: 680;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-panel .cash-mobile-letter-filter button,
+      .cash-mobile.is-v2 .cash-v2-letters-panel .cash-mobile-filter-reset {{
+        min-height: 42px;
+        border-radius: 13px;
+        padding: 0 13px;
+        font-size: 12px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-groups {{
+        display: grid;
+        gap: 8px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group {{
+        border: 1px solid rgba(34, 45, 38, .09);
+        border-radius: 17px;
+        background: rgba(255, 255, 255, .74);
+        overflow: hidden;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group summary {{
+        min-height: 68px;
+        display: grid;
+        grid-template-columns: 12px minmax(0, 1fr) auto 10px;
+        gap: 10px;
+        align-items: center;
+        padding: 12px 12px 12px 13px;
+        list-style: none;
+        cursor: pointer;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group summary::-webkit-details-marker {{
+        display: none;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-status-dot {{
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        box-shadow: 0 0 0 4px rgba(34, 45, 38, .05);
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-status-dot.incoming {{
+        background: #d21520;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-status-dot.outgoing {{
+        background: #126f45;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-main {{
+        min-width: 0;
+        display: grid;
+        gap: 4px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-main strong {{
+        color: #111916;
+        font-size: 14px;
+        line-height: 1.12;
+        font-weight: 820;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-main em {{
+        color: #657069;
+        font-size: 11px;
+        line-height: 1.1;
+        font-style: normal;
+        font-weight: 660;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-state {{
+        display: grid;
+        justify-items: end;
+        gap: 4px;
+        text-align: right;
+        white-space: nowrap;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-state b {{
+        min-height: 24px;
+        display: inline-grid;
+        place-items: center;
+        border-radius: 999px;
+        padding: 0 9px;
+        font-size: 10.5px;
+        line-height: 1;
+        font-weight: 800;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-state em {{
+        color: #818a85;
+        font-size: 10px;
+        line-height: 1;
+        font-style: normal;
+        font-weight: 650;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-state.incoming b {{
+        background: #f5e6e6;
+        color: #a23333;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-state.outgoing b {{
+        background: #e3f2e9;
+        color: #126f45;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-chevron {{
+        width: 8px;
+        height: 8px;
+        border-right: 2px solid rgba(80, 91, 84, .56);
+        border-bottom: 2px solid rgba(80, 91, 84, .56);
+        transform: rotate(45deg);
+        transition: transform .18s ease;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group[open] .cash-v2-letter-group-chevron {{
+        transform: rotate(225deg);
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-group-list {{
+        border-top: 1px solid rgba(34, 45, 38, .08);
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row {{
+        min-height: 66px;
+        display: grid;
+        grid-template-columns: 8px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 11px 12px 11px 16px;
+        border-top: 1px solid rgba(34, 45, 38, .07);
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row:first-child {{
+        border-top: 0;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-mark {{
+        width: 6px;
+        height: 34px;
+        border-radius: 999px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row.incoming .cash-v2-letter-row-mark {{
+        background: #d21520;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row.outgoing .cash-v2-letter-row-mark {{
+        background: #126f45;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-main {{
+        min-width: 0;
+        display: grid;
+        gap: 3px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-top {{
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-top strong {{
+        color: #111916;
+        font-size: 13px;
+        line-height: 1.1;
+        font-weight: 820;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row.incoming .cash-v2-letter-row-top strong {{
+        color: #a23333;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row.outgoing .cash-v2-letter-row-top strong {{
+        color: #126f45;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-top em,
+      .cash-mobile.is-v2 .cash-v2-letter-row-meta {{
+        color: #818a85;
+        font-size: 10.5px;
+        line-height: 1.1;
+        font-style: normal;
+        font-weight: 650;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-subject {{
+        color: #111916;
+        font-size: 12px;
+        line-height: 1.18;
+        font-weight: 760;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-comment {{
+        color: #657069;
+        font-size: 11.5px;
+        line-height: 1.22;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-side {{
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-side .cash-v2-chevron {{
+        border-color: rgba(80, 91, 84, .56);
+        transform: rotate(-45deg);
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-side .cash-mobile-letter-file {{
+        min-height: 28px;
+        border-radius: 999px;
+        padding: 0 9px;
+        background: rgba(255, 255, 255, .82);
+        font-size: 11px;
+      }}
       .cash-mobile.is-v2 .cash-mobile-letter-focused {{
         background: rgba(226, 242, 232, .72);
         box-shadow: inset 0 0 0 1px rgba(18, 111, 69, .20);
@@ -24051,8 +24332,12 @@ def render_cashoperations_body(
             if (!force) return false;
             if (!confirm("Обновить страницу? Несохраненные данные пропадут.")) return false;
           }}
+          const targetScreen = screenName || activeScreenName();
           try {{
-            sessionStorage.setItem("cashNextScreen", screenName || activeScreenName());
+            sessionStorage.setItem("cashNextScreen", targetScreen);
+            const url = new URL(window.location.href);
+            if (targetScreen) url.searchParams.set("screen", targetScreen);
+            window.history.replaceState(null, "", url.toString());
           }} catch (_err) {{}}
           window.location.reload();
           return true;
