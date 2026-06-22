@@ -20605,6 +20605,7 @@ def render_cashoperations_body(
     )
     v2_work_calendar_html = f"""
         <section class="cash-work-v2-calendar" data-work-overview>
+          <div class="cash-work-v2-title-pill">Учет рабочей силы</div>
           <div class="cash-work-v2-days">
             <a class="cash-work-v2-arrow" href="{escape(work_day_url(work_report_date - timedelta(days=1)), quote=True)}" aria-label="Предыдущий день">{v2_icon("down")}</a>
             {v2_work_calendar_days}
@@ -20649,9 +20650,6 @@ def render_cashoperations_body(
         )
         if cash_design_version == "v2":
             work_report_screen = f"""
-        <section class="cash-mobile-work-head cash-work-v2-head" data-work-overview>
-          <h2>Учет рабочей силы</h2>
-        </section>
         {v2_work_calendar_html}
         <section class="cash-mobile-work-head cash-work-v2-actions" data-work-overview>
           {work_primary_actions_html}
@@ -21058,7 +21056,11 @@ def render_cashoperations_body(
     history_screen_html = ""
     notification_screen_html = ""
     cash_nav_html = ""
-    history_nav_html = ""
+    notifications_nav_html = (
+        f'<button class="cash-mobile-nav cash-mobile-nav-events" type="button" data-cash-screen="notifications">{v2_icon("bell")}<span>События</span></button>'
+        if cash_design_version == "v2"
+        else '<button class="cash-mobile-nav cash-mobile-nav-events" type="button" data-cash-screen="notifications">События</button>'
+    )
     if has_cashbox_access:
         v2_balance_panel_intro = ""
         v2_balance_sheet_open = ""
@@ -21131,11 +21133,6 @@ def render_cashoperations_body(
             if cash_design_version == "v2"
             else '<button class="cash-mobile-nav cash-mobile-nav-cash" type="button" data-cash-screen="home">Касса</button>'
         )
-        history_nav_html = (
-            f'<button class="cash-mobile-nav cash-mobile-nav-history" type="button" data-cash-screen="history">{v2_icon("clock")}<span>История</span></button>'
-            if cash_design_version == "v2"
-            else '<button class="cash-mobile-nav cash-mobile-nav-history" type="button" data-cash-screen="history">История</button>'
-        )
     push_action_html = ""
     if cash_access.get("can_receive_push"):
         if push_public_key:
@@ -21192,8 +21189,9 @@ def render_cashoperations_body(
         if cash_design_version == "v2" and can_view_work_reports
         else ('<button class="cash-mobile-nav cash-mobile-nav-work" type="button" data-cash-screen="work">Работа</button>' if can_view_work_reports else "")
     )
-    bottom_nav_items = "".join([cash_nav_html, letters_nav_html, history_nav_html, work_nav_html])
-    bottom_nav_count = sum(1 for item in [cash_nav_html, letters_nav_html, history_nav_html, work_nav_html] if item)
+    bottom_nav_parts = [cash_nav_html, work_nav_html, letters_nav_html, notifications_nav_html]
+    bottom_nav_items = "".join(bottom_nav_parts)
+    bottom_nav_count = sum(1 for item in bottom_nav_parts if item)
     bottom_nav_html = f'<nav class="cash-mobile-bottom-tabs">{bottom_nav_items}</nav>' if bottom_nav_items else ""
     v2_cashbox_sheet_html = ""
     if cash_design_version == "v2" and len(allowed_cashboxes) > 1:
@@ -22925,8 +22923,8 @@ def render_cashoperations_body(
         color: #0f1714;
       }}
       .cash-mobile.is-v2 .cash-work-v2-calendar {{
-        margin-top: 12px;
-        padding: 11px 10px 12px;
+        margin-top: 32px;
+        padding: 0 10px 12px;
         border: 1px solid rgba(34, 45, 38, .09);
         border-radius: 19px;
         background: rgba(255, 255, 255, .84);
@@ -22934,6 +22932,22 @@ def render_cashoperations_body(
           0 18px 42px rgba(18, 24, 21, .08),
           inset 0 1px 0 rgba(255, 255, 255, .88);
         backdrop-filter: blur(20px);
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-title-pill {{
+        width: min(78%, 282px);
+        min-height: 50px;
+        margin: -25px auto 13px;
+        padding: 0 22px;
+        display: grid;
+        place-items: center;
+        border-radius: 25px;
+        background: #16231d;
+        color: #fff;
+        font-size: 20px;
+        line-height: 1.05;
+        font-weight: 820;
+        text-align: center;
+        box-shadow: 0 14px 30px rgba(18, 24, 21, .20);
       }}
       .cash-mobile.is-v2 .cash-work-v2-days {{
         display: grid;
@@ -23240,7 +23254,7 @@ def render_cashoperations_body(
       }}
       .cash-design-v2 .cash-mobile-nav-cash::before {{ content: "▰"; }}
       .cash-design-v2 .cash-mobile-nav-letters::before {{ content: "▱"; }}
-      .cash-design-v2 .cash-mobile-nav-history::before {{ content: "◷"; }}
+      .cash-design-v2 .cash-mobile-nav-events::before {{ content: "◷"; }}
       .cash-design-v2 .cash-mobile-nav-work::before {{ content: "▣"; }}
       .cash-design-v2 .cash-mobile-nav.active {{
         background: transparent;
@@ -23404,8 +23418,15 @@ def render_cashoperations_body(
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }}
         .cash-mobile.is-v2 .cash-work-v2-calendar {{
+          margin-top: 30px;
           padding-left: 8px;
           padding-right: 8px;
+        }}
+        .cash-mobile.is-v2 .cash-work-v2-title-pill {{
+          width: min(82%, 258px);
+          min-height: 46px;
+          margin: -23px auto 11px;
+          font-size: 18px;
         }}
         .cash-mobile.is-v2 .cash-work-v2-days {{
           grid-template-columns: 24px repeat(5, minmax(0, 1fr)) 24px;
