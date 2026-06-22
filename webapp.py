@@ -1450,13 +1450,10 @@ def notify_legal_letter_created(
     actor_name: str = "",
     object_label: str = "",
 ) -> tuple[int, int]:
-    direction_short = "Вход" if direction == "incoming" else "Исх"
-    direction_label = f"{direction_short} письмо"
+    direction_label = "Входящее письмо" if direction == "incoming" else "Исходящее письмо"
     actor_label = actor_name.strip()
-    actor_text = f"Пользователь {actor_label}" if actor_label else "Пользователь"
-    subject_label = subject.strip() or "без темы"
     object_text = object_label.strip() or "без объекта"
-    body = f"{actor_text} добавил {direction_short} письмо: {subject_label} / на объект: {object_text}"
+    body = f"от {object_text}" if direction == "incoming" else f"на {object_text}"
     target_url = f"/cashoperations?screen=letters&letter_id={letter_id}#letter-{letter_id}" if letter_id else "/cashoperations?screen=letters"
     record_mobile_notification_event(
         storage,
@@ -20287,7 +20284,16 @@ def render_cashoperations_body(
         title = event.title
         body = event.body
         actor_name = event.actor_name
-        if event.event_kind == "software_commit":
+        if event.event_kind == "legal_letter":
+            is_incoming = title.startswith("Вход")
+            title = "Входящее письмо" if is_incoming else "Исходящее письмо"
+            object_match = re.search(r"/\s*на объект:\s*(.+)$", body)
+            if object_match:
+                object_label = object_match.group(1).strip()
+                body = f"от {object_label}" if is_incoming else f"на {object_label}"
+            elif body.startswith("Пользователь ") and " добавил " in body:
+                body = "отправитель не указан" if is_incoming else "получатель не указан"
+        elif event.event_kind == "software_commit":
             actor_name = software_actor_label
             if ":" in title:
                 commit_title, commit_subject = title.split(":", 1)
@@ -20306,8 +20312,7 @@ def render_cashoperations_body(
             if abs(float(event.amount or 0.0)) > 0.009
             else ""
         )
-        actor_label = f"Пользователь {actor_name}" if event.event_kind.startswith("software_") and actor_name else actor_name
-        actor_html = f'<span>{escape(actor_label)}</span>' if actor_label else ""
+        actor_html = f'<span>{escape(actor_name)}</span>' if actor_name else ""
         related_date_html = (
             f'<span>{escape(format_date(event.related_date))}</span>'
             if event.related_date is not None
