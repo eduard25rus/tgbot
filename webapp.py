@@ -1441,33 +1441,51 @@ def notify_cash_income_created(storage: Storage, owner_chat_id: int, amount: flo
     )
 
 
-def notify_legal_letter_created(storage: Storage, owner_chat_id: int, direction: str, subject: str) -> tuple[int, int]:
-    direction_label = "Входящее письмо" if direction == "incoming" else "Исходящее письмо"
-    body = subject.strip() or "Без темы"
+def notify_legal_letter_created(
+    storage: Storage,
+    owner_chat_id: int,
+    direction: str,
+    subject: str,
+    letter_id: int = 0,
+    actor_name: str = "",
+    object_label: str = "",
+) -> tuple[int, int]:
+    direction_short = "Вход" if direction == "incoming" else "Исх"
+    direction_label = f"{direction_short} письмо"
+    actor_label = actor_name.strip()
+    actor_text = f"Пользователь {actor_label}" if actor_label else "Пользователь"
+    subject_label = subject.strip() or "без темы"
+    object_text = object_label.strip() or "без объекта"
+    body = f"{actor_text} добавил {direction_short} письмо: {subject_label} / на объект: {object_text}"
+    target_url = f"/cashoperations?screen=letters&letter_id={letter_id}#letter-{letter_id}" if letter_id else "/cashoperations?screen=letters"
     record_mobile_notification_event(
         storage,
         owner_chat_id,
         "legal_letter",
         direction_label,
         body,
-        "",
+        actor_label,
+        related_entry_id=letter_id,
+        event_key=f"legal-letter:{letter_id}" if letter_id else "",
     )
     safe_payload = {
         "title": direction_label,
         "body": body,
         "tag": "legal-letter-created",
-        "url": "/cashoperations?screen=letters",
+        "url": target_url,
         "data": {
             "kind": "legal_letter",
+            "letter_id": letter_id,
         },
     }
     detailed_payload = {
         "title": direction_label,
         "body": body,
         "tag": "legal-letter-created",
-        "url": "/cashoperations?screen=letters",
+        "url": target_url,
         "data": {
             "kind": "legal_letter",
+            "letter_id": letter_id,
         },
     }
     return send_cash_push(storage, owner_chat_id, safe_payload, detailed_payload, push_group="letters")
@@ -1523,6 +1541,172 @@ def notify_work_description_created(storage: Storage, owner_chat_id: int, report
         },
     }
     return send_cash_push(storage, owner_chat_id, payload, payload, push_group="work")
+
+
+def _first_env_value(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _git_output(*args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=Path(__file__).resolve().parent,
+            text=True,
+            capture_output=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def current_software_commit_info() -> dict[str, str]:
+    sha = _first_env_value(
+        "RAILWAY_GIT_COMMIT_SHA",
+        "GIT_COMMIT_SHA",
+        "SOURCE_VERSION",
+        "VERCEL_GIT_COMMIT_SHA",
+        "HEROKU_SLUG_COMMIT",
+        "COMMIT_SHA",
+    ) or _git_output("rev-parse", "HEAD")
+    sha = sha.strip()
+    if not sha:
+        return {}
+    subject = _first_env_value(
+        "RAILWAY_GIT_COMMIT_MESSAGE",
+        "GIT_COMMIT_MESSAGE",
+        "VERCEL_GIT_COMMIT_MESSAGE",
+        "COMMIT_MESSAGE",
+    ) or _git_output("log", "-1", "--pretty=%s")
+    actor = _first_env_value(
+        "RAILWAY_GIT_AUTHOR",
+        "RAILWAY_GIT_COMMIT_AUTHOR",
+        "GIT_AUTHOR_NAME",
+        "VERCEL_GIT_COMMIT_AUTHOR_NAME",
+        "VERCEL_GIT_COMMIT_AUTHOR_LOGIN",
+    ) or _git_output("log", "-1", "--pretty=%an")
+    return {
+        "sha": sha,
+        "short_sha": sha[:7],
+        "subject": subject.strip() or "Обновление ПО",
+        "actor": actor.strip() or "Codex",
+    }
+
+
+def software_commit_infos_for_date(target_date: date) -> list[dict[str, str]]:
+    start = datetime.combine(target_date, datetime.min.time(), tzinfo=VLADIVOSTOK_TZ)
+    end = start + timedelta(days=1)
+    raw = _git_output(
+        "log",
+        f"--since={start.isoformat()}",
+        f"--until={end.isoformat()}",
+        "--pretty=format:%H%x1f%an%x1f%s",
+    )
+    infos: list[dict[str, str]] = []
+    for line in raw.splitlines():
+        parts = line.split("\x1f")
+        if len(parts) < 3:
+            continue
+        sha, actor, subject = (part.strip() for part in parts[:3])
+        if not sha:
+            continue
+        infos.append({
+            "sha": sha,
+            "short_sha": sha[:7],
+            "subject": subject or "Обновление ПО",
+            "actor": actor or "Codex",
+        })
+    if infos:
+        return infos
+    current = current_software_commit_info()
+    return [current] if current else []
+
+
+def ensure_software_commit_event(storage: Storage, owner_chat_id: int) -> bool:
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    created_count = 0
+    for info in software_commit_infos_for_date(today):
+        created = record_mobile_notification_event(
+            storage,
+            owner_chat_id,
+            "software_commit",
+            f"Коммит {info['short_sha']}: {info['subject']}",
+            f"Пользователь {info['actor']} внес правку ПО",
+            info["actor"],
+            related_date=today,
+            event_key=f"software-commit:{info['sha']}",
+        )
+        if created:
+            created_count += 1
+    return created_count > 0
+
+
+def software_commit_events_for_date(storage: Storage, owner_chat_id: int, target_date: date) -> list:
+    events = storage.list_mobile_notification_events(owner_chat_id, 1000)
+    return [
+        event
+        for event in events
+        if event.event_kind == "software_commit"
+        and (event.related_date == target_date or event.created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ).date() == target_date)
+    ]
+
+
+def maybe_send_software_digest(
+    storage: Storage,
+    owner_chat_id: int,
+    now: datetime | None = None,
+    force: bool = False,
+) -> tuple[int, int]:
+    now = now.astimezone(VLADIVOSTOK_TZ) if now is not None else datetime.now(VLADIVOSTOK_TZ)
+    if not force and now.hour < 22:
+        return 0, 0
+    target_date = now.date()
+    commits = software_commit_events_for_date(storage, owner_chat_id, target_date)
+    if not commits:
+        return 0, 0
+    commit_count = len(commits)
+    actor_names = []
+    for event in commits:
+        actor = (event.actor_name or "").strip()
+        if actor and actor not in actor_names:
+            actor_names.append(actor)
+    actor_label = ", ".join(actor_names[:2]) if actor_names else "Codex"
+    if len(actor_names) > 2:
+        actor_label += f" и еще {len(actor_names) - 2}"
+    title = f"За сегодня в ПО внесено {commit_count} коммитов"
+    body = f"Автор: {actor_label}. Последний: {commits[0].title}"
+    created = record_mobile_notification_event(
+        storage,
+        owner_chat_id,
+        "software_digest",
+        title,
+        body,
+        actor_label,
+        amount=float(commit_count),
+        related_date=target_date,
+        event_key=f"software-digest:{target_date.isoformat()}",
+    )
+    if not created:
+        return 0, 0
+    payload = {
+        "title": title,
+        "body": body,
+        "tag": f"software-digest-{target_date.isoformat()}",
+        "url": "/cashoperations?screen=notifications",
+        "data": {
+            "kind": "software_digest",
+            "date": target_date.isoformat(),
+        },
+    }
+    return send_cash_push(storage, owner_chat_id, payload, payload, push_group="cash")
 
 
 def imported_bank_entry_needs_attention(entry) -> bool:
@@ -19533,6 +19717,7 @@ def render_cashoperations_body(
     selected_work_month: date | None = None,
     show_work_stats: bool = False,
     selected_history_date: date | None = None,
+    selected_letter_id: int = 0,
 ) -> str:
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     cashbox_labels = {item["code"]: item["label"] for item in cashboxes}
@@ -19565,6 +19750,8 @@ def render_cashoperations_body(
         selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (allowed_cashboxes[0]["code"] if allowed_cashboxes else "")
     entries = storage.list_expense_entries(owner_chat_id)
     today = datetime.now(VLADIVOSTOK_TZ).date()
+    ensure_software_commit_event(storage, owner_chat_id)
+    maybe_send_software_digest(storage, owner_chat_id)
     project_options_list = expense_project_options(storage, owner_chat_id, entries, include_legacy_entries=False)
     project_labels = dict(project_options_list)
     category_options_list = [
@@ -19868,6 +20055,10 @@ def render_cashoperations_body(
     if can_view_letters:
         letter_object_filter = selected_letter_object_filter.strip()
         legal_letters = storage.list_legal_letters(owner_chat_id, object_filter=letter_object_filter)[:50]
+        if selected_letter_id:
+            selected_letter = storage.get_legal_letter(owner_chat_id, selected_letter_id)
+            if selected_letter is not None and all(letter.id != selected_letter.id for letter in legal_letters):
+                legal_letters = [selected_letter, *legal_letters[:49]]
         legal_attachments = storage.list_legal_letter_attachments(owner_chat_id)
         legal_attachment_map: dict[int, list] = {}
         for attachment in legal_attachments:
@@ -19904,8 +20095,9 @@ def render_cashoperations_body(
                 if letter.created_by_name.strip()
                 else ""
             )
+            is_focused = selected_letter_id and letter.id == selected_letter_id
             return f"""
-            <article class="cash-mobile-op cash-mobile-letter cash-mobile-letter-{direction_class}">
+            <article id="letter-{letter.id}" class="cash-mobile-op cash-mobile-letter cash-mobile-letter-{direction_class}{" cash-mobile-letter-focused" if is_focused else ""}">
               <div class="cash-mobile-op-main">
                 <span class="cash-mobile-letter-head">
                   <strong>{escape(format_date(letter.letter_date))}</strong>
@@ -19987,6 +20179,7 @@ def render_cashoperations_body(
             "up": '<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>',
             "logout": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path>',
             "bell": '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path>',
+            "code": '<path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path><path d="m14.5 4-5 16"></path>',
         }
         class_attr = f' class="cash-v2-icon {escape(extra_class)}"' if extra_class else ' class="cash-v2-icon"'
         return f'<svg{class_attr} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{paths.get(name, paths["square"])}</svg>'
@@ -20004,6 +20197,7 @@ def render_cashoperations_body(
         f"{notification_today_count} сегодня",
         f"{sum(1 for event in notification_events if event.event_kind.startswith('cash_'))} касса",
         f"{sum(1 for event in notification_events if event.event_kind.startswith('dds_'))} ДДС",
+        f"{sum(1 for event in notification_events if event.event_kind.startswith('software_'))} ПО",
     ]
 
     def notification_time_label(value: datetime) -> str:
@@ -20023,6 +20217,8 @@ def render_cashoperations_body(
             return v2_icon("briefcase")
         if event_kind == "legal_letter":
             return v2_icon("mail")
+        if event_kind.startswith("software_"):
+            return v2_icon("code")
         return v2_icon("bell")
 
     def notification_event_class(event_kind: str) -> str:
@@ -20036,6 +20232,8 @@ def render_cashoperations_body(
             return "work"
         if event_kind == "legal_letter":
             return "letter"
+        if event_kind.startswith("software_"):
+            return "software"
         return "default"
 
     def notification_event_filter(event_kind: str) -> str:
@@ -20045,7 +20243,17 @@ def render_cashoperations_body(
             return "dds"
         if event_kind.startswith("work_"):
             return "work"
+        if event_kind == "legal_letter":
+            return "letter"
+        if event_kind.startswith("software_"):
+            return "software"
         return "other"
+
+    def notification_event_href(event) -> str:
+        if event.event_kind == "legal_letter" and int(event.related_entry_id or 0) > 0:
+            letter_id = int(event.related_entry_id)
+            return f"/cashoperations?screen=letters&letter_id={letter_id}#letter-{letter_id}"
+        return ""
 
     def notification_event_card(event) -> str:
         amount_html = (
@@ -20060,8 +20268,11 @@ def render_cashoperations_body(
             else ""
         )
         meta_parts = "".join(part for part in [actor_html, related_date_html, f"<span>{escape(notification_time_label(event.created_at))}</span>"])
+        href = notification_event_href(event)
+        tag_name = "a" if href else "article"
+        href_attr = f' href="{escape(href, quote=True)}"' if href else ""
         return f"""
-          <article class="cash-v2-notification-item {notification_event_class(event.event_kind)}" data-notification-kind="{escape(notification_event_filter(event.event_kind))}">
+          <{tag_name}{href_attr} class="cash-v2-notification-item {notification_event_class(event.event_kind)}" data-notification-kind="{escape(notification_event_filter(event.event_kind))}">
             <span class="cash-v2-notification-icon" aria-hidden="true">{notification_event_icon(event.event_kind)}</span>
             <span class="cash-v2-notification-main">
               <strong>{escape(event.title)}</strong>
@@ -20069,7 +20280,7 @@ def render_cashoperations_body(
               <span class="cash-v2-notification-meta">{meta_parts}</span>
             </span>
             {amount_html}
-          </article>
+          </{tag_name}>
         """
 
     notification_rows = "".join(notification_event_card(event) for event in notification_events) or """
@@ -20831,6 +21042,8 @@ def render_cashoperations_body(
           <button{notification_cash_filter_class} type="button" data-notification-filter="cash">Касса</button>
           <button{notification_dds_filter_class} type="button" data-notification-filter="dds">ДДС</button>
           <button{notification_work_filter_class} type="button" data-notification-filter="work">Работа</button>
+          <button type="button" data-notification-filter="letter">Письма</button>
+          <button type="button" data-notification-filter="software">ПО</button>
         </section>
         <section class="cash-v2-notification-list">
           <div class="cash-v2-notification-list-head">
@@ -20933,7 +21146,7 @@ def render_cashoperations_body(
       .cash-mobile {{
         max-width: 560px;
         margin: 0 auto;
-        padding: 12px 0 92px;
+        padding: 12px 0 calc(104px + env(safe-area-inset-bottom) + var(--cash-visual-bottom, 0px));
       }}
       .cash-mobile * {{ box-sizing: border-box; }}
       .cash-mobile-tabs {{
@@ -21725,10 +21938,10 @@ def render_cashoperations_body(
       .cash-mobile-bottom-tabs {{
         position: fixed;
         left: 50%;
-        bottom: 0;
+        bottom: var(--cash-visual-bottom, 0px);
         z-index: 10;
         width: min(100%, 560px);
-        transform: translateX(-50%);
+        transform: translate3d(-50%, 0, 0);
         display: grid;
         grid-template-columns: repeat({bottom_nav_count or 1}, 1fr);
         gap: 6px;
@@ -21789,7 +22002,7 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 {{
         max-width: 560px;
-        padding: 8px 0 88px;
+        padding: 8px 0 calc(112px + env(safe-area-inset-bottom) + var(--cash-visual-bottom, 0px));
       }}
       .cash-mobile.is-v2 .cash-v2-icon {{
         width: 22px;
@@ -22290,6 +22503,10 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-letter .cash-mobile-op-side {{
         align-self: center;
       }}
+      .cash-mobile.is-v2 .cash-mobile-letter-focused {{
+        background: rgba(226, 242, 232, .72);
+        box-shadow: inset 0 0 0 1px rgba(18, 111, 69, .20);
+      }}
       .cash-mobile.is-v2 .cash-mobile-op-title {{
         font-size: 13px;
       }}
@@ -22470,6 +22687,8 @@ def render_cashoperations_body(
         align-items: center;
         padding: 13px 16px;
         border-top: 1px solid rgba(34, 45, 38, .08);
+        color: inherit;
+        text-decoration: none;
       }}
       .cash-mobile.is-v2 .cash-v2-notification-item.is-hidden {{
         display: none;
@@ -22504,6 +22723,9 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-notification-item.letter .cash-v2-notification-icon {{
         background: #53615a;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-item.software .cash-v2-notification-icon {{
+        background: #2d5a72;
       }}
       .cash-mobile.is-v2 .cash-v2-notification-main {{
         min-width: 0;
@@ -22865,7 +23087,7 @@ def render_cashoperations_body(
       }}
       .cash-design-v2 .cash-mobile-bottom-tabs {{
         width: min(calc(100% - 18px), 542px);
-        bottom: 8px;
+        bottom: calc(8px + var(--cash-visual-bottom, 0px));
         border: 1px solid rgba(34, 45, 38, .10);
         border-radius: 22px;
         padding: 7px 12px calc(7px + env(safe-area-inset-bottom));
@@ -23261,6 +23483,18 @@ def render_cashoperations_body(
         const notificationItems = document.querySelectorAll("[data-notification-kind]");
         const notificationFilterEmpty = document.querySelector("[data-notification-filter-empty]");
         const notificationBaseEmpty = document.querySelector("[data-notification-empty-base]");
+        const bottomTabs = document.querySelector(".cash-mobile-bottom-tabs");
+        const focusedLetterTarget = window.location.hash && window.location.hash.startsWith("#letter-")
+          ? document.querySelector(window.location.hash)
+          : null;
+        function syncBottomTabsViewport() {{
+          if (!bottomTabs) return;
+          const viewport = window.visualViewport;
+          const bottomOffset = viewport
+            ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+            : 0;
+          document.documentElement.style.setProperty("--cash-visual-bottom", Math.round(bottomOffset) + "px");
+        }}
         function applyNotificationFilter(filter) {{
           let visibleCount = 0;
           notificationItems.forEach((item) => {{
@@ -23296,6 +23530,15 @@ def render_cashoperations_body(
           if (cashboxTabs) cashboxTabs.classList.toggle("is-hidden", name === "letters" || name === "work" || name === "notifications");
           if (name !== "work" && screens.work) screens.work.classList.remove("is-form-mode");
           window.scrollTo({{ top: 0, behavior: "smooth" }});
+        }}
+        syncBottomTabsViewport();
+        window.addEventListener("resize", syncBottomTabsViewport, {{ passive: true }});
+        if (window.visualViewport) {{
+          window.visualViewport.addEventListener("resize", syncBottomTabsViewport, {{ passive: true }});
+          window.visualViewport.addEventListener("scroll", syncBottomTabsViewport, {{ passive: true }});
+        }}
+        if (focusedLetterTarget) {{
+          window.setTimeout(() => focusedLetterTarget.scrollIntoView({{ block: "center", behavior: "smooth" }}), 160);
         }}
         cashboxSheetOpeners.forEach((button) => {{
           button.addEventListener("click", () => openCashboxSheet());
@@ -28337,6 +28580,28 @@ self.addEventListener("notificationclick", (event) => {
         )
         return [service_worker.encode("utf-8")]
 
+    if path == "/cashoperations/software-digest" and method in {"GET", "POST"}:
+        expected_token = (
+            os.getenv("SOFTWARE_DIGEST_TOKEN", "").strip()
+            or os.getenv("CRON_TOKEN", "").strip()
+            or os.getenv("RAILWAY_CRON_TOKEN", "").strip()
+        )
+        provided_token = query.get("token", [""])[0].strip() or environ.get("HTTP_X_CRON_TOKEN", "").strip()
+        if not expected_token:
+            start_response("503 Service Unavailable", [("Content-Type", "application/json; charset=utf-8")])
+            return [json.dumps({"ok": False, "error": "token_not_configured"}, ensure_ascii=False).encode("utf-8")]
+        if not secrets.compare_digest(provided_token, expected_token):
+            start_response("403 Forbidden", [("Content-Type", "application/json; charset=utf-8")])
+            return [json.dumps({"ok": False, "error": "forbidden"}, ensure_ascii=False).encode("utf-8")]
+        digest_owner = pick_owner(storage, query.get("owner", [""])[0].strip() or os.getenv("SOFTWARE_DIGEST_OWNER", "").strip())
+        if digest_owner is None:
+            start_response("404 Not Found", [("Content-Type", "application/json; charset=utf-8")])
+            return [json.dumps({"ok": False, "error": "owner_not_found"}, ensure_ascii=False).encode("utf-8")]
+        ensure_software_commit_event(storage, digest_owner)
+        sent_count, failed_count = maybe_send_software_digest(storage, digest_owner, force=True)
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [json.dumps({"ok": True, "sent": sent_count, "failed": failed_count}, ensure_ascii=False).encode("utf-8")]
+
     if path == "/login" and method == "POST":
         form = read_post_data(environ)
         user = storage.get_web_user_by_login(form.get("login", ""))
@@ -28513,6 +28778,10 @@ self.addEventListener("notificationclick", (event) => {
     if path == "/cashoperations" and method == "GET":
         selected_cashbox = query.get("cashbox", [""])[0].strip()
         selected_letter_object_filter = query.get("letter_object", [""])[0].strip()
+        try:
+            selected_letter_id = int(query.get("letter_id", ["0"])[0] or "0")
+        except ValueError:
+            selected_letter_id = 0
         initial_screen = query.get("screen", [""])[0].strip()
         work_date_raw = query.get("work_date", [""])[0].strip()
         work_month_raw = query.get("work_month", [""])[0].strip()
@@ -28544,6 +28813,7 @@ self.addEventListener("notificationclick", (event) => {
             selected_work_month,
             show_work_stats,
             selected_history_date,
+            selected_letter_id,
         )
         cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"])) if current_user else None
         design_version = cash_access.get("design_version", "classic") if cash_access else "classic"
@@ -33263,7 +33533,7 @@ self.addEventListener("notificationclick", (event) => {
                 source_kind="legal_letter_create",
                 source_ref=str(created),
             )
-            notify_legal_letter_created(storage, current_owner, direction, subject)
+            notify_legal_letter_created(storage, current_owner, direction, subject, created, actor_name, object_label)
             return redirect(start_response, f"/contracts/{contract_id}?owner={current_owner}")
         except Exception as exc:
             body = render_contract_detail(storage, current_owner, contract_id, current_user, f"Не удалось добавить письмо: {exc}")
@@ -33397,7 +33667,7 @@ self.addEventListener("notificationclick", (event) => {
                     source_kind="legal_letter_create",
                     source_ref=str(created),
                 )
-            notify_legal_letter_created(storage, current_owner, direction, subject)
+            notify_legal_letter_created(storage, current_owner, direction, subject, created, actor_name, object_label)
             return redirect(start_response, f"/jurisprudence/letters?owner={current_owner}")
         except Exception as exc:
             body = render_jurisprudence_letters_section(storage, current_owner, current_user, f"Не удалось добавить письмо: {exc}")
