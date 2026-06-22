@@ -19984,6 +19984,11 @@ def render_cashoperations_body(
             if kind != "income" and getattr(entry, "receipt_file_path", "")
             else ""
         )
+        title_line = (
+            f'<span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span>{escape(category)}</span></span>'
+            if cash_design_version == "v2"
+            else f'<span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>'
+        )
         receipt_name = (getattr(entry, "receipt_file_name", "") or getattr(entry, "receipt_file_path", "") or "").lower()
         receipt_kind = "pdf" if receipt_name.endswith(".pdf") else "image"
         if kind == "income" and can_edit and not is_transfer_entry:
@@ -19997,7 +20002,7 @@ def render_cashoperations_body(
               data-income-comment="{escape(editable_comment(entry))}">
               <span class="cash-mobile-op-main">
                 <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
-                <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
+                {title_line}
                 {f'<span class="cash-mobile-op-comment">{escape(comment)}</span>' if comment else ''}
               </span>
               <span class="cash-mobile-op-side">
@@ -20026,7 +20031,7 @@ def render_cashoperations_body(
               data-expense-receipt-kind="{receipt_kind}">
               <span class="cash-mobile-op-main">
                 <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
-                <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
+                {title_line}
                 {allocation_line}
                 {employee_line}
                 {deposit_line}
@@ -20042,7 +20047,7 @@ def render_cashoperations_body(
         <article class="cash-mobile-op cash-mobile-op-{kind}">
           <div class="cash-mobile-op-main">
             <span class="cash-mobile-op-date">{escape(format_date(entry.expense_date))}</span>
-            <span class="cash-mobile-op-title"><strong>{escape(title)}</strong><span> · {escape(category)}</span></span>
+            {title_line}
             {allocation_line}
             {employee_line}
             {deposit_line}
@@ -22675,6 +22680,12 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-mobile-op-title strong {{
         font-size: 14px;
         line-height: 1.18;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-op-title span {{
+        display: block;
+        margin-top: 2px;
+        font-size: 12px;
+        line-height: 1.2;
       }}
       .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op-date,
       .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op-comment,
