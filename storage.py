@@ -2689,6 +2689,7 @@ class Storage:
                        s.user_agent, s.created_at, s.updated_at, a.push_detail_mode,
                        a.can_receive_cash_push, a.can_receive_letter_push, a.can_receive_work_push,
                        a.can_view_letters, a.can_view_work_reports,
+                       a.can_view_all_cashboxes, a.allowed_cashbox_codes,
                        u.full_name, u.email
                 FROM cash_push_subscriptions s
                 JOIN web_users u ON u.id = s.user_id
@@ -2718,6 +2719,8 @@ class Storage:
                 "can_receive_work_push": bool(row["can_receive_work_push"]) if "can_receive_work_push" in row.keys() else False,
                 "can_view_letters": bool(row["can_view_letters"]) if "can_view_letters" in row.keys() else False,
                 "can_view_work_reports": bool(row["can_view_work_reports"]) if "can_view_work_reports" in row.keys() else False,
+                "can_view_all_cashboxes": bool(row["can_view_all_cashboxes"]) if "can_view_all_cashboxes" in row.keys() else False,
+                "allowed_cashbox_codes": self._split_cashbox_codes(row["allowed_cashbox_codes"]) if "allowed_cashbox_codes" in row.keys() else [],
                 "full_name": row["full_name"],
                 "login": row["email"],
             }

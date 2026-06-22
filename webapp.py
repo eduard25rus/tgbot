@@ -1289,6 +1289,7 @@ def send_cash_push(
     safe_payload: dict,
     amount_payload: dict | None = None,
     push_group: str = "cash",
+    cashbox_code: str = "",
 ) -> tuple[int, int]:
     public_key = cash_push_public_key(storage)
     private_key = cash_push_private_key(storage)
@@ -1313,6 +1314,10 @@ def send_cash_push(
             continue
         if push_group == "cash" and not subscription.get("can_receive_cash_push"):
             continue
+        if push_group == "cash" and cashbox_code:
+            allowed_cashboxes = set(subscription.get("allowed_cashbox_codes") or [])
+            if not subscription.get("can_view_all_cashboxes") and cashbox_code not in allowed_cashboxes:
+                continue
         payload = safe_payload
         if amount_payload and subscription.get("push_detail_mode") == "amount":
             payload = amount_payload
@@ -1381,6 +1386,8 @@ def notify_cash_operation_created(
     amount: float,
     actor_name: str,
     tag: str,
+    entry_id: int = 0,
+    cashbox_code: str = "",
 ) -> tuple[int, int]:
     safe_title = f"Добавлен новый {operation_label}"
     amount_title = f"{operation_label.capitalize()} — {format_amount(amount)}"
@@ -1393,6 +1400,8 @@ def notify_cash_operation_created(
         f"{actor_label} добавил {operation_label}",
         actor_label,
         amount,
+        related_entry_id=entry_id,
+        event_key=f"{tag}:{entry_id}" if entry_id else "",
     )
     return send_cash_push(
         storage,
@@ -1416,10 +1425,11 @@ def notify_cash_operation_created(
             },
         },
         push_group="cash",
+        cashbox_code=cashbox_code,
     )
 
 
-def notify_cash_expense_created(storage: Storage, owner_chat_id: int, amount: float, actor_name: str) -> tuple[int, int]:
+def notify_cash_expense_created(storage: Storage, owner_chat_id: int, amount: float, actor_name: str, entry_id: int = 0, cashbox_code: str = "") -> tuple[int, int]:
     return notify_cash_operation_created(
         storage,
         owner_chat_id,
@@ -1427,10 +1437,12 @@ def notify_cash_expense_created(storage: Storage, owner_chat_id: int, amount: fl
         amount=amount,
         actor_name=actor_name,
         tag="cash-expense-created",
+        entry_id=entry_id,
+        cashbox_code=cashbox_code,
     )
 
 
-def notify_cash_income_created(storage: Storage, owner_chat_id: int, amount: float, actor_name: str) -> tuple[int, int]:
+def notify_cash_income_created(storage: Storage, owner_chat_id: int, amount: float, actor_name: str, entry_id: int = 0, cashbox_code: str = "") -> tuple[int, int]:
     return notify_cash_operation_created(
         storage,
         owner_chat_id,
@@ -1438,6 +1450,8 @@ def notify_cash_income_created(storage: Storage, owner_chat_id: int, amount: flo
         amount=amount,
         actor_name=actor_name,
         tag="cash-income-created",
+        entry_id=entry_id,
+        cashbox_code=cashbox_code,
     )
 
 
@@ -20209,7 +20223,29 @@ def render_cashoperations_body(
         class_attr = f' class="cash-v2-icon {escape(extra_class)}"' if extra_class else ' class="cash-v2-icon"'
         return f'<svg{class_attr} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{paths.get(name, paths["square"])}</svg>'
 
-    notification_events = storage.list_mobile_notification_events(owner_chat_id, 80)
+    entries_by_id = {int(entry.id): entry for entry in entries}
+    all_cashbox_codes = {str(item.get("code", "")).strip() for item in cashboxes if str(item.get("code", "")).strip()}
+    notification_can_view_all_cashboxes = bool(cash_access.get("can_view_all_cashboxes")) or (bool(all_cashbox_codes) and all_cashbox_codes.issubset(allowed_codes))
+
+    def notification_cashbox_code(event) -> str:
+        entry = entries_by_id.get(int(event.related_entry_id or 0))
+        if entry is None:
+            return ""
+        return cashbox_code_from_entry(entry, cashboxes)
+
+    def notification_event_visible(event) -> bool:
+        if not event.event_kind.startswith("cash_"):
+            return True
+        if notification_can_view_all_cashboxes:
+            return True
+        event_cashbox = notification_cashbox_code(event)
+        return bool(event_cashbox and event_cashbox in allowed_codes)
+
+    notification_events = [
+        event
+        for event in storage.list_mobile_notification_events(owner_chat_id, 500)
+        if notification_event_visible(event)
+    ][:80]
     notification_total = len(notification_events)
 
     def notification_local_time(value: datetime) -> datetime:
@@ -20281,14 +20317,30 @@ def render_cashoperations_body(
         return ""
 
     notification_letter_cache: dict[int, object | None] = {}
+    notification_letter_subject_cache: dict[str, object] | None = None
+
+    def notification_letter_subject_key(value: str) -> str:
+        return " ".join(str(value or "").casefold().split())
 
     def notification_event_letter(event):
+        nonlocal notification_letter_subject_cache
         letter_id = int(event.related_entry_id or 0)
-        if event.event_kind != "legal_letter" or letter_id <= 0:
+        if event.event_kind != "legal_letter":
             return None
-        if letter_id not in notification_letter_cache:
-            notification_letter_cache[letter_id] = storage.get_legal_letter(owner_chat_id, letter_id)
-        return notification_letter_cache[letter_id]
+        if letter_id > 0:
+            if letter_id not in notification_letter_cache:
+                notification_letter_cache[letter_id] = storage.get_legal_letter(owner_chat_id, letter_id)
+            return notification_letter_cache[letter_id]
+        subject_key = notification_letter_subject_key(event.body)
+        if not subject_key:
+            return None
+        if notification_letter_subject_cache is None:
+            notification_letter_subject_cache = {}
+            for letter in storage.list_legal_letters(owner_chat_id):
+                letter_subject_key = notification_letter_subject_key(getattr(letter, "subject", ""))
+                if letter_subject_key and letter_subject_key not in notification_letter_subject_cache:
+                    notification_letter_subject_cache[letter_subject_key] = letter
+        return notification_letter_subject_cache.get(subject_key)
 
     def notification_event_text(event) -> tuple[str, str, str, date | None]:
         title = event.title
@@ -29033,7 +29085,7 @@ self.addEventListener("notificationclick", (event) => {
                 )
                 flash = "Поступление обновлено."
                 return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
-            storage.add_expense_entry(
+            income_entry_id = storage.add_expense_entry(
                 current_owner,
                 expense_date,
                 "admin",
@@ -29047,7 +29099,7 @@ self.addEventListener("notificationclick", (event) => {
                 actor_name,
                 client_request_key=form.get("request_key", ""),
             )
-            notify_cash_income_created(storage, current_owner, amount, actor_name)
+            notify_cash_income_created(storage, current_owner, amount, actor_name, income_entry_id, selected_cashbox)
             flash = "Поступление добавлено в кассу."
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
@@ -29288,7 +29340,7 @@ self.addEventListener("notificationclick", (event) => {
                         expense_group_code="transfer",
                     )
                     storage.set_expense_worker_allocations(current_owner, source_entry_id, [])
-                    notify_cash_expense_created(storage, current_owner, amount, actor_name)
+                    notify_cash_expense_created(storage, current_owner, amount, actor_name, source_entry_id, selected_cashbox)
                 pair_marker = f"[Связанный расход: {source_entry_id}]"
                 target_comment = " ".join(part for part in (f"[{target_label}]", f"[Источник: {source_label}]", pair_marker, comment) if part)
                 linked_income = next(
@@ -29317,7 +29369,7 @@ self.addEventListener("notificationclick", (event) => {
                         expense_group_code="income",
                     )
                 else:
-                    storage.add_expense_entry(
+                    target_entry_id = storage.add_expense_entry(
                         current_owner,
                         expense_date,
                         project_code,
@@ -29333,7 +29385,7 @@ self.addEventListener("notificationclick", (event) => {
                         operation_type="income",
                         expense_group_code="income",
                     )
-                    notify_cash_income_created(storage, current_owner, amount, actor_name)
+                    notify_cash_income_created(storage, current_owner, amount, actor_name, target_entry_id, target_cashbox)
                 flash = f"Перевод в {target_label} сохранен."
                 return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
             if expense_id:
@@ -29394,7 +29446,7 @@ self.addEventListener("notificationclick", (event) => {
             storage.set_expense_worker_allocations(current_owner, saved_expense_id, labor_allocations)
             upload = next((item for item in files.get("receipt_file", []) if item.data), None)
             save_cash_receipt_upload(storage, current_owner, saved_expense_id, upload)
-            notify_cash_expense_created(storage, current_owner, amount, actor_name)
+            notify_cash_expense_created(storage, current_owner, amount, actor_name, saved_expense_id, selected_cashbox)
             flash = "Расход добавлен в кассу и CRM-расходы."
             return redirect(start_response, f"/cashoperations?cashbox={quote_plus(selected_cashbox)}&ok=1&flash={quote_plus(flash)}")
         except ValueError as exc:
@@ -34937,7 +34989,7 @@ self.addEventListener("notificationclick", (event) => {
                     operation_type="transfer",
                     expense_group_code="transfer",
                 )
-                notify_cash_expense_created(storage, current_owner, amount, actor_name)
+                notify_cash_expense_created(storage, current_owner, amount, actor_name, source_entry_id, selected_cashbox_code)
                 pair_marker = f"[Связанный расход: {source_entry_id}]"
                 target_comment = " ".join(
                     part
@@ -34949,7 +35001,7 @@ self.addEventListener("notificationclick", (event) => {
                     )
                     if part
                 )
-                storage.add_expense_entry(
+                target_entry_id = storage.add_expense_entry(
                     current_owner,
                     expense_date,
                     "admin",
@@ -34965,7 +35017,7 @@ self.addEventListener("notificationclick", (event) => {
                     operation_type="income",
                     expense_group_code="income",
                 )
-                notify_cash_income_created(storage, current_owner, amount, actor_name)
+                notify_cash_income_created(storage, current_owner, amount, actor_name, target_entry_id, target_cashbox_code)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             if not is_income_operation and category_code == CASH_WITHDRAWAL_CATEGORY_CODE and payment_source == "bank":
                 withdrawal_cashbox_code = form.get("cash_withdrawal_cashbox", "").strip()
@@ -35006,7 +35058,7 @@ self.addEventListener("notificationclick", (event) => {
                     (current_user or {}).get("id"),
                     actor_name,
                 )
-                notify_cash_income_created(storage, current_owner, amount, actor_name)
+                notify_cash_income_created(storage, current_owner, amount, actor_name, source_entry_id, withdrawal_cashbox_code)
                 if commission_created:
                     notify_cash_expense_created(storage, current_owner, commission_amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
@@ -35014,9 +35066,9 @@ self.addEventListener("notificationclick", (event) => {
             storage.set_expense_worker_allocations(current_owner, saved_expense_id, labor_allocations)
             if payment_source == "cash":
                 if is_income_operation:
-                    notify_cash_income_created(storage, current_owner, amount, actor_name)
+                    notify_cash_income_created(storage, current_owner, amount, actor_name, saved_expense_id, selected_cashbox_code)
                 else:
-                    notify_cash_expense_created(storage, current_owner, amount, actor_name)
+                    notify_cash_expense_created(storage, current_owner, amount, actor_name, saved_expense_id, selected_cashbox_code)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
@@ -35173,7 +35225,7 @@ self.addEventListener("notificationclick", (event) => {
                     expense_group_code="transfer",
                 )
                 if not existing_was_visible_cash_operation:
-                    notify_cash_expense_created(storage, current_owner, amount, actor_name)
+                    notify_cash_expense_created(storage, current_owner, amount, actor_name, source_entry.id, selected_cashbox_code)
                 target_comment = " ".join(
                     part
                     for part in (
@@ -35201,7 +35253,7 @@ self.addEventListener("notificationclick", (event) => {
                         expense_group_code="income",
                     )
                 else:
-                    storage.add_expense_entry(
+                    linked_income_id = storage.add_expense_entry(
                         current_owner,
                         expense_date,
                         "admin",
@@ -35217,7 +35269,7 @@ self.addEventListener("notificationclick", (event) => {
                         operation_type="income",
                         expense_group_code="income",
                     )
-                    notify_cash_income_created(storage, current_owner, amount, actor_name)
+                    notify_cash_income_created(storage, current_owner, amount, actor_name, linked_income_id, target_cashbox_code)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
             if not title and category_code != "salary" and not is_labor_operation:
                 raise ValueError("Укажите наименование операции")
@@ -35274,7 +35326,7 @@ self.addEventListener("notificationclick", (event) => {
                     actor_name,
                 )
                 if not existing_was_bank_cash_withdrawal:
-                    notify_cash_income_created(storage, current_owner, amount, actor_name)
+                    notify_cash_income_created(storage, current_owner, amount, actor_name, entry_id, withdrawal_cashbox_code)
                 if commission_created:
                     notify_cash_expense_created(storage, current_owner, commission_amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
@@ -35354,9 +35406,9 @@ self.addEventListener("notificationclick", (event) => {
             storage.set_expense_worker_allocations(current_owner, entry_id, labor_allocations)
             if payment_source == "cash" and category_code != CASH_WITHDRAWAL_CATEGORY_CODE and not existing_was_visible_cash_operation:
                 if is_income_operation:
-                    notify_cash_income_created(storage, current_owner, amount, actor_name)
+                    notify_cash_income_created(storage, current_owner, amount, actor_name, entry_id, selected_cashbox_code)
                 else:
-                    notify_cash_expense_created(storage, current_owner, amount, actor_name)
+                    notify_cash_expense_created(storage, current_owner, amount, actor_name, entry_id, selected_cashbox_code)
             maybe_notify_imported_day_reconciled(storage, current_owner, existing_entry.expense_date, actor_name, entries)
             if expense_date != existing_entry.expense_date:
                 maybe_notify_imported_day_reconciled(storage, current_owner, expense_date, actor_name, entries)
