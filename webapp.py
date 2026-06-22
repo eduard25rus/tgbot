@@ -23544,8 +23544,14 @@ def render_cashoperations_body(
         function syncBottomTabsViewport() {{
           if (!bottomTabs) return;
           const viewport = window.visualViewport;
-          const bottomOffset = viewport
-            ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+          const active = document.activeElement;
+          const isEditable = active && (
+            active.matches("input, textarea, select") ||
+            active.isContentEditable
+          );
+          const viewportDelta = viewport ? window.innerHeight - viewport.height : 0;
+          const bottomOffset = viewport && isEditable && viewportDelta > 80
+            ? Math.max(0, viewportDelta - viewport.offsetTop)
             : 0;
           document.documentElement.style.setProperty("--cash-visual-bottom", Math.round(bottomOffset) + "px");
         }}
@@ -23587,6 +23593,8 @@ def render_cashoperations_body(
         }}
         syncBottomTabsViewport();
         window.addEventListener("resize", syncBottomTabsViewport, {{ passive: true }});
+        document.addEventListener("focusin", syncBottomTabsViewport, {{ passive: true }});
+        document.addEventListener("focusout", () => window.setTimeout(syncBottomTabsViewport, 80), {{ passive: true }});
         if (window.visualViewport) {{
           window.visualViewport.addEventListener("resize", syncBottomTabsViewport, {{ passive: true }});
           window.visualViewport.addEventListener("scroll", syncBottomTabsViewport, {{ passive: true }});
