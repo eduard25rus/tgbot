@@ -20178,8 +20178,7 @@ def render_cashoperations_body(
 
         def v2_letter_row(letter) -> str:
             direction_class = "outgoing" if letter.direction == "outgoing" else "incoming"
-            direction_label = "Исходящее" if direction_class == "outgoing" else "Входящее"
-            direction_arrow = "→" if direction_class == "outgoing" else "←"
+            direction_label = "Исходящее письмо" if direction_class == "outgoing" else "Входящее письмо"
             channel_label = LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта")
             comment_html = f'<span class="cash-v2-letter-row-comment">{escape(letter.comment)}</span>' if letter.comment else ""
             author_label = letter.created_by_name.strip() or "Автор не указан"
@@ -20189,12 +20188,11 @@ def render_cashoperations_body(
                 <span class="cash-v2-letter-row-mark" aria-hidden="true"></span>
                 <span class="cash-v2-letter-row-main">
                   <span class="cash-v2-letter-row-top">
-                    <strong>{escape(direction_arrow)} {escape(direction_label)}</strong>
-                    <em>{escape(format_date(letter.letter_date))}</em>
+                    <strong>{escape(direction_label)}</strong>
                   </span>
                   <span class="cash-v2-letter-row-subject">{escape(letter.subject or "Без темы")}</span>
                   {comment_html}
-                  <span class="cash-v2-letter-row-meta">{escape(channel_label)} · {escape(author_label)}</span>
+                  <span class="cash-v2-letter-row-meta">{escape(channel_label)} · {escape(v2_letter_row_date_time(letter))} · {escape(author_label)}</span>
                 </span>
                 <span class="cash-v2-letter-row-side">
                   {letter_file_link(letter)}
@@ -20215,6 +20213,25 @@ def render_cashoperations_body(
             else:
                 word = "писем"
             return f"{value} {word}"
+
+        def v2_letter_row_date_time(letter) -> str:
+            month_labels = {
+                1: "янв",
+                2: "фев",
+                3: "мар",
+                4: "апр",
+                5: "мая",
+                6: "июн",
+                7: "июл",
+                8: "авг",
+                9: "сен",
+                10: "окт",
+                11: "ноя",
+                12: "дек",
+            }
+            created_at = letter.created_at
+            created_local = created_at.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ) if created_at.tzinfo is None else created_at.astimezone(VLADIVOSTOK_TZ)
+            return f"{letter.letter_date.day} {month_labels[letter.letter_date.month]} {created_local.strftime('%H:%M')}"
 
         def v2_letters_group_html(group_label: str, group_letters: list) -> str:
             latest_letter = group_letters[0]
@@ -22942,24 +22959,24 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letter-groups {{
         display: grid;
-        gap: 12px;
+        gap: 10px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group {{
         border: 1px solid rgba(34, 45, 38, .09);
-        border-radius: 22px;
+        border-radius: 19px;
         background: rgba(255, 255, 255, .90);
         box-shadow:
-          0 18px 42px rgba(18, 24, 21, .07),
+          0 14px 34px rgba(18, 24, 21, .06),
           inset 0 1px 0 rgba(255, 255, 255, .88);
         overflow: hidden;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group summary {{
-        min-height: 94px;
+        min-height: 66px;
         display: grid;
-        grid-template-columns: 64px minmax(0, 1fr) 14px;
-        gap: 16px;
+        grid-template-columns: 42px minmax(0, 1fr) 10px;
+        gap: 10px;
         align-items: center;
-        padding: 18px 20px 17px;
+        padding: 12px 14px;
         list-style: none;
         cursor: pointer;
       }}
@@ -22968,8 +22985,8 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letter-object-icon {{
         position: relative;
-        width: 62px;
-        height: 62px;
+        width: 38px;
+        height: 38px;
         display: grid;
         place-items: center;
         border-radius: 50%;
@@ -22977,18 +22994,18 @@ def render_cashoperations_body(
         color: #126f45;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-object-icon .cash-v2-icon {{
-        width: 32px;
-        height: 32px;
-        stroke-width: 2.35;
+        width: 21px;
+        height: 21px;
+        stroke-width: 2.25;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-object-icon i {{
         content: "";
         position: absolute;
-        right: 4px;
-        bottom: 4px;
-        width: 11px;
-        height: 11px;
-        border: 3px solid rgba(255, 255, 255, .95);
+        right: 0;
+        bottom: 0;
+        width: 8px;
+        height: 8px;
+        border: 2px solid rgba(255, 255, 255, .95);
         border-radius: 50%;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-object-icon.incoming i {{
@@ -23001,23 +23018,23 @@ def render_cashoperations_body(
         min-width: 0;
         display: flex;
         align-items: baseline;
-        gap: 10px;
+        gap: 7px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main strong {{
         color: #111916;
-        font-size: 22px;
+        font-size: 14.5px;
         line-height: 1.12;
-        font-weight: 840;
+        font-weight: 820;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main em {{
         color: #657069;
-        font-size: 18px;
+        font-size: 12px;
         line-height: 1.1;
         font-style: normal;
-        font-weight: 690;
+        font-weight: 660;
         white-space: nowrap;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-state {{
@@ -23053,10 +23070,10 @@ def render_cashoperations_body(
         color: #126f45;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-chevron {{
-        width: 12px;
-        height: 12px;
-        border-right: 3px solid rgba(80, 91, 84, .56);
-        border-bottom: 3px solid rgba(80, 91, 84, .56);
+        width: 8px;
+        height: 8px;
+        border-right: 2px solid rgba(80, 91, 84, .56);
+        border-bottom: 2px solid rgba(80, 91, 84, .56);
         transform: rotate(45deg);
         transition: transform .18s ease;
       }}
@@ -23067,25 +23084,25 @@ def render_cashoperations_body(
         border-top: 1px solid rgba(34, 45, 38, .08);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row {{
-        min-height: 116px;
+        min-height: 74px;
         display: grid;
-        grid-template-columns: 50px minmax(0, 1fr) auto;
-        gap: 15px;
+        grid-template-columns: 34px minmax(0, 1fr) auto;
+        gap: 10px;
         align-items: center;
-        padding: 18px 20px 17px;
+        padding: 12px 14px;
         border-top: 1px solid rgba(34, 45, 38, .07);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row:first-child {{
         border-top: 0;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-mark {{
-        width: 48px;
-        height: 48px;
+        width: 32px;
+        height: 32px;
         display: grid;
         place-items: center;
         border-radius: 50%;
         color: #fff;
-        font-size: 27px;
+        font-size: 18px;
         line-height: 1;
         font-weight: 900;
       }}
@@ -23104,19 +23121,16 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-v2-letter-row-main {{
         min-width: 0;
         display: grid;
-        gap: 5px;
+        gap: 3px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-top {{
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 12px;
+        display: block;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-top strong {{
         color: #111916;
-        font-size: 18px;
+        font-size: 13px;
         line-height: 1.1;
-        font-weight: 840;
+        font-weight: 820;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row.incoming .cash-v2-letter-row-top strong {{
         color: #a23333;
@@ -23127,37 +23141,37 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-v2-letter-row-top em,
       .cash-mobile.is-v2 .cash-v2-letter-row-meta {{
         color: #818a85;
-        font-size: 15px;
+        font-size: 10.5px;
         line-height: 1.15;
         font-style: normal;
-        font-weight: 680;
+        font-weight: 650;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-subject {{
         color: #111916;
-        font-size: 18px;
+        font-size: 12.5px;
         line-height: 1.18;
-        font-weight: 840;
+        font-weight: 700;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-comment {{
         color: #657069;
-        font-size: 17px;
+        font-size: 11.5px;
         line-height: 1.22;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-side {{
         display: inline-flex;
         align-items: center;
-        gap: 13px;
+        gap: 8px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-side .cash-v2-chevron {{
         border-color: rgba(80, 91, 84, .56);
         transform: rotate(-45deg);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-side .cash-mobile-letter-file {{
-        min-height: 44px;
+        min-height: 28px;
         border-radius: 999px;
-        padding: 0 17px;
+        padding: 0 9px;
         background: rgba(255, 255, 255, .82);
-        font-size: 17px;
+        font-size: 11px;
       }}
       .cash-mobile.is-v2 .cash-mobile-letter-focused {{
         background: rgba(226, 242, 232, .72);
