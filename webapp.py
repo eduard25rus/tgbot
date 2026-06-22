@@ -20038,6 +20038,15 @@ def render_cashoperations_body(
             return "letter"
         return "default"
 
+    def notification_event_filter(event_kind: str) -> str:
+        if event_kind.startswith("cash_"):
+            return "cash"
+        if event_kind.startswith("dds_"):
+            return "dds"
+        if event_kind.startswith("work_"):
+            return "work"
+        return "other"
+
     def notification_event_card(event) -> str:
         amount_html = (
             f'<strong class="cash-v2-notification-amount">{escape(format_amount(event.amount))}</strong>'
@@ -20052,7 +20061,7 @@ def render_cashoperations_body(
         )
         meta_parts = "".join(part for part in [actor_html, related_date_html, f"<span>{escape(notification_time_label(event.created_at))}</span>"])
         return f"""
-          <article class="cash-v2-notification-item {notification_event_class(event.event_kind)}">
+          <article class="cash-v2-notification-item {notification_event_class(event.event_kind)}" data-notification-kind="{escape(notification_event_filter(event.event_kind))}">
             <span class="cash-v2-notification-icon" aria-hidden="true">{notification_event_icon(event.event_kind)}</span>
             <span class="cash-v2-notification-main">
               <strong>{escape(event.title)}</strong>
@@ -20064,9 +20073,15 @@ def render_cashoperations_body(
         """
 
     notification_rows = "".join(notification_event_card(event) for event in notification_events) or """
-          <div class="cash-v2-notification-empty">
+          <div class="cash-v2-notification-empty" data-notification-empty-base>
             <strong>Событий пока нет</strong>
             <span>Здесь появятся новые расходы, приходы, письма, отчеты и отметки ДДС.</span>
+          </div>
+    """
+    notification_filter_empty_html = """
+          <div class="cash-v2-notification-empty is-hidden" data-notification-filter-empty>
+            <strong>В этой категории пока пусто</strong>
+            <span>Попробуйте другой фильтр или вернитесь позже.</span>
           </div>
     """
 
@@ -20798,9 +20813,9 @@ def render_cashoperations_body(
             """
         else:
             push_action_html = '<span class="cash-v2-notification-push disabled">Push-сервер не настроен</span>'
-    notification_cash_filter_class = ' class="active"' if "cash_expense" in notification_kinds or "cash_income" in notification_kinds else ""
-    notification_dds_filter_class = ' class="active"' if any(kind.startswith("dds_") for kind in notification_kinds) else ""
-    notification_work_filter_class = ' class="active"' if any(kind.startswith("work_") for kind in notification_kinds) else ""
+    notification_cash_filter_class = ""
+    notification_dds_filter_class = ""
+    notification_work_filter_class = ""
     notification_screen_html = f"""
       <section id="cashScreenNotifications" class="cash-mobile-screen{" active" if initial_screen == "notifications" else ""}">
         <section class="cash-v2-notifications-hero">
@@ -20812,10 +20827,10 @@ def render_cashoperations_body(
           <span class="cash-v2-notifications-badge" aria-label="Событий сегодня">{notification_unread_hint if notification_unread_hint else notification_total}</span>
         </section>
         <section class="cash-v2-notification-filter" aria-label="Фильтры уведомлений">
-          <span class="active">Все</span>
-          <span{notification_cash_filter_class}>Касса</span>
-          <span{notification_dds_filter_class}>ДДС</span>
-          <span{notification_work_filter_class}>Работа</span>
+          <button class="active" type="button" data-notification-filter="all">Все</button>
+          <button{notification_cash_filter_class} type="button" data-notification-filter="cash">Касса</button>
+          <button{notification_dds_filter_class} type="button" data-notification-filter="dds">ДДС</button>
+          <button{notification_work_filter_class} type="button" data-notification-filter="work">Работа</button>
         </section>
         <section class="cash-v2-notification-list">
           <div class="cash-v2-notification-list-head">
@@ -20823,6 +20838,7 @@ def render_cashoperations_body(
             {push_action_html}
           </div>
           {notification_rows}
+          {notification_filter_empty_html}
         </section>
       </section>
     """
@@ -22378,7 +22394,7 @@ def render_cashoperations_body(
         overflow-x: auto;
         padding-bottom: 2px;
       }}
-      .cash-mobile.is-v2 .cash-v2-notification-filter span {{
+      .cash-mobile.is-v2 .cash-v2-notification-filter button {{
         min-height: 34px;
         display: inline-grid;
         place-items: center;
@@ -22388,10 +22404,11 @@ def render_cashoperations_body(
         border-radius: 999px;
         background: rgba(255, 255, 255, .78);
         color: #5f6962;
+        font: inherit;
         font-size: 12px;
         font-weight: 700;
       }}
-      .cash-mobile.is-v2 .cash-v2-notification-filter span.active {{
+      .cash-mobile.is-v2 .cash-v2-notification-filter button.active {{
         background: #18211d;
         color: #fff;
         border-color: #18211d;
@@ -22433,6 +22450,11 @@ def render_cashoperations_body(
         font-size: 12px;
         font-weight: 720;
       }}
+      .cash-mobile.is-v2 .cash-v2-notification-push.active {{
+        background: #126f45;
+        border-color: #126f45;
+        color: #fff;
+      }}
       .cash-mobile.is-v2 .cash-v2-notification-push.disabled {{
         display: inline-grid;
         place-items: center;
@@ -22448,6 +22470,9 @@ def render_cashoperations_body(
         align-items: center;
         padding: 13px 16px;
         border-top: 1px solid rgba(34, 45, 38, .08);
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-item.is-hidden {{
+        display: none;
       }}
       .cash-mobile.is-v2 .cash-v2-notification-list-head + .cash-v2-notification-item {{
         border-top: 0;
@@ -23232,6 +23257,27 @@ def render_cashoperations_body(
         const cashboxSheet = document.querySelector("[data-cashbox-sheet]");
         const cashboxSheetOpeners = document.querySelectorAll("[data-cashbox-sheet-open]");
         const cashboxSheetClosers = document.querySelectorAll("[data-cashbox-sheet-close]");
+        const notificationFilterButtons = document.querySelectorAll("[data-notification-filter]");
+        const notificationItems = document.querySelectorAll("[data-notification-kind]");
+        const notificationFilterEmpty = document.querySelector("[data-notification-filter-empty]");
+        const notificationBaseEmpty = document.querySelector("[data-notification-empty-base]");
+        function applyNotificationFilter(filter) {{
+          let visibleCount = 0;
+          notificationItems.forEach((item) => {{
+            const shouldShow = filter === "all" || item.dataset.notificationKind === filter;
+            item.classList.toggle("is-hidden", !shouldShow);
+            if (shouldShow) visibleCount += 1;
+          }});
+          notificationFilterButtons.forEach((button) => {{
+            button.classList.toggle("active", button.dataset.notificationFilter === filter);
+          }});
+          if (notificationFilterEmpty) {{
+            notificationFilterEmpty.classList.toggle("is-hidden", filter === "all" || visibleCount !== 0);
+          }}
+          if (notificationBaseEmpty) {{
+            notificationBaseEmpty.classList.toggle("is-hidden", filter !== "all");
+          }}
+        }}
         function openCashboxSheet() {{
           if (!cashboxSheet) return;
           cashboxSheet.classList.add("active");
@@ -23256,6 +23302,9 @@ def render_cashoperations_body(
         }});
         cashboxSheetClosers.forEach((button) => {{
           button.addEventListener("click", () => closeCashboxSheet());
+        }});
+        notificationFilterButtons.forEach((button) => {{
+          button.addEventListener("click", () => applyNotificationFilter(button.dataset.notificationFilter || "all"));
         }});
         const expenseForm = document.querySelector(".cash-mobile-form[action='/cashoperations/expense']");
         const incomeForm = document.querySelector(".cash-mobile-form[action='/cashoperations/income']");
@@ -23442,6 +23491,38 @@ def render_cashoperations_body(
             pushEnable.setAttribute("aria-label", message || "Включить уведомления");
           }}
         }}
+        function setPushButtonEnabled(enabled, message) {{
+          if (!pushEnable) return;
+          pushEnable.classList.toggle("active", Boolean(enabled));
+          if (!pushEnable.classList.contains("cash-shell-notify")) {{
+            pushEnable.textContent = enabled ? "Push включен" : "Включить push";
+          }}
+          if (message) setPushStatus(message);
+        }}
+        async function saveCashPushSubscription(subscription) {{
+          const response = await fetch("/cashoperations/push/subscribe", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify(subscription.toJSON())
+          }});
+          if (!response.ok) throw new Error("subscribe_failed");
+        }}
+        async function syncCashPushState() {{
+          if (!pushEnable || !cashPushAllowed || !cashPushPublicKey) return;
+          if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
+          try {{
+            if (Notification.permission === "denied") {{
+              setPushButtonEnabled(false, "Уведомления заблокированы в настройках телефона.");
+              return;
+            }}
+            const registration = await navigator.serviceWorker.getRegistration("/cash-sw.js");
+            if (!registration) return;
+            const existing = await registration.pushManager.getSubscription();
+            if (!existing) return;
+            await saveCashPushSubscription(existing);
+            setPushButtonEnabled(true, "Push включен на этом телефоне.");
+          }} catch (_err) {{}}
+        }}
         async function enableCashPush() {{
           if (!cashPushAllowed || !cashPushPublicKey) {{
             setPushStatus("Пуши для этого пользователя пока не включены в CRM.");
@@ -23460,26 +23541,17 @@ def render_cashoperations_body(
             }}
             const registration = await navigator.serviceWorker.register("/cash-sw.js");
             const existing = await registration.pushManager.getSubscription();
-            if (existing) await existing.unsubscribe();
-            const subscription = await registration.pushManager.subscribe({{
+            const subscription = existing || await registration.pushManager.subscribe({{
               userVisibleOnly: true,
               applicationServerKey: base64UrlToUint8Array(cashPushPublicKey)
             }});
-            const response = await fetch("/cashoperations/push/subscribe", {{
-              method: "POST",
-              headers: {{ "Content-Type": "application/json" }},
-              body: JSON.stringify(subscription.toJSON())
-            }});
-            if (!response.ok) throw new Error("subscribe_failed");
-            setPushStatus("Уведомления включены на этом телефоне.");
-            if (pushEnable) {{
-              pushEnable.classList.add("active");
-              if (!pushEnable.classList.contains("cash-shell-notify")) pushEnable.textContent = "Уведомления включены";
-            }}
+            await saveCashPushSubscription(subscription);
+            setPushButtonEnabled(true, "Push включен на этом телефоне.");
           }} catch (_err) {{
             setPushStatus("Не удалось включить уведомления. Проверьте, что касса открыта с иконки на экране Домой.");
           }}
         }}
+        syncCashPushState();
         function activeScreenName() {{
           const active = Object.entries(screens).find(([_key, el]) => el && el.classList.contains("active"));
           return active ? active[0] : "home";
