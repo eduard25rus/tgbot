@@ -19756,6 +19756,7 @@ def render_cashoperations_body(
     show_work_stats: bool = False,
     selected_history_date: date | None = None,
     selected_letter_id: int = 0,
+    selected_notification_date: date | None = None,
 ) -> str:
     cashboxes = storage.list_cashbox_directory(owner_chat_id)
     cashbox_labels = {item["code"]: item["label"] for item in cashboxes}
@@ -19788,6 +19789,7 @@ def render_cashoperations_body(
         selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (allowed_cashboxes[0]["code"] if allowed_cashboxes else "")
     entries = storage.list_expense_entries(owner_chat_id)
     today = datetime.now(VLADIVOSTOK_TZ).date()
+    notification_date = selected_notification_date or today
     software_actor_label = default_software_actor_name(storage, owner_chat_id, current_user)
     ensure_software_commit_event(storage, owner_chat_id, software_actor_label)
     maybe_send_software_digest(storage, owner_chat_id)
@@ -20241,25 +20243,25 @@ def render_cashoperations_body(
         event_cashbox = notification_cashbox_code(event)
         return bool(event_cashbox and event_cashbox in allowed_codes)
 
-    notification_events = [
+    notification_all_events = [
         event
         for event in storage.list_mobile_notification_events(owner_chat_id, 500)
         if notification_event_visible(event)
-    ][:80]
-    notification_total = len(notification_events)
+    ]
 
     def notification_local_time(value: datetime) -> datetime:
         return value.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ) if value.tzinfo is None else value.astimezone(VLADIVOSTOK_TZ)
 
-    notification_today_count = sum(1 for event in notification_events if notification_local_time(event.created_at).date() == today)
-    notification_unread_hint = min(notification_today_count, 9)
-    notification_kinds = {event.event_kind for event in notification_events}
-    notification_summary_parts = [
-        f"{notification_today_count} сегодня",
-        f"{sum(1 for event in notification_events if event.event_kind.startswith('cash_'))} касса",
-        f"{sum(1 for event in notification_events if event.event_kind.startswith('dds_'))} ДДС",
-        f"{sum(1 for event in notification_events if event.event_kind.startswith('software_'))} ПО",
+    notification_day_events = [
+        event for event in notification_all_events
+        if notification_local_time(event.created_at).date() == notification_date
     ]
+    notification_events = notification_day_events[:80]
+    notification_total = len(notification_day_events)
+    notification_kinds = {event.event_kind for event in notification_day_events}
+    notification_cash_count = sum(1 for event in notification_day_events if event.event_kind.startswith("cash_"))
+    notification_dds_count = sum(1 for event in notification_day_events if event.event_kind.startswith("dds_"))
+    notification_software_count = sum(1 for event in notification_day_events if event.event_kind.startswith("software_"))
 
     def notification_time_label(value: datetime) -> str:
         localized = notification_local_time(value)
@@ -20432,6 +20434,11 @@ def render_cashoperations_body(
         return (
             f"/cashoperations?screen=work&cashbox={quote_plus(selected_cashbox)}"
             f"&work_month={month_value.strftime('%Y-%m')}&work_date={day_value.isoformat()}"
+        )
+    def notification_day_url(day_value: date) -> str:
+        return (
+            f"/cashoperations?screen=notifications&cashbox={quote_plus(selected_cashbox)}"
+            f"&notification_date={day_value.isoformat()}"
         )
     work_month_people = {
         int(worker["employee_id"])
@@ -20628,6 +20635,38 @@ def render_cashoperations_body(
             <span>{v2_icon("users")}<b>{work_total_people} чел.</b></span>
             <i></i>
             <span>{v2_icon("clock")}<b>{escape(work_units_label(work_total_units))} смен</b></span>
+          </div>
+        </section>
+    """
+    def v2_notification_day_cell(day_value: date) -> str:
+        active = day_value == notification_date
+        return f"""
+            <a class="cash-work-v2-day{" active" if active else ""}" href="{escape(notification_day_url(day_value), quote=True)}" aria-current="{"date" if active else "false"}">
+              <span>{escape(weekday_labels[day_value.weekday()])}</span>
+              <strong>{day_value.day}</strong>
+              <em>{escape(work_month_short_labels[day_value.month])}</em>
+            </a>
+        """
+    v2_notification_calendar_days = "".join(
+        v2_notification_day_cell(notification_date + timedelta(days=offset))
+        for offset in range(-2, 3)
+    )
+    v2_notification_calendar_html = f"""
+        <section class="cash-work-v2-calendar cash-v2-events-calendar">
+          <div class="cash-work-v2-title-pill cash-v2-events-title-pill">События</div>
+          <div class="cash-work-v2-days">
+            <a class="cash-work-v2-arrow" href="{escape(notification_day_url(notification_date - timedelta(days=1)), quote=True)}" aria-label="Предыдущий день">{v2_icon("down")}</a>
+            {v2_notification_calendar_days}
+            <a class="cash-work-v2-arrow next" href="{escape(notification_day_url(notification_date + timedelta(days=1)), quote=True)}" aria-label="Следующий день">{v2_icon("down")}</a>
+          </div>
+          <div class="cash-work-v2-day-summary cash-v2-events-summary" aria-label="Сводка событий за день">
+            <span>{v2_icon("calendar")}<b>{notification_total} за день</b></span>
+            <i></i>
+            <span>{v2_icon("wallet")}<b>{notification_cash_count} касса</b></span>
+            <i></i>
+            <span>{v2_icon("chart")}<b>{notification_dds_count} ДДС</b></span>
+            <i></i>
+            <span>{v2_icon("code")}<b>{notification_software_count} ПО</b></span>
           </div>
         </section>
     """
@@ -21157,14 +21196,7 @@ def render_cashoperations_body(
     notification_work_filter_class = ""
     notification_screen_html = f"""
       <section id="cashScreenNotifications" class="cash-mobile-screen{" active" if initial_screen == "notifications" else ""}">
-        <section class="cash-v2-notifications-hero">
-          <div>
-            <span class="cash-v2-notifications-kicker">Центр событий</span>
-            <h2>Уведомления</h2>
-            <p>{escape(" · ".join(notification_summary_parts))}</p>
-          </div>
-          <span class="cash-v2-notifications-badge" aria-label="Событий сегодня">{notification_unread_hint if notification_unread_hint else notification_total}</span>
-        </section>
+        {v2_notification_calendar_html}
         <section class="cash-v2-notification-filter" aria-label="Фильтры уведомлений">
           <button class="active" type="button" data-notification-filter="all">Все</button>
           <button{notification_cash_filter_class} type="button" data-notification-filter="cash">Касса</button>
@@ -22637,13 +22669,21 @@ def render_cashoperations_body(
         box-shadow: inset 0 0 0 1px rgba(18, 111, 69, .20);
       }}
       .cash-mobile.is-v2 .cash-mobile-op-title {{
-        font-size: 13px;
+        font-size: 12px;
+        line-height: 1.25;
       }}
       .cash-mobile.is-v2 .cash-mobile-op-title strong {{
         font-size: 14px;
+        line-height: 1.18;
+      }}
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op-date,
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op-comment,
+      .cash-mobile.is-v2 .cash-mobile-ledger-panel .cash-mobile-op-meta {{
+        font-size: 12px;
+        line-height: 1.25;
       }}
       .cash-mobile.is-v2 .cash-mobile-op-side b {{
-        font-size: 16px;
+        font-size: 13px;
         font-weight: 850;
       }}
       .cash-mobile.is-v2 .cash-mobile-op b.income {{
@@ -22668,70 +22708,6 @@ def render_cashoperations_body(
         width: 1px;
         height: 1px;
         overflow: hidden;
-      }}
-      .cash-mobile.is-v2 .cash-v2-notifications-hero {{
-        margin-top: 12px;
-        min-height: 128px;
-        display: flex;
-        align-items: flex-end;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 20px 18px 18px;
-        border: 1px solid rgba(34, 45, 38, .10);
-        border-radius: 22px;
-        background:
-          linear-gradient(145deg, rgba(27, 33, 31, .98), rgba(41, 49, 45, .98)),
-          #1b211f;
-        color: #fff;
-        box-shadow: 0 22px 52px rgba(18, 24, 21, .22);
-        overflow: hidden;
-        position: relative;
-      }}
-      .cash-mobile.is-v2 .cash-v2-notifications-hero::before {{
-        content: "";
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-        background:
-          linear-gradient(90deg, rgba(199, 151, 45, .24), transparent 42%),
-          linear-gradient(180deg, rgba(255, 255, 255, .13), transparent 54%);
-      }}
-      .cash-mobile.is-v2 .cash-v2-notifications-hero > * {{
-        position: relative;
-      }}
-      .cash-mobile.is-v2 .cash-v2-notifications-kicker {{
-        display: block;
-        color: rgba(255, 255, 255, .62);
-        font-size: 12px;
-        line-height: 1.1;
-        font-weight: 700;
-      }}
-      .cash-mobile.is-v2 .cash-v2-notifications-hero h2 {{
-        margin: 7px 0 7px;
-        color: #fff;
-        font-size: 28px;
-        line-height: 1.03;
-        font-weight: 840;
-      }}
-      .cash-mobile.is-v2 .cash-v2-notifications-hero p {{
-        margin: 0;
-        color: rgba(255, 255, 255, .70);
-        font-size: 12px;
-        line-height: 1.3;
-        font-weight: 620;
-      }}
-      .cash-mobile.is-v2 .cash-v2-notifications-badge {{
-        width: 52px;
-        height: 52px;
-        flex: 0 0 auto;
-        display: grid;
-        place-items: center;
-        border-radius: 50%;
-        background: rgba(255, 255, 255, .12);
-        border: 1px solid rgba(255, 255, 255, .18);
-        color: #fff;
-        font-size: 20px;
-        font-weight: 850;
       }}
       .cash-mobile.is-v2 .cash-v2-notification-filter {{
         margin-top: 10px;
@@ -23059,6 +23035,21 @@ def render_cashoperations_body(
         border-radius: 50%;
         background: rgba(91, 102, 96, .38);
       }}
+      .cash-mobile.is-v2 .cash-v2-events-calendar {{
+        margin-top: 22px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-events-summary {{
+        flex-wrap: wrap;
+        gap: 7px 9px;
+        white-space: normal;
+      }}
+      .cash-mobile.is-v2 .cash-v2-events-summary span {{
+        gap: 4px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-events-summary .cash-v2-icon {{
+        width: 14px;
+        height: 14px;
+      }}
       .cash-mobile.is-v2 .cash-work-v2-actions {{
         margin-top: 10px;
       }}
@@ -23069,11 +23060,17 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-work-v2-actions .cash-work-primary-actions.cash-mobile-command-dock .cash-mobile-action {{
         min-height: 58px;
         grid-template-columns: auto auto;
+        align-items: center;
         align-content: center;
         justify-content: center;
         column-gap: 9px;
         font-size: 12px;
-        line-height: 1.08;
+        line-height: 1;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-actions .cash-work-primary-actions.cash-mobile-command-dock .cash-mobile-action > span:not(.cash-v2-action-mark) {{
+        display: inline-flex;
+        align-items: center;
+        min-height: 33px;
       }}
       .cash-mobile.is-v2 .cash-work-v2-actions .cash-v2-action-mark {{
         width: 33px;
@@ -28967,6 +28964,7 @@ self.addEventListener("notificationclick", (event) => {
         work_date_raw = query.get("work_date", [""])[0].strip()
         work_month_raw = query.get("work_month", [""])[0].strip()
         history_date_raw = query.get("history_date", [""])[0].strip()
+        notification_date_raw = query.get("notification_date", [""])[0].strip()
         selected_work_month = parse_month_key(work_month_raw)
         try:
             selected_work_report_date = parse_date(work_date_raw) if work_date_raw else None
@@ -28976,6 +28974,10 @@ self.addEventListener("notificationclick", (event) => {
             selected_history_date = parse_date(history_date_raw) if history_date_raw else None
         except ValueError:
             selected_history_date = None
+        try:
+            selected_notification_date = parse_date(notification_date_raw) if notification_date_raw else None
+        except ValueError:
+            selected_notification_date = None
         if selected_work_report_date is None and selected_work_month is not None:
             selected_work_report_date = selected_work_month
         show_work_stats = query.get("work_stats", ["0"])[0] == "1"
@@ -28995,6 +28997,7 @@ self.addEventListener("notificationclick", (event) => {
             show_work_stats,
             selected_history_date,
             selected_letter_id,
+            selected_notification_date,
         )
         cash_access = storage.get_mobile_cash_access_for_user(int(current_user["id"])) if current_user else None
         design_version = cash_access.get("design_version", "classic") if cash_access else "classic"
