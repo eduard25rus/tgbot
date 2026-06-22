@@ -20100,7 +20100,8 @@ def render_cashoperations_body(
     letters_nav_html = ""
     if can_view_letters:
         letter_object_filter = selected_letter_object_filter.strip()
-        legal_letters = storage.list_legal_letters(owner_chat_id, object_filter=letter_object_filter)[:50]
+        effective_letter_object_filter = "" if cash_design_version == "v2" else letter_object_filter
+        legal_letters = storage.list_legal_letters(owner_chat_id, object_filter=effective_letter_object_filter)[:50]
         if selected_letter_id:
             selected_letter = storage.get_legal_letter(owner_chat_id, selected_letter_id)
             if selected_letter is not None and all(letter.id != selected_letter.id for letter in legal_letters):
@@ -20115,7 +20116,7 @@ def render_cashoperations_body(
         )
         letter_filter_reset = (
             f'<a class="cash-mobile-filter-reset" href="/cashoperations?screen=letters&cashbox={quote_plus(selected_cashbox)}">Все</a>'
-            if letter_object_filter
+            if effective_letter_object_filter
             else ""
         )
 
@@ -20221,6 +20222,20 @@ def render_cashoperations_body(
             letter_groups: dict[str, list] = {}
             for letter in legal_letters:
                 letter_groups.setdefault(letter.object_label or "Без объекта", []).append(letter)
+            letters_total = len(legal_letters)
+            letters_incoming_total = sum(1 for letter in legal_letters if letter.direction != "outgoing")
+            letters_outgoing_total = letters_total - letters_incoming_total
+            letters_hero_date = legal_letters[0].letter_date if legal_letters else today
+            letters_summary_html = f"""
+            <section class="cash-v2-letters-hero">
+              <span class="cash-v2-letters-hero-icon" aria-hidden="true">{v2_icon("mail")}</span>
+              <span class="cash-v2-letters-hero-main">
+                <strong>Письма</strong>
+                <em>{letters_total} всего · <b class="incoming">{letters_incoming_total} входящих</b> · <b class="outgoing">{letters_outgoing_total} исходящих</b></em>
+              </span>
+              <span class="cash-v2-letters-hero-date">{v2_icon("calendar")}{escape(format_date(letters_hero_date))}</span>
+            </section>
+            """
             letters_rows = (
                 '<div class="cash-v2-letter-groups">'
                 + "".join(v2_letters_group_html(group_label, group_letters) for group_label, group_letters in letter_groups.items())
@@ -20229,11 +20244,12 @@ def render_cashoperations_body(
                 else '<div class="cash-v2-notification-empty"><strong>Писем пока нет</strong><span>Выберите другой объект или вернитесь позже.</span></div>'
             )
         else:
+            letters_summary_html = '<div class="cash-mobile-section-head"><h2>Письма</h2></div>'
             letters_rows = "".join(letter_card(letter) for letter in legal_letters) or '<div class="cash-mobile-empty">Писем пока нет.</div>'
-        letters_screen_html = f"""
-        <section id="cashScreenLetters" class="cash-mobile-screen{" active" if initial_screen == "letters" else ""}">
-          <section class="cash-mobile-panel{" cash-mobile-ledger-panel cash-v2-letters-panel" if cash_design_version == "v2" else ""}">
-            <div class="cash-mobile-section-head"><h2>Письма</h2></div>
+        letters_filter_html = (
+            ""
+            if cash_design_version == "v2"
+            else f"""
             <form class="cash-mobile-letter-filter" method="get" action="/cashoperations">
               <input type="hidden" name="screen" value="letters">
               <input type="hidden" name="cashbox" value="{escape(selected_cashbox)}">
@@ -20246,6 +20262,13 @@ def render_cashoperations_body(
               <button type="submit">Показать</button>
               {letter_filter_reset}
             </form>
+            """
+        )
+        letters_screen_html = f"""
+        <section id="cashScreenLetters" class="cash-mobile-screen{" active" if initial_screen == "letters" else ""}">
+          <section class="cash-mobile-panel{" cash-mobile-ledger-panel cash-v2-letters-panel" if cash_design_version == "v2" else ""}">
+            {letters_summary_html}
+            {letters_filter_html}
             {letters_rows}
           </section>
         </section>
@@ -22740,7 +22763,81 @@ def render_cashoperations_body(
         align-self: center;
       }}
       .cash-mobile.is-v2 .cash-v2-letters-panel {{
-        padding: 17px 14px 14px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        overflow: visible;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero {{
+        min-height: 104px;
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr) auto;
+        gap: 13px;
+        align-items: center;
+        margin: 12px 0 12px;
+        padding: 18px 16px;
+        border-radius: 22px;
+        background:
+          linear-gradient(145deg, rgba(27, 33, 31, .98), rgba(18, 29, 24, .99)),
+          #16231d;
+        color: #fff;
+        box-shadow: 0 22px 52px rgba(18, 24, 21, .18);
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-icon {{
+        width: 42px;
+        height: 42px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, .06);
+        color: #fff;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .20);
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-icon .cash-v2-icon {{
+        width: 21px;
+        height: 21px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-main {{
+        min-width: 0;
+        display: grid;
+        gap: 10px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-main strong {{
+        color: #fff;
+        font-size: 24px;
+        line-height: 1;
+        font-weight: 840;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-main em {{
+        color: rgba(255, 255, 255, .68);
+        font-size: 12px;
+        line-height: 1.1;
+        font-style: normal;
+        font-weight: 680;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-main b {{
+        font-weight: 820;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-main b.incoming {{
+        color: #ff8c93;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-main b.outgoing {{
+        color: #66d294;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-date {{
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: rgba(255, 255, 255, .86);
+        font-size: 11.5px;
+        line-height: 1;
+        font-weight: 760;
+        white-space: nowrap;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-date .cash-v2-icon {{
+        width: 15px;
+        height: 15px;
       }}
       .cash-mobile.is-v2 .cash-v2-letters-panel .cash-mobile-letter-filter {{
         grid-template-columns: minmax(0, 1fr) auto;
@@ -22769,21 +22866,24 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letter-groups {{
         display: grid;
-        gap: 8px;
+        gap: 10px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group {{
         border: 1px solid rgba(34, 45, 38, .09);
-        border-radius: 17px;
-        background: rgba(255, 255, 255, .74);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, .86);
+        box-shadow:
+          0 18px 42px rgba(18, 24, 21, .07),
+          inset 0 1px 0 rgba(255, 255, 255, .88);
         overflow: hidden;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group summary {{
-        min-height: 68px;
+        min-height: 76px;
         display: grid;
-        grid-template-columns: 12px minmax(0, 1fr) auto 10px;
-        gap: 10px;
+        grid-template-columns: 42px minmax(0, 1fr) auto 10px;
+        gap: 11px;
         align-items: center;
-        padding: 12px 12px 12px 13px;
+        padding: 14px 14px 14px 14px;
         list-style: none;
         cursor: pointer;
       }}
@@ -22791,15 +22891,24 @@ def render_cashoperations_body(
         display: none;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-status-dot {{
-        width: 9px;
-        height: 9px;
+        position: relative;
+        width: 36px;
+        height: 36px;
+        display: grid;
+        place-items: center;
         border-radius: 50%;
-        box-shadow: 0 0 0 4px rgba(34, 45, 38, .05);
+        background: rgba(226, 242, 232, .72);
       }}
-      .cash-mobile.is-v2 .cash-v2-letter-status-dot.incoming {{
+      .cash-mobile.is-v2 .cash-v2-letter-status-dot::after {{
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-status-dot.incoming::after {{
         background: #d21520;
       }}
-      .cash-mobile.is-v2 .cash-v2-letter-status-dot.outgoing {{
+      .cash-mobile.is-v2 .cash-v2-letter-status-dot.outgoing::after {{
         background: #126f45;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main {{
@@ -22809,7 +22918,7 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main strong {{
         color: #111916;
-        font-size: 14px;
+        font-size: 15px;
         line-height: 1.12;
         font-weight: 820;
         overflow: hidden;
@@ -22818,7 +22927,7 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main em {{
         color: #657069;
-        font-size: 11px;
+        font-size: 11.5px;
         line-height: 1.1;
         font-style: normal;
         font-weight: 660;
@@ -22836,7 +22945,7 @@ def render_cashoperations_body(
         place-items: center;
         border-radius: 999px;
         padding: 0 9px;
-        font-size: 10.5px;
+        font-size: 11px;
         line-height: 1;
         font-weight: 800;
       }}
@@ -22870,27 +22979,39 @@ def render_cashoperations_body(
         border-top: 1px solid rgba(34, 45, 38, .08);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row {{
-        min-height: 66px;
+        min-height: 74px;
         display: grid;
-        grid-template-columns: 8px minmax(0, 1fr) auto;
-        gap: 10px;
+        grid-template-columns: 34px minmax(0, 1fr) auto;
+        gap: 11px;
         align-items: center;
-        padding: 11px 12px 11px 16px;
+        padding: 12px 14px;
         border-top: 1px solid rgba(34, 45, 38, .07);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row:first-child {{
         border-top: 0;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-mark {{
-        width: 6px;
-        height: 34px;
-        border-radius: 999px;
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        color: #fff;
+        font-size: 18px;
+        line-height: 1;
+        font-weight: 900;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row.incoming .cash-v2-letter-row-mark {{
         background: #d21520;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row.outgoing .cash-v2-letter-row-mark {{
         background: #126f45;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row.incoming .cash-v2-letter-row-mark::before {{
+        content: "↓";
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row.outgoing .cash-v2-letter-row-mark::before {{
+        content: "↑";
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-main {{
         min-width: 0;
