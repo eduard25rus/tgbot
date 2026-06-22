@@ -20280,16 +20280,33 @@ def render_cashoperations_body(
             return f"/cashoperations?screen=letters&letter_id={letter_id}#letter-{letter_id}"
         return ""
 
-    def notification_event_text(event) -> tuple[str, str, str]:
+    notification_letter_cache: dict[int, object | None] = {}
+
+    def notification_event_letter(event):
+        letter_id = int(event.related_entry_id or 0)
+        if event.event_kind != "legal_letter" or letter_id <= 0:
+            return None
+        if letter_id not in notification_letter_cache:
+            notification_letter_cache[letter_id] = storage.get_legal_letter(owner_chat_id, letter_id)
+        return notification_letter_cache[letter_id]
+
+    def notification_event_text(event) -> tuple[str, str, str, date | None]:
         title = event.title
         body = event.body
         actor_name = event.actor_name
+        meta_date = event.related_date
         if event.event_kind == "legal_letter":
-            is_incoming = title.startswith("Вход")
+            letter = notification_event_letter(event)
+            direction = getattr(letter, "direction", "") or ("incoming" if title.startswith("Вход") else "outgoing")
+            is_incoming = direction == "incoming"
             title = "Входящее письмо" if is_incoming else "Исходящее письмо"
-            object_match = re.search(r"/\s*на объект:\s*(.+)$", body)
-            if object_match:
-                object_label = object_match.group(1).strip()
+            actor_name = (getattr(letter, "created_by_name", "") or actor_name).strip()
+            meta_date = meta_date or notification_local_time(event.created_at).date()
+            object_label = (getattr(letter, "object_label", "") or "").strip()
+            if not object_label:
+                object_match = re.search(r"/\s*на объект:\s*(.+)$", body)
+                object_label = object_match.group(1).strip() if object_match else ""
+            if object_label:
                 body = f"от {object_label}" if is_incoming else f"на {object_label}"
             elif body.startswith("Пользователь ") and " добавил " in body:
                 body = "отправитель не указан" if is_incoming else "получатель не указан"
@@ -20303,10 +20320,10 @@ def render_cashoperations_body(
                 body = "Обновление ПО"
         elif event.event_kind == "software_digest" and not actor_name:
             actor_name = software_actor_label
-        return title, body, actor_name
+        return title, body, actor_name, meta_date
 
     def notification_event_card(event) -> str:
-        title, body, actor_name = notification_event_text(event)
+        title, body, actor_name, meta_date = notification_event_text(event)
         amount_html = (
             f'<strong class="cash-v2-notification-amount">{escape(format_amount(event.amount))}</strong>'
             if abs(float(event.amount or 0.0)) > 0.009
@@ -20314,8 +20331,8 @@ def render_cashoperations_body(
         )
         actor_html = f'<span>{escape(actor_name)}</span>' if actor_name else ""
         related_date_html = (
-            f'<span>{escape(format_date(event.related_date))}</span>'
-            if event.related_date is not None
+            f'<span>{escape(format_date(meta_date))}</span>'
+            if meta_date is not None
             else ""
         )
         meta_parts = "".join(part for part in [actor_html, related_date_html, f"<span>{escape(notification_time_label(event.created_at))}</span>"])
