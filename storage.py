@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -477,6 +478,21 @@ class ExpenseEntry:
 
 
 @dataclass
+class MobileNotificationEvent:
+    id: int
+    owner_chat_id: int
+    event_kind: str
+    event_key: str
+    title: str
+    body: str
+    actor_name: str
+    amount: float
+    related_date: Optional[date]
+    related_entry_id: int
+    created_at: datetime
+
+
+@dataclass
 class BankStatementMailImport:
     id: int
     owner_chat_id: int
@@ -693,6 +709,21 @@ class Storage:
                     target_date TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     UNIQUE(chat_id, entity_type, entity_id, days_before, target_date)
+                );
+
+                CREATE TABLE IF NOT EXISTS mobile_notification_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner_chat_id INTEGER NOT NULL,
+                    event_kind TEXT NOT NULL DEFAULT '',
+                    event_key TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    body TEXT NOT NULL DEFAULT '',
+                    actor_name TEXT NOT NULL DEFAULT '',
+                    amount REAL NOT NULL DEFAULT 0,
+                    related_date TEXT,
+                    related_entry_id INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(owner_chat_id, event_key)
                 );
 
                 CREATE TABLE IF NOT EXISTS access_grants (
@@ -2704,6 +2735,61 @@ class Storage:
                 (owner_chat_id, user_id),
             ).fetchone()
         return int(row["count"] or 0) if row else 0
+
+    def add_mobile_notification_event(
+        self,
+        owner_chat_id: int,
+        event_kind: str,
+        event_key: str,
+        title: str,
+        body: str,
+        actor_name: str = "",
+        amount: float = 0.0,
+        related_date: date | None = None,
+        related_entry_id: int = 0,
+        created_at: datetime | None = None,
+    ) -> bool:
+        cleaned_key = event_key.strip()
+        if not cleaned_key:
+            cleaned_key = f"{event_kind.strip()}:{datetime.utcnow().isoformat()}:{secrets.token_hex(4)}"
+        event_created_at = created_at or datetime.utcnow()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO mobile_notification_events (
+                    owner_chat_id, event_kind, event_key, title, body, actor_name,
+                    amount, related_date, related_entry_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_chat_id,
+                    event_kind.strip(),
+                    cleaned_key,
+                    title.strip(),
+                    body.strip(),
+                    actor_name.strip(),
+                    float(amount or 0.0),
+                    related_date.strftime(DATE_FMT) if related_date is not None else None,
+                    int(related_entry_id or 0),
+                    event_created_at.isoformat(),
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def list_mobile_notification_events(self, owner_chat_id: int, limit: int = 80) -> list[MobileNotificationEvent]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, owner_chat_id, event_kind, event_key, title, body, actor_name,
+                       amount, related_date, related_entry_id, created_at
+                FROM mobile_notification_events
+                WHERE owner_chat_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (owner_chat_id, max(1, int(limit or 80))),
+            ).fetchall()
+        return [self._mobile_notification_event_from_row(row) for row in rows]
 
     def list_web_users(self, owner_chat_id: int) -> list[dict]:
         with self.connection() as conn:
@@ -9384,6 +9470,22 @@ class Storage:
             import_counterparty_inn=row["import_counterparty_inn"] if "import_counterparty_inn" in row.keys() else "",
             import_counterparty_account=row["import_counterparty_account"] if "import_counterparty_account" in row.keys() else "",
             raw_import_text=row["raw_import_text"] if "raw_import_text" in row.keys() else "",
+        )
+
+    @staticmethod
+    def _mobile_notification_event_from_row(row: sqlite3.Row) -> MobileNotificationEvent:
+        return MobileNotificationEvent(
+            id=int(row["id"]),
+            owner_chat_id=int(row["owner_chat_id"]),
+            event_kind=row["event_kind"] or "",
+            event_key=row["event_key"] or "",
+            title=row["title"] or "",
+            body=row["body"] or "",
+            actor_name=row["actor_name"] or "",
+            amount=float(row["amount"]) if row["amount"] is not None else 0.0,
+            related_date=date.fromisoformat(row["related_date"]) if row["related_date"] else None,
+            related_entry_id=int(row["related_entry_id"] or 0),
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
     @staticmethod

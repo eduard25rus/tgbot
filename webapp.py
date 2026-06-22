@@ -1343,6 +1343,36 @@ def send_cash_push(
     return sent_count, failed_count
 
 
+def record_mobile_notification_event(
+    storage: Storage,
+    owner_chat_id: int,
+    event_kind: str,
+    title: str,
+    body: str,
+    actor_name: str = "",
+    amount: float = 0.0,
+    related_date: date | None = None,
+    related_entry_id: int = 0,
+    event_key: str = "",
+) -> bool:
+    if not event_key:
+        event_key = f"{event_kind}:{datetime.utcnow().isoformat()}:{secrets.token_hex(4)}"
+    try:
+        return storage.add_mobile_notification_event(
+            owner_chat_id,
+            event_kind,
+            event_key,
+            title,
+            body,
+            actor_name,
+            amount,
+            related_date,
+            related_entry_id,
+        )
+    except Exception:
+        return False
+
+
 def notify_cash_operation_created(
     storage: Storage,
     owner_chat_id: int,
@@ -1355,6 +1385,15 @@ def notify_cash_operation_created(
     safe_title = f"Добавлен новый {operation_label}"
     amount_title = f"{operation_label.capitalize()} — {format_amount(amount)}"
     actor_label = actor_name.strip() or "Пользователь"
+    record_mobile_notification_event(
+        storage,
+        owner_chat_id,
+        f"cash_{tag.rsplit('-', 1)[0].split('-', 1)[-1]}",
+        amount_title,
+        f"{actor_label} добавил {operation_label}",
+        actor_label,
+        amount,
+    )
     return send_cash_push(
         storage,
         owner_chat_id,
@@ -1405,6 +1444,14 @@ def notify_cash_income_created(storage: Storage, owner_chat_id: int, amount: flo
 def notify_legal_letter_created(storage: Storage, owner_chat_id: int, direction: str, subject: str) -> tuple[int, int]:
     direction_label = "Входящее письмо" if direction == "incoming" else "Исходящее письмо"
     body = subject.strip() or "Без темы"
+    record_mobile_notification_event(
+        storage,
+        owner_chat_id,
+        "legal_letter",
+        direction_label,
+        body,
+        "",
+    )
     safe_payload = {
         "title": direction_label,
         "body": body,
@@ -1429,6 +1476,16 @@ def notify_legal_letter_created(storage: Storage, owner_chat_id: int, direction:
 def notify_work_report_created(storage: Storage, owner_chat_id: int, report_id: int, report_date: date, project_label: str) -> tuple[int, int]:
     date_label = f"{report_date.day} {RU_MONTH_GENITIVE_NAMES[report_date.month]}"
     project_text = project_label.strip() or "объект не указан"
+    record_mobile_notification_event(
+        storage,
+        owner_chat_id,
+        "work_report",
+        f"Закрыта смена, {date_label}",
+        f"Объект: {project_text}",
+        "",
+        related_date=report_date,
+        related_entry_id=report_id,
+    )
     payload = {
         "title": f"Закрыта смена, {date_label}",
         "body": f"Объект: {project_text}",
@@ -1445,6 +1502,16 @@ def notify_work_report_created(storage: Storage, owner_chat_id: int, report_id: 
 def notify_work_description_created(storage: Storage, owner_chat_id: int, report_id: int, report_date: date, project_label: str) -> tuple[int, int]:
     date_label = f"{report_date.day} {RU_MONTH_GENITIVE_NAMES[report_date.month]}"
     project_text = project_label.strip() or "объект не указан"
+    record_mobile_notification_event(
+        storage,
+        owner_chat_id,
+        "work_description",
+        f"Добавлен отчет о работе, {date_label}",
+        f"Объект: {project_text}",
+        "",
+        related_date=report_date,
+        related_entry_id=report_id,
+    )
     payload = {
         "title": f"Добавлен отчет о работе, {date_label}",
         "body": f"Объект: {project_text}",
@@ -1456,6 +1523,75 @@ def notify_work_description_created(storage: Storage, owner_chat_id: int, report
         },
     }
     return send_cash_push(storage, owner_chat_id, payload, payload, push_group="work")
+
+
+def imported_bank_entry_needs_attention(entry) -> bool:
+    if not getattr(entry, "import_source", ""):
+        return False
+    if (entry.payment_source or "bank") != "bank" or entry.status == "closed":
+        return False
+    if entry.needs_adjustment:
+        return True
+    if (entry.operation_type or "expense") == "income" and (entry.category_code or "") == "income_unallocated":
+        return True
+    return (
+        (entry.operation_type or "expense") == "expense"
+        and (entry.category_code or "") == "salary"
+        and not entry.payroll_employee_id
+    )
+
+
+def maybe_notify_imported_day_reconciled(
+    storage: Storage,
+    owner_chat_id: int,
+    target_date: date | None,
+    actor_name: str,
+    before_entries: list | None = None,
+) -> tuple[int, int]:
+    if target_date is None:
+        return 0, 0
+    before_entries = before_entries or []
+    before_had_unallocated = any(
+        entry.expense_date == target_date and imported_bank_entry_needs_attention(entry)
+        for entry in before_entries
+    )
+    if not before_had_unallocated:
+        return 0, 0
+    after_entries = [
+        entry
+        for entry in storage.list_expense_entries(owner_chat_id)
+        if entry.expense_date == target_date
+        and getattr(entry, "import_source", "")
+        and (entry.payment_source or "bank") == "bank"
+    ]
+    if not after_entries or any(imported_bank_entry_needs_attention(entry) for entry in after_entries):
+        return 0, 0
+    date_label = f"{target_date.day} {RU_MONTH_GENITIVE_NAMES[target_date.month]}"
+    title = f"Все расходы за {date_label} разнесены"
+    actor_label = actor_name.strip() or "Пользователь"
+    created = record_mobile_notification_event(
+        storage,
+        owner_chat_id,
+        "dds_day_reconciled",
+        title,
+        f"{actor_label} обработал платежи из выписки",
+        actor_label,
+        related_date=target_date,
+        event_key=f"dds-day-reconciled:{target_date.isoformat()}",
+    )
+    if not created:
+        return 0, 0
+    payload = {
+        "title": title,
+        "body": "Откройте уведомления для просмотра",
+        "tag": f"dds-day-reconciled-{target_date.isoformat()}",
+        "url": "/cashoperations?screen=notifications",
+        "data": {
+            "kind": "dds_day_reconciled",
+            "date": target_date.isoformat(),
+        },
+    }
+    return send_cash_push(storage, owner_chat_id, payload, payload, push_group="cash")
 
 
 def parse_amount(raw: str) -> float:
@@ -19709,6 +19845,7 @@ def render_cashoperations_body(
     if not initial_screen:
         initial_screen = str(cash_access.get("default_screen") or "home")
     allowed_screens = set()
+    allowed_screens.add("notifications")
     if has_cashbox_access:
         allowed_screens.update({"home", "history"})
         if can_edit:
@@ -19849,9 +19986,89 @@ def render_cashoperations_body(
             "down": '<path d="M12 5v14"></path><path d="m19 12-7 7-7-7"></path>',
             "up": '<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>',
             "logout": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path>',
+            "bell": '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path>',
         }
         class_attr = f' class="cash-v2-icon {escape(extra_class)}"' if extra_class else ' class="cash-v2-icon"'
         return f'<svg{class_attr} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{paths.get(name, paths["square"])}</svg>'
+
+    notification_events = storage.list_mobile_notification_events(owner_chat_id, 80)
+    notification_total = len(notification_events)
+
+    def notification_local_time(value: datetime) -> datetime:
+        return value.replace(tzinfo=timezone.utc).astimezone(VLADIVOSTOK_TZ) if value.tzinfo is None else value.astimezone(VLADIVOSTOK_TZ)
+
+    notification_today_count = sum(1 for event in notification_events if notification_local_time(event.created_at).date() == today)
+    notification_unread_hint = min(notification_today_count, 9)
+    notification_kinds = {event.event_kind for event in notification_events}
+    notification_summary_parts = [
+        f"{notification_today_count} сегодня",
+        f"{sum(1 for event in notification_events if event.event_kind.startswith('cash_'))} касса",
+        f"{sum(1 for event in notification_events if event.event_kind.startswith('dds_'))} ДДС",
+    ]
+
+    def notification_time_label(value: datetime) -> str:
+        localized = notification_local_time(value)
+        if localized.date() == today:
+            return localized.strftime("%H:%M")
+        return f"{format_date(localized.date())} · {localized.strftime('%H:%M')}"
+
+    def notification_event_icon(event_kind: str) -> str:
+        if event_kind == "cash_income":
+            return v2_icon("down")
+        if event_kind == "cash_expense":
+            return v2_icon("up")
+        if event_kind.startswith("dds_"):
+            return v2_icon("chart")
+        if event_kind.startswith("work_"):
+            return v2_icon("briefcase")
+        if event_kind == "legal_letter":
+            return v2_icon("mail")
+        return v2_icon("bell")
+
+    def notification_event_class(event_kind: str) -> str:
+        if event_kind == "cash_income":
+            return "income"
+        if event_kind == "cash_expense":
+            return "expense"
+        if event_kind.startswith("dds_"):
+            return "dds"
+        if event_kind.startswith("work_"):
+            return "work"
+        if event_kind == "legal_letter":
+            return "letter"
+        return "default"
+
+    def notification_event_card(event) -> str:
+        amount_html = (
+            f'<strong class="cash-v2-notification-amount">{escape(format_amount(event.amount))}</strong>'
+            if abs(float(event.amount or 0.0)) > 0.009
+            else ""
+        )
+        actor_html = f'<span>{escape(event.actor_name)}</span>' if event.actor_name else ""
+        related_date_html = (
+            f'<span>{escape(format_date(event.related_date))}</span>'
+            if event.related_date is not None
+            else ""
+        )
+        meta_parts = "".join(part for part in [actor_html, related_date_html, f"<span>{escape(notification_time_label(event.created_at))}</span>"])
+        return f"""
+          <article class="cash-v2-notification-item {notification_event_class(event.event_kind)}">
+            <span class="cash-v2-notification-icon" aria-hidden="true">{notification_event_icon(event.event_kind)}</span>
+            <span class="cash-v2-notification-main">
+              <strong>{escape(event.title)}</strong>
+              <em>{escape(event.body)}</em>
+              <span class="cash-v2-notification-meta">{meta_parts}</span>
+            </span>
+            {amount_html}
+          </article>
+        """
+
+    notification_rows = "".join(notification_event_card(event) for event in notification_events) or """
+          <div class="cash-v2-notification-empty">
+            <strong>Событий пока нет</strong>
+            <span>Здесь появятся новые расходы, приходы, письма, отчеты и отметки ДДС.</span>
+          </div>
+    """
 
     def work_project_label(report) -> str:
         return project_labels.get(report.project_code) or EXPENSE_PROJECT_META.get(report.project_code) or report.project_label or report.project_code or "Без объекта"
@@ -20493,6 +20710,7 @@ def render_cashoperations_body(
     expense_screen_html = ""
     income_screen_html = ""
     history_screen_html = ""
+    notification_screen_html = ""
     cash_nav_html = ""
     history_nav_html = ""
     if has_cashbox_access:
@@ -20503,11 +20721,7 @@ def render_cashoperations_body(
             cashbox_switch_available = len(allowed_cashboxes) > 1
             cashbox_identity_tag = "button" if cashbox_switch_available else "div"
             cashbox_identity_attrs = ' type="button" data-cashbox-sheet-open' if cashbox_switch_available else ""
-            cashbox_switch_html = (
-                '<button class="cash-v2-cashbox-switch" type="button" data-cashbox-sheet-open>Сменить кассу</button>'
-                if cashbox_switch_available
-                else ""
-            )
+            cashbox_switch_html = '<button class="cash-v2-cashbox-switch" type="button" data-cash-screen="history">История</button>'
             v2_balance_panel_intro = f"""
           <div class="cash-v2-balance-head">
             <{cashbox_identity_tag} class="cash-v2-cashbox-id"{cashbox_identity_attrs}>
@@ -20576,6 +20790,42 @@ def render_cashoperations_body(
             if cash_design_version == "v2"
             else '<button class="cash-mobile-nav cash-mobile-nav-history" type="button" data-cash-screen="history">История</button>'
         )
+    push_action_html = ""
+    if cash_access.get("can_receive_push"):
+        if push_public_key:
+            push_action_html = """
+          <button class="cash-v2-notification-push" type="button" data-cash-push-enable>Включить push</button>
+            """
+        else:
+            push_action_html = '<span class="cash-v2-notification-push disabled">Push-сервер не настроен</span>'
+    notification_cash_filter_class = ' class="active"' if "cash_expense" in notification_kinds or "cash_income" in notification_kinds else ""
+    notification_dds_filter_class = ' class="active"' if any(kind.startswith("dds_") for kind in notification_kinds) else ""
+    notification_work_filter_class = ' class="active"' if any(kind.startswith("work_") for kind in notification_kinds) else ""
+    notification_screen_html = f"""
+      <section id="cashScreenNotifications" class="cash-mobile-screen{" active" if initial_screen == "notifications" else ""}">
+        <section class="cash-v2-notifications-hero">
+          <div>
+            <span class="cash-v2-notifications-kicker">Центр событий</span>
+            <h2>Уведомления</h2>
+            <p>{escape(" · ".join(notification_summary_parts))}</p>
+          </div>
+          <span class="cash-v2-notifications-badge" aria-label="Событий сегодня">{notification_unread_hint if notification_unread_hint else notification_total}</span>
+        </section>
+        <section class="cash-v2-notification-filter" aria-label="Фильтры уведомлений">
+          <span class="active">Все</span>
+          <span{notification_cash_filter_class}>Касса</span>
+          <span{notification_dds_filter_class}>ДДС</span>
+          <span{notification_work_filter_class}>Работа</span>
+        </section>
+        <section class="cash-v2-notification-list">
+          <div class="cash-v2-notification-list-head">
+            <strong>Последние действия</strong>
+            {push_action_html}
+          </div>
+          {notification_rows}
+        </section>
+      </section>
+    """
     empty_screen_html = ""
     if initial_screen == "none":
         empty_screen_html = """
@@ -22057,6 +22307,238 @@ def render_cashoperations_body(
         height: 1px;
         overflow: hidden;
       }}
+      .cash-mobile.is-v2 .cash-v2-notifications-hero {{
+        margin-top: 12px;
+        min-height: 128px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 20px 18px 18px;
+        border: 1px solid rgba(34, 45, 38, .10);
+        border-radius: 22px;
+        background:
+          linear-gradient(145deg, rgba(27, 33, 31, .98), rgba(41, 49, 45, .98)),
+          #1b211f;
+        color: #fff;
+        box-shadow: 0 22px 52px rgba(18, 24, 21, .22);
+        overflow: hidden;
+        position: relative;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notifications-hero::before {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(90deg, rgba(199, 151, 45, .24), transparent 42%),
+          linear-gradient(180deg, rgba(255, 255, 255, .13), transparent 54%);
+      }}
+      .cash-mobile.is-v2 .cash-v2-notifications-hero > * {{
+        position: relative;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notifications-kicker {{
+        display: block;
+        color: rgba(255, 255, 255, .62);
+        font-size: 12px;
+        line-height: 1.1;
+        font-weight: 700;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notifications-hero h2 {{
+        margin: 7px 0 7px;
+        color: #fff;
+        font-size: 28px;
+        line-height: 1.03;
+        font-weight: 840;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notifications-hero p {{
+        margin: 0;
+        color: rgba(255, 255, 255, .70);
+        font-size: 12px;
+        line-height: 1.3;
+        font-weight: 620;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notifications-badge {{
+        width: 52px;
+        height: 52px;
+        flex: 0 0 auto;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, .12);
+        border: 1px solid rgba(255, 255, 255, .18);
+        color: #fff;
+        font-size: 20px;
+        font-weight: 850;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-filter {{
+        margin-top: 10px;
+        display: flex;
+        gap: 7px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-filter span {{
+        min-height: 34px;
+        display: inline-grid;
+        place-items: center;
+        flex: 0 0 auto;
+        padding: 0 13px;
+        border: 1px solid rgba(34, 45, 38, .10);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, .78);
+        color: #5f6962;
+        font-size: 12px;
+        font-weight: 700;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-filter span.active {{
+        background: #18211d;
+        color: #fff;
+        border-color: #18211d;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-list {{
+        margin-top: 10px;
+        padding: 15px 0 6px;
+        border: 1px solid rgba(34, 45, 38, .09);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, .86);
+        box-shadow:
+          0 18px 42px rgba(18, 24, 21, .08),
+          inset 0 1px 0 rgba(255, 255, 255, .88);
+        backdrop-filter: blur(20px);
+        overflow: hidden;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-list-head {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 0 16px 11px;
+        border-bottom: 1px solid rgba(34, 45, 38, .08);
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-list-head strong {{
+        color: #111916;
+        font-size: 17px;
+        line-height: 1.1;
+        font-weight: 780;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-push {{
+        min-height: 32px;
+        border: 1px solid rgba(18, 111, 69, .16);
+        border-radius: 999px;
+        padding: 0 12px;
+        background: rgba(226, 242, 232, .88);
+        color: #126f45;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 720;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-push.disabled {{
+        display: inline-grid;
+        place-items: center;
+        border-color: rgba(34, 45, 38, .10);
+        background: #fff;
+        color: #657069;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-item {{
+        min-height: 74px;
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr) auto;
+        gap: 11px;
+        align-items: center;
+        padding: 13px 16px;
+        border-top: 1px solid rgba(34, 45, 38, .08);
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-list-head + .cash-v2-notification-item {{
+        border-top: 0;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-icon {{
+        width: 38px;
+        height: 38px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        color: #fff;
+        background: #202c28;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-icon .cash-v2-icon {{
+        width: 19px;
+        height: 19px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-item.income .cash-v2-notification-icon {{
+        background: #0f8752;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-item.expense .cash-v2-notification-icon {{
+        background: #d21520;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-item.dds .cash-v2-notification-icon {{
+        background: #18211d;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-item.work .cash-v2-notification-icon {{
+        background: #126f45;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-item.letter .cash-v2-notification-icon {{
+        background: #53615a;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-main {{
+        min-width: 0;
+        display: block;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-main strong,
+      .cash-mobile.is-v2 .cash-v2-notification-main em,
+      .cash-mobile.is-v2 .cash-v2-notification-meta {{
+        display: block;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-main strong {{
+        color: #111916;
+        font-size: 14px;
+        line-height: 1.18;
+        font-weight: 800;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-main em {{
+        margin-top: 3px;
+        color: #657069;
+        font-style: normal;
+        font-size: 12px;
+        line-height: 1.25;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-meta {{
+        margin-top: 6px;
+        color: #818a85;
+        font-size: 10.5px;
+        line-height: 1.1;
+        font-weight: 650;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-meta span {{
+        display: inline-block;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-meta span + span::before {{
+        content: "·";
+        margin: 0 5px;
+        color: rgba(101, 112, 105, .58);
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-amount {{
+        color: #151a18;
+        font-size: 13px;
+        line-height: 1;
+        font-weight: 840;
+        white-space: nowrap;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-empty {{
+        display: grid;
+        gap: 5px;
+        padding: 24px 16px 18px;
+        color: #657069;
+        text-align: center;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-empty strong {{
+        color: #141b18;
+        font-size: 15px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-empty span {{
+        font-size: 12px;
+        line-height: 1.35;
+      }}
       .cash-mobile.is-v2 .cash-mobile-work-head h2 {{
         text-align: left;
         font-size: 22px;
@@ -22712,6 +23194,7 @@ def render_cashoperations_body(
       {income_screen_html}
       {letters_screen_html}
       {history_screen_html}
+      {notification_screen_html}
       <section id="cashScreenWork" class="{work_screen_class}">{work_report_screen}</section>
       {empty_screen_html}
     </section>
@@ -22742,6 +23225,7 @@ def render_cashoperations_body(
           income: document.querySelector("#cashScreenIncome"),
           letters: document.querySelector("#cashScreenLetters"),
           history: document.querySelector("#cashScreenHistory"),
+          notifications: document.querySelector("#cashScreenNotifications"),
           work: document.querySelector("#cashScreenWork")
         }};
         const cashboxTabs = document.querySelector("[data-cashbox-tabs]");
@@ -22763,7 +23247,7 @@ def render_cashoperations_body(
           document.querySelectorAll("[data-cash-screen]").forEach((button) => {{
             button.classList.toggle("active", button.dataset.cashScreen === name);
           }});
-          if (cashboxTabs) cashboxTabs.classList.toggle("is-hidden", name === "letters" || name === "work");
+          if (cashboxTabs) cashboxTabs.classList.toggle("is-hidden", name === "letters" || name === "work" || name === "notifications");
           if (name !== "work" && screens.work) screens.work.classList.remove("is-form-mode");
           window.scrollTo({{ top: 0, behavior: "smooth" }});
         }}
@@ -23754,7 +24238,7 @@ def render_cashoperations_standalone_page(body: str, current_user: dict | None =
             logout_html = """
             <div class="cash-shell-actions">
               <button class="cash-shell-refresh" type="button" data-cash-refresh title="Обновить" aria-label="Обновить">↻</button>
-              <button class="cash-shell-notify" type="button" data-cash-push-enable title="Включить уведомления" aria-label="Включить уведомления">
+              <button class="cash-shell-notify" type="button" data-cash-screen="notifications" title="Уведомления" aria-label="Уведомления">
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
               </button>
               <a class="cash-shell-logout" href="/cashoperations/logout">Выйти</a>
@@ -34452,6 +34936,9 @@ self.addEventListener("notificationclick", (event) => {
                     notify_cash_income_created(storage, current_owner, amount, actor_name)
                 else:
                     notify_cash_expense_created(storage, current_owner, amount, actor_name)
+            maybe_notify_imported_day_reconciled(storage, current_owner, existing_entry.expense_date, actor_name, entries)
+            if expense_date != existing_entry.expense_date:
+                maybe_notify_imported_day_reconciled(storage, current_owner, expense_date, actor_name, entries)
         except ValueError as exc:
             body = render_expenses_section(storage, current_owner, current_user, active_tab, str(exc), False, project_filter, category_filter, adjustment_filter, selected_day, **extra_filters)
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
@@ -34483,7 +34970,17 @@ self.addEventListener("notificationclick", (event) => {
             html = layout("ДДС", body, owners, current_owner, "expenses", current_user)
             start_response("200 OK", [("Content-Type", "text/html; charset=utf-8")])
             return [html.encode("utf-8")]
+        entries_before_status = storage.list_expense_entries(current_owner)
+        status_entry = next((entry for entry in entries_before_status if entry.id == entry_id), None)
         storage.update_expense_entry_status(current_owner, entry_id, status)
+        actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
+        maybe_notify_imported_day_reconciled(
+            storage,
+            current_owner,
+            status_entry.expense_date if status_entry is not None else selected_day,
+            actor_name,
+            entries_before_status,
+        )
         target_tab = "archive" if status == "closed" else "active"
         return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(target_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
 
