@@ -1,46 +1,58 @@
-source visual truth path: /Users/eduard25rus/Downloads/Сгенерированное изображение 2 (1).png
-implementation screenshot path: /Users/eduard25rus/Downloads/IMG_2517.PNG
-viewport: mobile, 390 x 844 reference state
-state: mobile V2 letters screen, grouped by object
-full-view comparison evidence: /private/tmp/letters_design_comparison.png
-focused region comparison evidence: not needed; the full-view comparison clearly shows the header, removed filter area, object groups, status pills, and bottom navigation at readable scale.
+source visual truth path: /Users/eduard25rus/Downloads/Приложение пользователя (2).png
+implementation screenshot path: /Users/eduard25rus/Downloads/IMG_2521.PNG
+viewport: mobile portrait, 945x2048 screenshots
+state: mobile V2 cashoperations, letters screen, grouped object list with first object expanded
+full-view comparison evidence: source and implementation screenshots supplied by user in the same request
+focused region comparison evidence: letters hero, object group headers, expanded letter rows, file pill, bottom navigation
 
 **Findings**
-- [P1] Missing letters summary hero
-  Location: mobile V2 letters screen.
-  Evidence: source uses a dark premium header with mail icon, "Письма", date, and total/incoming/outgoing counts; implementation showed only a plain "Письма" heading.
-  Impact: the screen felt disconnected from the newer V2 event/work visual system and lost the key high-level context.
-  Fix: added `cash-v2-letters-hero` with mail icon, date, total count, incoming count, and outgoing count.
+- [P1] Letter row typography was visually heavier than the source.
+  Location: `webapp.py`, `.cash-v2-letter-row-*`.
+  Evidence: source uses neutral black title, muted regular subject, and compact meta; implementation colored the title red/green and made the subject too bold.
+  Impact: rows looked larger and noisier than the reference.
+  Fix: direction title is neutral black; subject is muted and lighter; meta weight and size are reduced.
 
-- [P1] Object filter form remained after grouping
-  Location: mobile V2 letters screen filter block.
-  Evidence: implementation still had "Объект", a select, and "Показать"; user clarified this block is no longer needed because groups expose all objects.
-  Impact: the filter consumed prime vertical space and made the grouped screen feel like the old list.
-  Fix: V2 now ignores `letter_object` filtering and does not render the object filter form; classic mode keeps the old filter.
+- [P1] Extra comment line made rows taller than the source.
+  Location: V2 `v2_letter_row`.
+  Evidence: source row shows type, subject, and meta only; implementation inserted the letter comment as an additional visible line.
+  Impact: list density drifted from the compact reference and fewer rows fit above the bottom menu.
+  Fix: V2 list rows no longer render the comment line; detail remains available through the letter itself.
 
-- [P2] Group rows looked like isolated pills instead of object sections
-  Location: `.cash-v2-letter-group`.
-  Evidence: source uses larger white object sections with soft elevation and clear object header hierarchy; implementation used small compressed rounded rows.
-  Impact: the grouping logic worked, but the visual hierarchy did not match the chosen concept.
-  Fix: restyled groups with larger radius, softer elevation, larger object/status rhythm, and source-like expanded rows.
+- [P2] File control did not match the compact reference pill.
+  Location: `letter_file_link(..., compact=True)` and `.cash-v2-letter-row-side .cash-mobile-letter-file`.
+  Evidence: source uses a small rounded pill with paperclip icon and count; implementation used the text label `Файлы: 1`.
+  Impact: the action area looked wider and heavier than the mock.
+  Fix: V2 rows now render compact `paperclip + count` pills.
 
-- [P2] Expanded letter rows used vertical bars instead of direction icons
-  Location: `.cash-v2-letter-row-mark`.
-  Evidence: source uses red/green circular direction icons; implementation used thin vertical marks.
-  Impact: direction status was less scannable and drifted from the selected mock.
-  Fix: changed row marks to circular red/green arrow indicators.
+- [P2] Object icon choice drifted from the current source.
+  Location: `v2_letters_group_html`.
+  Evidence: source shows a building/object icon for `Библиотека №13`; implementation used a book icon.
+  Impact: object rows felt like a different visual language.
+  Fix: object groups use building by default, with monument only for plaza/memorial objects.
 
-**Required Fidelity Surfaces**
-- Fonts and typography: adjusted hierarchy toward the mock with a larger hero title, stronger object titles, and compact metadata; exact system font remains the app default.
-- Spacing and layout rhythm: removed the filter form, removed the large framed outer panel, increased object section rhythm, and restored compact but readable group spacing.
-- Colors and visual tokens: restored dark green hero, semantic red/green counts and statuses, and white glass object sections.
-- Image quality and asset fidelity: no bitmap/product imagery is required; icons are code-native app icons consistent with the existing V2 implementation.
-- Copy and content: kept app-specific Russian labels and added V2 summary counts; classic copy remains unchanged.
+**Open Questions**
+- Counts differ between screenshots because the implementation uses live data (`50 всего`, `26 входящих`, `24 исходящих`) while the reference uses design sample data (`8 всего`, `5 входящих`, `3 исходящих`). This is expected and was not treated as a visual defect.
+
+**Implementation Checklist**
+- Make direction labels neutral black.
+- Reduce subject/meta size and weight.
+- Remove comment line from V2 list rows.
+- Replace `Файлы: N` with compact paperclip/count pill in V2.
+- Align object icon choice with the reference.
+- Re-run syntax, V2 render, and smoke checks.
 
 **Patches Made Since Previous QA Pass**
-- V2 letters screen now renders all objects instead of applying the object select filter.
-- V2 object filter form is removed.
-- Added dark `Письма` hero with date and counts.
-- Restyled object groups and expanded letter rows to match the selected grouped mock more closely.
+- Updated V2 letter row markup in `webapp.py`.
+- Added compact file-link rendering for V2 while preserving classic file labels.
+- Added a paperclip SVG path to the local V2 icon helper.
+- Tightened V2 letter row typography and spacing.
+- Changed default object icon mapping to match the supplied reference.
+
+**Required Fidelity Surfaces**
+- Fonts and typography: adjusted title, subject, and meta hierarchy to match the source density.
+- Spacing and layout rhythm: reduced row min-height and padding; removed the extra comment line.
+- Colors and visual tokens: direction text is neutral, semantic color remains on arrow icons only.
+- Image quality and asset fidelity: no raster assets are used; icons remain local SVG UI icons consistent with the existing app system.
+- Copy and content: row labels now match source copy format: `Входящее письмо` / `Исходящее письмо`, subject, compact meta.
 
 final result: passed

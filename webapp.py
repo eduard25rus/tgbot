@@ -20104,6 +20104,7 @@ def render_cashoperations_body(
             "building": '<path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16"></path><path d="M16 8h2a2 2 0 0 1 2 2v11"></path><path d="M8 7h4"></path><path d="M8 11h4"></path><path d="M8 15h4"></path><path d="M3 21h18"></path>',
             "book": '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16"></path><path d="M12 3v16"></path>',
             "monument": '<path d="M12 3v13"></path><path d="M9 6h6"></path><path d="M7 16h10"></path><path d="M5 21h14"></path><path d="M9 21v-5"></path><path d="M15 21v-5"></path>',
+            "paperclip": '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>',
             "square": '<rect x="5" y="5" width="14" height="14" rx="2"></rect>',
         }
         class_attr = f' class="cash-v2-icon {escape(extra_class)}"' if extra_class else ' class="cash-v2-icon"'
@@ -20133,17 +20134,20 @@ def render_cashoperations_body(
             else ""
         )
 
-        def letter_file_link(letter) -> str:
+        def letter_file_link(letter, compact: bool = False) -> str:
             attachments = legal_attachment_map.get(letter.id, [])
             file_count = len(attachments) or (1 if letter.file_path else 0)
+            compact_label = f'{v2_icon("paperclip")}<span>{file_count}</span>'
             if attachments:
                 first_attachment = attachments[0]
+                label = compact_label if compact else f"Файлы: {file_count}"
                 return (
-                    f'<a class="cash-mobile-letter-file" href="/contracts/letter-files/{first_attachment.id}/preview?owner={owner_chat_id}">Файлы: {file_count}</a>'
+                    f'<a class="cash-mobile-letter-file" href="/contracts/letter-files/{first_attachment.id}/preview?owner={owner_chat_id}">{label}</a>'
                 )
             if letter.file_path:
+                label = compact_label if compact else "Файл"
                 return (
-                    f'<a class="cash-mobile-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}">Файл</a>'
+                    f'<a class="cash-mobile-letter-file" href="/contracts/letters/{letter.id}/preview?owner={owner_chat_id}">{label}</a>'
                 )
             return '<span class="cash-mobile-op-receipt">Файлов нет</span>'
 
@@ -20180,7 +20184,6 @@ def render_cashoperations_body(
             direction_class = "outgoing" if letter.direction == "outgoing" else "incoming"
             direction_label = "Исходящее письмо" if direction_class == "outgoing" else "Входящее письмо"
             channel_label = LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта")
-            comment_html = f'<span class="cash-v2-letter-row-comment">{escape(letter.comment)}</span>' if letter.comment else ""
             author_label = letter.created_by_name.strip() or "Автор не указан"
             is_focused = selected_letter_id and letter.id == selected_letter_id
             return f"""
@@ -20191,11 +20194,10 @@ def render_cashoperations_body(
                     <strong>{escape(direction_label)}</strong>
                   </span>
                   <span class="cash-v2-letter-row-subject">{escape(letter.subject or "Без темы")}</span>
-                  {comment_html}
                   <span class="cash-v2-letter-row-meta">{escape(channel_label)} · {escape(v2_letter_row_date_time(letter))} · {escape(author_label)}</span>
                 </span>
                 <span class="cash-v2-letter-row-side">
-                  {letter_file_link(letter)}
+                  {letter_file_link(letter, compact=True)}
                   <span class="cash-v2-chevron" aria-hidden="true"></span>
                 </span>
               </article>
@@ -20239,8 +20241,7 @@ def render_cashoperations_body(
             status_class = "incoming" if latest_incoming else "outgoing"
             group_folded = group_label.casefold()
             group_icon = (
-                "book" if "библиот" in group_folded or "лицей" in group_folded
-                else "monument" if "площад" in group_folded or "памят" in group_folded
+                "monument" if "площад" in group_folded or "памят" in group_folded
                 else "building"
             )
             group_dom_id = f"letters-object-{abs(hash(group_label))}"
@@ -23084,12 +23085,12 @@ def render_cashoperations_body(
         border-top: 1px solid rgba(34, 45, 38, .08);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row {{
-        min-height: 74px;
+        min-height: 70px;
         display: grid;
         grid-template-columns: 34px minmax(0, 1fr) auto;
         gap: 10px;
         align-items: center;
-        padding: 12px 14px;
+        padding: 10px 14px;
         border-top: 1px solid rgba(34, 45, 38, .07);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row:first-child {{
@@ -23128,29 +23129,29 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-top strong {{
         color: #111916;
-        font-size: 13px;
+        font-size: 12.5px;
         line-height: 1.1;
-        font-weight: 820;
+        font-weight: 810;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row.incoming .cash-v2-letter-row-top strong {{
-        color: #a23333;
+        color: #111916;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row.outgoing .cash-v2-letter-row-top strong {{
-        color: #126f45;
+        color: #111916;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-top em,
       .cash-mobile.is-v2 .cash-v2-letter-row-meta {{
         color: #818a85;
-        font-size: 10.5px;
+        font-size: 10px;
         line-height: 1.15;
         font-style: normal;
-        font-weight: 650;
+        font-weight: 600;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-subject {{
-        color: #111916;
-        font-size: 12.5px;
+        color: #657069;
+        font-size: 11.8px;
         line-height: 1.18;
-        font-weight: 700;
+        font-weight: 500;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-comment {{
         color: #657069;
@@ -23167,11 +23168,22 @@ def render_cashoperations_body(
         transform: rotate(-45deg);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-side .cash-mobile-letter-file {{
+        min-width: 38px;
         min-height: 28px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
         border-radius: 999px;
-        padding: 0 9px;
+        padding: 0 8px;
         background: rgba(255, 255, 255, .82);
         font-size: 11px;
+        line-height: 1;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-row-side .cash-mobile-letter-file .cash-v2-icon {{
+        width: 13px;
+        height: 13px;
+        stroke-width: 2.15;
       }}
       .cash-mobile.is-v2 .cash-mobile-letter-focused {{
         background: rgba(226, 242, 232, .72);
