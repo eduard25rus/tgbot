@@ -20574,7 +20574,18 @@ def render_cashoperations_body(
           </div>
         </article>
         """
-    work_report_rows = "".join(work_report_card(report) for report in work_reports) or '<div class="cash-mobile-empty">За этот день отчетов пока нет.</div>'
+    work_report_rows = "".join(work_report_card(report) for report in work_reports)
+    if not work_report_rows:
+        work_report_rows = (
+            """
+            <div class="cash-work-v2-empty">
+              <strong>За этот день отчетов пока нет</strong>
+              <span>Добавьте смену или выберите другую дату.</span>
+            </div>
+            """
+            if cash_design_version == "v2"
+            else '<div class="cash-mobile-empty">За этот день отчетов пока нет.</div>'
+        )
     weekday_labels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     work_month_short_labels = {
         1: "янв",
@@ -22923,7 +22934,7 @@ def render_cashoperations_body(
         color: #0f1714;
       }}
       .cash-mobile.is-v2 .cash-work-v2-calendar {{
-        margin-top: 32px;
+        margin-top: 22px;
         padding: 0 10px 12px;
         border: 1px solid rgba(34, 45, 38, .09);
         border-radius: 19px;
@@ -22934,20 +22945,20 @@ def render_cashoperations_body(
         backdrop-filter: blur(20px);
       }}
       .cash-mobile.is-v2 .cash-work-v2-title-pill {{
-        width: min(78%, 282px);
-        min-height: 50px;
-        margin: -25px auto 13px;
-        padding: 0 22px;
+        width: min(64%, 232px);
+        min-height: 38px;
+        margin: -19px auto 12px;
+        padding: 0 18px;
         display: grid;
         place-items: center;
-        border-radius: 25px;
+        border-radius: 19px;
         background: #16231d;
         color: #fff;
-        font-size: 20px;
+        font-size: 16px;
         line-height: 1.05;
         font-weight: 820;
         text-align: center;
-        box-shadow: 0 14px 30px rgba(18, 24, 21, .20);
+        box-shadow: 0 9px 20px rgba(18, 24, 21, .15);
       }}
       .cash-mobile.is-v2 .cash-work-v2-days {{
         display: grid;
@@ -23095,6 +23106,24 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-work-v2-list {{
         display: grid;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-empty {{
+        display: grid;
+        gap: 6px;
+        justify-items: center;
+        padding: 26px 18px 24px;
+        color: #657069;
+        text-align: center;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-empty strong {{
+        color: #141b18;
+        font-size: 15px;
+        line-height: 1.18;
+      }}
+      .cash-mobile.is-v2 .cash-work-v2-empty span {{
+        max-width: 230px;
+        font-size: 12px;
+        line-height: 1.35;
       }}
       .cash-mobile.is-v2 .cash-work-v2-row {{
         position: relative;
@@ -23418,15 +23447,15 @@ def render_cashoperations_body(
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }}
         .cash-mobile.is-v2 .cash-work-v2-calendar {{
-          margin-top: 30px;
+          margin-top: 21px;
           padding-left: 8px;
           padding-right: 8px;
         }}
         .cash-mobile.is-v2 .cash-work-v2-title-pill {{
-          width: min(82%, 258px);
-          min-height: 46px;
-          margin: -23px auto 11px;
-          font-size: 18px;
+          width: min(66%, 218px);
+          min-height: 36px;
+          margin: -18px auto 11px;
+          font-size: 15px;
         }}
         .cash-mobile.is-v2 .cash-work-v2-days {{
           grid-template-columns: 24px repeat(5, minmax(0, 1fr)) 24px;
