@@ -20101,6 +20101,9 @@ def render_cashoperations_body(
         paths = {
             "mail": '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path>',
             "calendar": '<rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4"></path><path d="M8 2v4"></path><path d="M3 10h18"></path>',
+            "building": '<path d="M4 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16"></path><path d="M16 8h2a2 2 0 0 1 2 2v11"></path><path d="M8 7h4"></path><path d="M8 11h4"></path><path d="M8 15h4"></path><path d="M3 21h18"></path>',
+            "book": '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"></path><path d="M4 5.5v16"></path><path d="M12 3v16"></path>',
+            "monument": '<path d="M12 3v13"></path><path d="M9 6h6"></path><path d="M7 16h10"></path><path d="M5 21h14"></path><path d="M9 21v-5"></path><path d="M15 21v-5"></path>',
             "square": '<rect x="5" y="5" width="14" height="14" rx="2"></rect>',
         }
         class_attr = f' class="cash-v2-icon {escape(extra_class)}"' if extra_class else ' class="cash-v2-icon"'
@@ -20199,26 +20202,37 @@ def render_cashoperations_body(
               </article>
             """
 
+        def v2_letter_count_label(value: int) -> str:
+            remainder_100 = value % 100
+            remainder_10 = value % 10
+            if 11 <= remainder_100 <= 14:
+                word = "писем"
+            elif remainder_10 == 1:
+                word = "письмо"
+            elif 2 <= remainder_10 <= 4:
+                word = "письма"
+            else:
+                word = "писем"
+            return f"{value} {word}"
+
         def v2_letters_group_html(group_label: str, group_letters: list) -> str:
             latest_letter = group_letters[0]
             latest_incoming = latest_letter.direction != "outgoing"
             status_class = "incoming" if latest_incoming else "outgoing"
-            status_label = "Нужен ответ" if latest_incoming else "Ответ отправлен"
-            direction_label = "Входящее" if latest_incoming else "Исходящее"
-            incoming_count = sum(1 for letter in group_letters if letter.direction != "outgoing")
-            outgoing_count = len(group_letters) - incoming_count
-            is_open = any(selected_letter_id and letter.id == selected_letter_id for letter in group_letters)
+            group_folded = group_label.casefold()
+            group_icon = (
+                "book" if "библиот" in group_folded or "лицей" in group_folded
+                else "monument" if "площад" in group_folded or "памят" in group_folded
+                else "building"
+            )
+            group_dom_id = f"letters-object-{abs(hash(group_label))}"
             return f"""
-            <details class="cash-v2-letter-group"{" open" if is_open else ""}>
+            <details id="{group_dom_id}" class="cash-v2-letter-group" open>
               <summary>
-                <span class="cash-v2-letter-status-dot {status_class}" aria-hidden="true"></span>
+                <span class="cash-v2-letter-object-icon {status_class}" aria-hidden="true">{v2_icon(group_icon)}<i></i></span>
                 <span class="cash-v2-letter-group-main">
                   <strong>{escape(group_label)}</strong>
-                  <em>{len(group_letters)} писем · {incoming_count} вход. · {outgoing_count} исх.</em>
-                </span>
-                <span class="cash-v2-letter-group-state {status_class}">
-                  <b>{escape(status_label)}</b>
-                  <em>{escape(direction_label)} · {escape(format_date(latest_letter.letter_date))}</em>
+                  <em>· {escape(v2_letter_count_label(len(group_letters)))}</em>
                 </span>
                 <span class="cash-v2-letter-group-chevron" aria-hidden="true"></span>
               </summary>
@@ -20232,23 +20246,33 @@ def render_cashoperations_body(
             letter_groups: dict[str, list] = {}
             for letter in legal_letters:
                 letter_groups.setdefault(letter.object_label or "Без объекта", []).append(letter)
+            letter_group_items = list(letter_groups.items())
             letters_total = len(legal_letters)
             letters_incoming_total = sum(1 for letter in legal_letters if letter.direction != "outgoing")
             letters_outgoing_total = letters_total - letters_incoming_total
             letters_hero_date = legal_letters[0].letter_date if legal_letters else today
+            letters_object_chips = "".join(
+                f'<a href="#letters-object-{abs(hash(group_label))}">{escape(group_label)}</a>'
+                for group_label, _group_letters in letter_group_items[:4]
+            )
             letters_summary_html = f"""
             <section class="cash-v2-letters-hero">
               <span class="cash-v2-letters-hero-icon" aria-hidden="true">{v2_icon("mail")}</span>
               <span class="cash-v2-letters-hero-main">
                 <strong>Письма</strong>
-                <em>{letters_total} всего · <b class="incoming">{letters_incoming_total} входящих</b> · <b class="outgoing">{letters_outgoing_total} исходящих</b></em>
               </span>
               <span class="cash-v2-letters-hero-date">{v2_icon("calendar")}{escape(format_date(letters_hero_date))}</span>
+              <span class="cash-v2-letters-hero-line" aria-hidden="true"></span>
+              <span class="cash-v2-letters-hero-stats">{letters_total} всего <i></i> <b class="incoming">{letters_incoming_total} входящих</b> <i></i> <b class="outgoing">{letters_outgoing_total} исходящих</b></span>
             </section>
+            <nav class="cash-v2-letters-chips" aria-label="Объекты писем">
+              <a class="active" href="#cashScreenLetters">Все</a>
+              {letters_object_chips}
+            </nav>
             """
             letters_rows = (
                 '<div class="cash-v2-letter-groups">'
-                + "".join(v2_letters_group_html(group_label, group_letters) for group_label, group_letters in letter_groups.items())
+                + "".join(v2_letters_group_html(group_label, group_letters) for group_label, group_letters in letter_group_items)
                 + "</div>"
                 if letter_groups
                 else '<div class="cash-v2-notification-empty"><strong>Писем пока нет</strong><span>Выберите другой объект или вернитесь позже.</span></div>'
@@ -22780,19 +22804,24 @@ def render_cashoperations_body(
         overflow: visible;
       }}
       .cash-mobile.is-v2 .cash-v2-letters-hero {{
-        min-height: 104px;
+        min-height: 112px;
         display: grid;
         grid-template-columns: 42px minmax(0, 1fr) auto;
         gap: 13px;
         align-items: center;
         margin: 12px 0 12px;
-        padding: 18px 16px;
+        padding: 18px 16px 15px;
         border-radius: 22px;
         background:
           linear-gradient(145deg, rgba(27, 33, 31, .98), rgba(18, 29, 24, .99)),
           #16231d;
         color: #fff;
         box-shadow: 0 22px 52px rgba(18, 24, 21, .18);
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-line {{
+        grid-column: 1 / -1;
+        height: 1px;
+        background: rgba(255, 255, 255, .12);
       }}
       .cash-mobile.is-v2 .cash-v2-letters-hero-icon {{
         width: 42px;
@@ -22810,30 +22839,12 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letters-hero-main {{
         min-width: 0;
-        display: grid;
-        gap: 10px;
       }}
       .cash-mobile.is-v2 .cash-v2-letters-hero-main strong {{
         color: #fff;
         font-size: 24px;
         line-height: 1;
         font-weight: 840;
-      }}
-      .cash-mobile.is-v2 .cash-v2-letters-hero-main em {{
-        color: rgba(255, 255, 255, .68);
-        font-size: 12px;
-        line-height: 1.1;
-        font-style: normal;
-        font-weight: 680;
-      }}
-      .cash-mobile.is-v2 .cash-v2-letters-hero-main b {{
-        font-weight: 820;
-      }}
-      .cash-mobile.is-v2 .cash-v2-letters-hero-main b.incoming {{
-        color: #ff8c93;
-      }}
-      .cash-mobile.is-v2 .cash-v2-letters-hero-main b.outgoing {{
-        color: #66d294;
       }}
       .cash-mobile.is-v2 .cash-v2-letters-hero-date {{
         display: inline-flex;
@@ -22848,6 +22859,60 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-v2-letters-hero-date .cash-v2-icon {{
         width: 15px;
         height: 15px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-stats {{
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        color: rgba(255, 255, 255, .68);
+        font-size: 13px;
+        line-height: 1;
+        font-weight: 720;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-stats i {{
+        width: 3px;
+        height: 3px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, .44);
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-stats b {{
+        font-weight: 820;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-stats b.incoming {{
+        color: #ff8c93;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-hero-stats b.outgoing {{
+        color: #66d294;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-chips {{
+        display: flex;
+        gap: 7px;
+        margin: 0 0 12px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-chips a {{
+        min-height: 34px;
+        display: inline-grid;
+        place-items: center;
+        flex: 0 0 auto;
+        padding: 0 13px;
+        border: 1px solid rgba(34, 45, 38, .10);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, .78);
+        color: #5f6962;
+        text-decoration: none;
+        font-size: 12px;
+        line-height: 1;
+        font-weight: 700;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letters-chips a.active {{
+        background: #163424;
+        border-color: #163424;
+        color: #fff;
+        box-shadow: 0 8px 18px rgba(18, 24, 21, .10);
       }}
       .cash-mobile.is-v2 .cash-v2-letters-panel .cash-mobile-letter-filter {{
         grid-template-columns: minmax(0, 1fr) auto;
@@ -22888,43 +22953,54 @@ def render_cashoperations_body(
         overflow: hidden;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group summary {{
-        min-height: 76px;
+        min-height: 72px;
         display: grid;
-        grid-template-columns: 42px minmax(0, 1fr) auto 10px;
-        gap: 11px;
+        grid-template-columns: 42px minmax(0, 1fr) 10px;
+        gap: 12px;
         align-items: center;
-        padding: 14px 14px 14px 14px;
+        padding: 14px 16px 12px;
         list-style: none;
         cursor: pointer;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group summary::-webkit-details-marker {{
         display: none;
       }}
-      .cash-mobile.is-v2 .cash-v2-letter-status-dot {{
+      .cash-mobile.is-v2 .cash-v2-letter-object-icon {{
         position: relative;
-        width: 36px;
-        height: 36px;
+        width: 42px;
+        height: 42px;
         display: grid;
         place-items: center;
         border-radius: 50%;
         background: rgba(226, 242, 232, .72);
+        color: #126f45;
       }}
-      .cash-mobile.is-v2 .cash-v2-letter-status-dot::after {{
+      .cash-mobile.is-v2 .cash-v2-letter-object-icon .cash-v2-icon {{
+        width: 21px;
+        height: 21px;
+        stroke-width: 2.2;
+      }}
+      .cash-mobile.is-v2 .cash-v2-letter-object-icon i {{
         content: "";
-        width: 10px;
-        height: 10px;
+        position: absolute;
+        right: 1px;
+        bottom: 1px;
+        width: 9px;
+        height: 9px;
+        border: 2px solid rgba(255, 255, 255, .95);
         border-radius: 50%;
       }}
-      .cash-mobile.is-v2 .cash-v2-letter-status-dot.incoming::after {{
+      .cash-mobile.is-v2 .cash-v2-letter-object-icon.incoming i {{
         background: #d21520;
       }}
-      .cash-mobile.is-v2 .cash-v2-letter-status-dot.outgoing::after {{
+      .cash-mobile.is-v2 .cash-v2-letter-object-icon.outgoing i {{
         background: #126f45;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main {{
         min-width: 0;
-        display: grid;
-        gap: 4px;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main strong {{
         color: #111916;
@@ -22937,10 +23013,11 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main em {{
         color: #657069;
-        font-size: 11.5px;
+        font-size: 12px;
         line-height: 1.1;
         font-style: normal;
         font-weight: 660;
+        white-space: nowrap;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-state {{
         display: grid;
