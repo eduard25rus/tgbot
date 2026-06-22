@@ -1630,17 +1630,42 @@ def software_commit_infos_for_date(target_date: date) -> list[dict[str, str]]:
     return [current] if current else []
 
 
-def ensure_software_commit_event(storage: Storage, owner_chat_id: int) -> bool:
+def default_software_actor_name(storage: Storage, owner_chat_id: int, current_user: dict | None = None) -> str:
+    if current_user:
+        full_name = str(current_user.get("full_name") or "").strip()
+        if full_name:
+            return full_name
+    try:
+        users = storage.list_web_users(owner_chat_id)
+    except Exception:
+        users = []
+    active_users = [user for user in users if user.get("is_active")]
+    for user in active_users:
+        if user.get("is_super_admin") and str(user.get("full_name") or "").strip():
+            return str(user.get("full_name") or "").strip()
+    for user in active_users:
+        role_name = str(user.get("role_name") or "").casefold()
+        if "админ" in role_name and str(user.get("full_name") or "").strip():
+            return str(user.get("full_name") or "").strip()
+    for user in active_users:
+        full_name = str(user.get("full_name") or "").strip()
+        if full_name:
+            return full_name
+    return "Codex"
+
+
+def ensure_software_commit_event(storage: Storage, owner_chat_id: int, actor_name: str = "") -> bool:
     today = datetime.now(VLADIVOSTOK_TZ).date()
     created_count = 0
+    actor_label = actor_name.strip() or default_software_actor_name(storage, owner_chat_id)
     for info in software_commit_infos_for_date(today):
         created = record_mobile_notification_event(
             storage,
             owner_chat_id,
             "software_commit",
-            f"Коммит {info['short_sha']}: {info['subject']}",
-            f"Пользователь {info['actor']} внес правку ПО",
-            info["actor"],
+            f"Коммит {info['short_sha']}",
+            info["subject"],
+            actor_label,
             related_date=today,
             event_key=f"software-commit:{info['sha']}",
         )
@@ -1678,7 +1703,9 @@ def maybe_send_software_digest(
         actor = (event.actor_name or "").strip()
         if actor and actor not in actor_names:
             actor_names.append(actor)
-    actor_label = ", ".join(actor_names[:2]) if actor_names else "Codex"
+    actor_label = default_software_actor_name(storage, owner_chat_id)
+    if not actor_label:
+        actor_label = ", ".join(actor_names[:2]) if actor_names else "Codex"
     if len(actor_names) > 2:
         actor_label += f" и еще {len(actor_names) - 2}"
     title = f"За сегодня в ПО внесено {commit_count} коммитов"
@@ -19750,7 +19777,8 @@ def render_cashoperations_body(
         selected_cashbox = cash_access["default_cashbox_code"] if cash_access["default_cashbox_code"] in allowed_codes else (allowed_cashboxes[0]["code"] if allowed_cashboxes else "")
     entries = storage.list_expense_entries(owner_chat_id)
     today = datetime.now(VLADIVOSTOK_TZ).date()
-    ensure_software_commit_event(storage, owner_chat_id)
+    software_actor_label = default_software_actor_name(storage, owner_chat_id, current_user)
+    ensure_software_commit_event(storage, owner_chat_id, software_actor_label)
     maybe_send_software_digest(storage, owner_chat_id)
     project_options_list = expense_project_options(storage, owner_chat_id, entries, include_legacy_entries=False)
     project_labels = dict(project_options_list)
@@ -20255,13 +20283,31 @@ def render_cashoperations_body(
             return f"/cashoperations?screen=letters&letter_id={letter_id}#letter-{letter_id}"
         return ""
 
+    def notification_event_text(event) -> tuple[str, str, str]:
+        title = event.title
+        body = event.body
+        actor_name = event.actor_name
+        if event.event_kind == "software_commit":
+            actor_name = software_actor_label
+            if ":" in title:
+                commit_title, commit_subject = title.split(":", 1)
+                title = commit_title.strip()
+                body = commit_subject.strip() or body
+            if body.startswith("Пользователь ") and " внес правку ПО" in body:
+                body = "Обновление ПО"
+        elif event.event_kind == "software_digest" and not actor_name:
+            actor_name = software_actor_label
+        return title, body, actor_name
+
     def notification_event_card(event) -> str:
+        title, body, actor_name = notification_event_text(event)
         amount_html = (
             f'<strong class="cash-v2-notification-amount">{escape(format_amount(event.amount))}</strong>'
             if abs(float(event.amount or 0.0)) > 0.009
             else ""
         )
-        actor_html = f'<span>{escape(event.actor_name)}</span>' if event.actor_name else ""
+        actor_label = f"Пользователь {actor_name}" if event.event_kind.startswith("software_") and actor_name else actor_name
+        actor_html = f'<span>{escape(actor_label)}</span>' if actor_label else ""
         related_date_html = (
             f'<span>{escape(format_date(event.related_date))}</span>'
             if event.related_date is not None
@@ -20275,8 +20321,8 @@ def render_cashoperations_body(
           <{tag_name}{href_attr} class="cash-v2-notification-item {notification_event_class(event.event_kind)}" data-notification-kind="{escape(notification_event_filter(event.event_kind))}">
             <span class="cash-v2-notification-icon" aria-hidden="true">{notification_event_icon(event.event_kind)}</span>
             <span class="cash-v2-notification-main">
-              <strong>{escape(event.title)}</strong>
-              <em>{escape(event.body)}</em>
+              <strong>{escape(title)}</strong>
+              <em>{escape(body)}</em>
               <span class="cash-v2-notification-meta">{meta_parts}</span>
             </span>
             {amount_html}
@@ -22777,6 +22823,9 @@ def render_cashoperations_body(
         padding: 24px 16px 18px;
         color: #657069;
         text-align: center;
+      }}
+      .cash-mobile.is-v2 .cash-v2-notification-empty.is-hidden {{
+        display: none;
       }}
       .cash-mobile.is-v2 .cash-v2-notification-empty strong {{
         color: #141b18;
