@@ -20096,6 +20096,16 @@ def render_cashoperations_body(
             initial_screen = "home"
         else:
             initial_screen = "none"
+
+    def v2_icon(name: str, extra_class: str = "") -> str:
+        paths = {
+            "mail": '<rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path>',
+            "calendar": '<rect x="3" y="4" width="18" height="18" rx="2"></rect><path d="M16 2v4"></path><path d="M8 2v4"></path><path d="M3 10h18"></path>',
+            "square": '<rect x="5" y="5" width="14" height="14" rx="2"></rect>',
+        }
+        class_attr = f' class="cash-v2-icon {escape(extra_class)}"' if extra_class else ' class="cash-v2-icon"'
+        return f'<svg{class_attr} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{paths.get(name, paths["square"])}</svg>'
+
     letters_screen_html = ""
     letters_nav_html = ""
     if can_view_letters:
