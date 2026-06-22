@@ -20177,8 +20177,9 @@ def render_cashoperations_body(
             """
 
         def v2_letter_row(letter) -> str:
-            direction_label = LEGAL_LETTER_META.get(letter.direction, LEGAL_LETTER_META["outgoing"])[0]
             direction_class = "outgoing" if letter.direction == "outgoing" else "incoming"
+            direction_label = "Исходящее" if direction_class == "outgoing" else "Входящее"
+            direction_arrow = "→" if direction_class == "outgoing" else "←"
             channel_label = LEGAL_CHANNEL_META.get(letter.source_channel or "mail", "Почта")
             comment_html = f'<span class="cash-v2-letter-row-comment">{escape(letter.comment)}</span>' if letter.comment else ""
             author_label = letter.created_by_name.strip() or "Автор не указан"
@@ -20188,7 +20189,7 @@ def render_cashoperations_body(
                 <span class="cash-v2-letter-row-mark" aria-hidden="true"></span>
                 <span class="cash-v2-letter-row-main">
                   <span class="cash-v2-letter-row-top">
-                    <strong>{escape(direction_label)}</strong>
+                    <strong>{escape(direction_arrow)} {escape(direction_label)}</strong>
                     <em>{escape(format_date(letter.letter_date))}</em>
                   </span>
                   <span class="cash-v2-letter-row-subject">{escape(letter.subject or "Без темы")}</span>
@@ -22941,24 +22942,24 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letter-groups {{
         display: grid;
-        gap: 10px;
+        gap: 12px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group {{
         border: 1px solid rgba(34, 45, 38, .09);
-        border-radius: 20px;
-        background: rgba(255, 255, 255, .86);
+        border-radius: 22px;
+        background: rgba(255, 255, 255, .90);
         box-shadow:
           0 18px 42px rgba(18, 24, 21, .07),
           inset 0 1px 0 rgba(255, 255, 255, .88);
         overflow: hidden;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group summary {{
-        min-height: 72px;
+        min-height: 94px;
         display: grid;
-        grid-template-columns: 42px minmax(0, 1fr) 10px;
-        gap: 12px;
+        grid-template-columns: 64px minmax(0, 1fr) 14px;
+        gap: 16px;
         align-items: center;
-        padding: 14px 16px 12px;
+        padding: 18px 20px 17px;
         list-style: none;
         cursor: pointer;
       }}
@@ -22967,27 +22968,27 @@ def render_cashoperations_body(
       }}
       .cash-mobile.is-v2 .cash-v2-letter-object-icon {{
         position: relative;
-        width: 42px;
-        height: 42px;
+        width: 62px;
+        height: 62px;
         display: grid;
         place-items: center;
         border-radius: 50%;
-        background: rgba(226, 242, 232, .72);
+        background: rgba(226, 242, 232, .82);
         color: #126f45;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-object-icon .cash-v2-icon {{
-        width: 21px;
-        height: 21px;
-        stroke-width: 2.2;
+        width: 32px;
+        height: 32px;
+        stroke-width: 2.35;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-object-icon i {{
         content: "";
         position: absolute;
-        right: 1px;
-        bottom: 1px;
-        width: 9px;
-        height: 9px;
-        border: 2px solid rgba(255, 255, 255, .95);
+        right: 4px;
+        bottom: 4px;
+        width: 11px;
+        height: 11px;
+        border: 3px solid rgba(255, 255, 255, .95);
         border-radius: 50%;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-object-icon.incoming i {{
@@ -23000,23 +23001,23 @@ def render_cashoperations_body(
         min-width: 0;
         display: flex;
         align-items: baseline;
-        gap: 8px;
+        gap: 10px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main strong {{
         color: #111916;
-        font-size: 15px;
+        font-size: 22px;
         line-height: 1.12;
-        font-weight: 820;
+        font-weight: 840;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-main em {{
         color: #657069;
-        font-size: 12px;
+        font-size: 18px;
         line-height: 1.1;
         font-style: normal;
-        font-weight: 660;
+        font-weight: 690;
         white-space: nowrap;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-state {{
@@ -23052,10 +23053,10 @@ def render_cashoperations_body(
         color: #126f45;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-group-chevron {{
-        width: 8px;
-        height: 8px;
-        border-right: 2px solid rgba(80, 91, 84, .56);
-        border-bottom: 2px solid rgba(80, 91, 84, .56);
+        width: 12px;
+        height: 12px;
+        border-right: 3px solid rgba(80, 91, 84, .56);
+        border-bottom: 3px solid rgba(80, 91, 84, .56);
         transform: rotate(45deg);
         transition: transform .18s ease;
       }}
@@ -23066,25 +23067,25 @@ def render_cashoperations_body(
         border-top: 1px solid rgba(34, 45, 38, .08);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row {{
-        min-height: 74px;
+        min-height: 116px;
         display: grid;
-        grid-template-columns: 34px minmax(0, 1fr) auto;
-        gap: 11px;
+        grid-template-columns: 50px minmax(0, 1fr) auto;
+        gap: 15px;
         align-items: center;
-        padding: 12px 14px;
+        padding: 18px 20px 17px;
         border-top: 1px solid rgba(34, 45, 38, .07);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row:first-child {{
         border-top: 0;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-mark {{
-        width: 32px;
-        height: 32px;
+        width: 48px;
+        height: 48px;
         display: grid;
         place-items: center;
         border-radius: 50%;
         color: #fff;
-        font-size: 18px;
+        font-size: 27px;
         line-height: 1;
         font-weight: 900;
       }}
@@ -23103,19 +23104,19 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-v2-letter-row-main {{
         min-width: 0;
         display: grid;
-        gap: 3px;
+        gap: 5px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-top {{
         display: flex;
         align-items: baseline;
         justify-content: space-between;
-        gap: 8px;
+        gap: 12px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-top strong {{
         color: #111916;
-        font-size: 13px;
+        font-size: 18px;
         line-height: 1.1;
-        font-weight: 820;
+        font-weight: 840;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row.incoming .cash-v2-letter-row-top strong {{
         color: #a23333;
@@ -23126,37 +23127,37 @@ def render_cashoperations_body(
       .cash-mobile.is-v2 .cash-v2-letter-row-top em,
       .cash-mobile.is-v2 .cash-v2-letter-row-meta {{
         color: #818a85;
-        font-size: 10.5px;
-        line-height: 1.1;
+        font-size: 15px;
+        line-height: 1.15;
         font-style: normal;
-        font-weight: 650;
+        font-weight: 680;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-subject {{
         color: #111916;
-        font-size: 12px;
+        font-size: 18px;
         line-height: 1.18;
-        font-weight: 760;
+        font-weight: 840;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-comment {{
         color: #657069;
-        font-size: 11.5px;
+        font-size: 17px;
         line-height: 1.22;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-side {{
         display: inline-flex;
         align-items: center;
-        gap: 8px;
+        gap: 13px;
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-side .cash-v2-chevron {{
         border-color: rgba(80, 91, 84, .56);
         transform: rotate(-45deg);
       }}
       .cash-mobile.is-v2 .cash-v2-letter-row-side .cash-mobile-letter-file {{
-        min-height: 28px;
+        min-height: 44px;
         border-radius: 999px;
-        padding: 0 9px;
+        padding: 0 17px;
         background: rgba(255, 255, 255, .82);
-        font-size: 11px;
+        font-size: 17px;
       }}
       .cash-mobile.is-v2 .cash-mobile-letter-focused {{
         background: rgba(226, 242, 232, .72);
