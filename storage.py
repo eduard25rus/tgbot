@@ -30,6 +30,7 @@ DEFAULT_EXPENSE_CATEGORIES = (
     ("cash_withdrawal", "Вывод в кассу"),
     ("income_unallocated", "Поступление"),
     ("income_bank", "Банк"),
+    ("income_bank_transfer", "Перевод между счетами"),
     ("income_work_payment", "Оплата работ"),
     ("income_loan", "Займ"),
     ("income_deposit_return", "Возврат залога"),
@@ -52,6 +53,7 @@ DEFAULT_EXPENSE_CATEGORY_GROUPS = {
     "cash_withdrawal": "transfer",
     "income_unallocated": "income",
     "income_bank": "income",
+    "income_bank_transfer": "income",
     "income_work_payment": "income",
     "income_loan": "income",
     "income_deposit_return": "income",
@@ -8969,12 +8971,32 @@ class Storage:
         payroll_period: str = "",
         operation_type: str = "expense",
         expense_group_code: str = "",
+        raw_import_text: str | None = None,
     ) -> bool:
         cleaned_project = project_code.strip()
         cleaned_category = category_code.strip()
         cleaned_operation = operation_type.strip() or "expense"
         cleaned_group = expense_group_code.strip() or self.expense_group_code(cleaned_project, cleaned_category, cleaned_operation)
         with self.connection() as conn:
+            raw_import_sql = "raw_import_text = ?," if raw_import_text is not None else ""
+            params = [
+                expense_date.strftime(DATE_FMT),
+                cleaned_project,
+                cleaned_category,
+                cleaned_group,
+                title.strip(),
+                amount,
+                comment.strip(),
+                payroll_employee_id,
+                payroll_employee_name.strip(),
+                payroll_period.strip(),
+                payment_source.strip() or "bank",
+                cleaned_operation,
+                1 if needs_adjustment else 0,
+            ]
+            if raw_import_text is not None:
+                params.append(raw_import_text.strip())
+            params.extend([datetime.utcnow().isoformat(), entry_id, owner_chat_id])
             cursor = conn.execute(
                 """
                 UPDATE expense_entries
@@ -8992,27 +9014,11 @@ class Storage:
                     payment_source = ?,
                     operation_type = ?,
                     needs_adjustment = ?,
+                    {raw_import_sql}
                     updated_at = ?
                 WHERE id = ? AND owner_chat_id = ? AND deleted_at IS NULL
-                """,
-                (
-                    expense_date.strftime(DATE_FMT),
-                    cleaned_project,
-                    cleaned_category,
-                    cleaned_group,
-                    title.strip(),
-                    amount,
-                    comment.strip(),
-                    payroll_employee_id,
-                    payroll_employee_name.strip(),
-                    payroll_period.strip(),
-                    payment_source.strip() or "bank",
-                    cleaned_operation,
-                    1 if needs_adjustment else 0,
-                    datetime.utcnow().isoformat(),
-                    entry_id,
-                    owner_chat_id,
-                ),
+                """.format(raw_import_sql=raw_import_sql),
+                params,
             )
             return cursor.rowcount > 0
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import date
+from datetime import time
 from datetime import timedelta
 from datetime import timezone
 from email.parser import BytesParser
@@ -11624,6 +11625,9 @@ function syncDdsExpenseForm(form) {{
   const targetSelect = targetField ? targetField.querySelector('select[name="target_cashbox"]') : null;
   const withdrawalCategoryCode = form.dataset.cashWithdrawalCategoryCode || "cash_withdrawal";
   const depositReturnCategoryCode = form.dataset.depositReturnCategoryCode || "income_deposit_return";
+  const bankTransferCategoryCode = form.dataset.bankTransferCategoryCode || "income_bank_transfer";
+  const bankAccountFields = form.querySelectorAll("[data-dds-bank-account-field]");
+  const bankTransferSourceFields = form.querySelectorAll("[data-dds-bank-transfer-source-field]");
   const withdrawalFields = form.querySelectorAll("[data-dds-cash-withdrawal-field]");
   const withdrawalCashboxSelect = form.querySelector('select[name="cash_withdrawal_cashbox"]');
   const withdrawalPercentInput = form.querySelector('input[name="cash_withdrawal_commission_percent"]');
@@ -11678,6 +11682,8 @@ function syncDdsExpenseForm(form) {{
     : null;
   const categoryAllowsDeposit = Boolean(selectedCategoryOption && selectedCategoryOption.dataset.allowDeposit === "1");
   const isDepositReturn = Boolean(isIncomeForm && categorySelect && categorySelect.value === depositReturnCategoryCode);
+  const isBankTransferIncome = Boolean(isIncomeForm && categorySelect && categorySelect.value === bankTransferCategoryCode);
+  const usesBankAccount = Boolean(isIncomeForm || (sourceSelect && sourceSelect.value === "bank"));
   const canMarkDeposit = Boolean(
     !isIncomeForm &&
     categoryAllowsDeposit &&
@@ -11692,6 +11698,18 @@ function syncDdsExpenseForm(form) {{
   if (sourceSelect) {{
     sourceSelect.disabled = isIncomeForm;
   }}
+  bankAccountFields.forEach((field) => {{
+    field.classList.toggle("is-hidden", !usesBankAccount);
+    field.querySelectorAll("select, input").forEach((input) => {{
+      input.disabled = !usesBankAccount;
+    }});
+  }});
+  bankTransferSourceFields.forEach((field) => {{
+    field.classList.toggle("is-hidden", !isBankTransferIncome);
+    field.querySelectorAll("select, input").forEach((input) => {{
+      input.disabled = !isBankTransferIncome;
+    }});
+  }});
   if (projectField && projectSelect && categorySelect) {{
     const categoryDoesNotNeedProject = needsWorkerAllocations || selectedGroup === "admin" || selectedGroup === "transfer" || noProjectSet.has(categorySelect.value) || categorySelect.value === withdrawalCategoryCode || transferSet.has(categorySelect.value);
     projectField.classList.toggle("is-hidden", categoryDoesNotNeedProject);
@@ -12998,6 +13016,7 @@ def render_directories_section(
             "cash_withdrawal": "Вывод денег в кассу или подотчет, когда списание с банка становится наличными.",
             "income_unallocated": "Поступления, которые еще нужно разобрать и привязать к объекту или основанию.",
             "income_bank": "Проценты банка, доходность по остаткам и прочие банковские начисления.",
+            "income_bank_transfer": "Перевод денег между расчетными счетами компании без выручки и расхода.",
             "income_work_payment": "Оплата выполненных работ по объекту, поступившая от заказчика.",
             "income_loan": "Заемные поступления, возвраты и временное финансирование.",
             "income_deposit_return": "Возврат ранее оплаченного залога с привязкой к исходному платежу.",
@@ -18508,10 +18527,12 @@ ADMIN_EXPENSE_CATEGORY_KEYWORDS = (
 )
 CASH_WITHDRAWAL_CATEGORY_CODE = "cash_withdrawal"
 CASH_WITHDRAWAL_COMMISSION_CATEGORY_CODE = "cash_withdrawal_commission"
+INCOME_BANK_TRANSFER_CATEGORY_CODE = "income_bank_transfer"
 EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES = {
     "admin",
     "bank_commission",
     "income_bank",
+    INCOME_BANK_TRANSFER_CATEGORY_CODE,
     CASH_WITHDRAWAL_COMMISSION_CATEGORY_CODE,
     CASH_WITHDRAWAL_CATEGORY_CODE,
 }
@@ -18529,9 +18550,14 @@ CASH_TRANSFER_CATEGORY_LABELS = {
 }
 CASH_WITHDRAWAL_COMMISSION_MARKER = "Комиссия по выводу"
 CASH_WITHDRAWAL_COMMISSION_PERCENT_MARKER = "Процент комиссии"
+BANK_ACCOUNT_TRANSFER_MARKER = "Перевод между счетами"
 INCOME_DEPOSIT_RETURN_CATEGORY_CODE = "income_deposit_return"
 DEPOSIT_MARKER = "Залог"
 DEPOSIT_RETURN_MARKER = "Возврат залога"
+TREASURY_BANK_ACCOUNT_NUMBER = "treasury_khor"
+MANUAL_BANK_ACCOUNTS = (
+    (TREASURY_BANK_ACCOUNT_NUMBER, "Казначейский счет Хор"),
+)
 LABOR_FORCE_CATEGORY_CODES = {
     "labor_force",
     "workforce",
@@ -19091,7 +19117,8 @@ def expense_entry_payment_source_label(entry, cashboxes: list[dict]) -> str:
 EXPENSE_COMMENT_SERVICE_MARKER_RE = re.compile(
     r"\[(?:Касса [^\]]+|Источник:\s*[^\]]+|Касса получателя:\s*[^\]]+|"
     r"Связанный расход:\s*\d+|Комиссия по выводу:\s*\d+|"
-    r"Процент комиссии:\s*[^\]]+|Залог:\s*[^\]]+|Возврат залога:\s*\d+|Сотрудник:\s*[^\]]+)\]"
+    r"Процент комиссии:\s*[^\]]+|Перевод между счетами:\s*\d+|Счет источник:\s*[^\]]+|Счет получатель:\s*[^\]]+|"
+    r"Залог:\s*[^\]]+|Возврат залога:\s*\d+|Сотрудник:\s*[^\]]+)\]"
 )
 
 
@@ -19375,8 +19402,15 @@ def cashbox_transfer_category_code(category_options_list: list[tuple[str, str]],
     return fallback
 
 
+def manual_bank_account_label(account_number: str) -> str:
+    return dict(MANUAL_BANK_ACCOUNTS).get((account_number or "").strip(), "")
+
+
 def bank_account_display_label(index: int, balance: dict) -> str:
     account_number = str(balance.get("account_number", "")).strip()
+    manual_label = manual_bank_account_label(account_number)
+    if manual_label:
+        return manual_label
     configured_labels = os.getenv("BANK_ACCOUNT_LABELS", "").strip()
     if configured_labels:
         for item in configured_labels.split(";"):
@@ -19398,6 +19432,9 @@ def bank_account_label_for_number(account_number: str, bank_account_balances: li
     account_number = (account_number or "").strip()
     if not account_number:
         return ""
+    manual_label = manual_bank_account_label(account_number)
+    if manual_label:
+        return manual_label
     for index, item in enumerate(bank_account_balances or []):
         if str(item.get("account_number", "")).strip() == account_number:
             return f"{bank_account_display_label(index, item)} ****{account_number[-4:]}"
@@ -19421,6 +19458,180 @@ def bank_account_number_from_expense_entry(entry) -> str:
     if (entry.operation_type or "expense") == "income":
         return values.get("ПолучательСчет", "") or values.get("ПолучательРасчСчет", "")
     return values.get("ПлательщикСчет", "") or values.get("ПлательщикРасчСчет", "")
+
+
+def raw_bank_account_text(account_number: str, is_income: bool) -> str:
+    account_number = (account_number or "").strip()
+    if not account_number:
+        return ""
+    key = "ПолучательСчет" if is_income else "ПлательщикСчет"
+    return f"{key}={account_number}"
+
+
+def bank_account_options_with_manual_accounts(bank_account_balances: list[dict], entries: list | None = None, owner_chat_id: int = 0) -> list[dict]:
+    options = [dict(item) for item in bank_account_balances]
+    seen = {str(item.get("account_number", "")).strip() for item in options}
+    today = datetime.now(VLADIVOSTOK_TZ).date()
+    entry_account_numbers = {
+        bank_account_number_from_expense_entry(entry)
+        for entry in entries or []
+        if (entry.payment_source or "bank") == "bank"
+    }
+    for account_number, _label in [*MANUAL_BANK_ACCOUNTS, *[(number, "") for number in sorted(entry_account_numbers)]]:
+        account_number = (account_number or "").strip()
+        if not account_number:
+            continue
+        if account_number in seen:
+            continue
+        account_entries = [
+            entry for entry in entries or []
+            if (entry.payment_source or "bank") == "bank"
+            and bank_account_number_from_expense_entry(entry) == account_number
+        ]
+        total_income = sum(
+            float(entry.amount or 0)
+            for entry in account_entries
+            if (entry.operation_type or "expense") == "income"
+        )
+        total_expense = sum(
+            float(entry.amount or 0)
+            for entry in account_entries
+            if (entry.operation_type or "expense") != "income"
+        )
+        balance_date = max((entry.expense_date for entry in account_entries), default=today)
+        options.append({
+            "id": 0,
+            "owner_chat_id": owner_chat_id,
+            "account_number": account_number,
+            "balance_date": balance_date,
+            "opening_balance": 0.0,
+            "total_expense": total_expense,
+            "total_income": total_income,
+            "closing_balance": total_income - total_expense,
+            "import_source": "manual",
+            "created_at": datetime.combine(balance_date, time.min),
+            "updated_at": datetime.combine(balance_date, time.min),
+        })
+        seen.add(account_number)
+    return options
+
+
+def bank_account_select_options(bank_account_balances: list[dict], selected_account_number: str = "") -> str:
+    selected_account_number = (selected_account_number or "").strip()
+    if not selected_account_number and bank_account_balances:
+        selected_account_number = str(bank_account_balances[0].get("account_number", "")).strip()
+    return "".join(
+        f'<option value="{escape(str(item.get("account_number", "")))}"{" selected" if str(item.get("account_number", "")).strip() == selected_account_number else ""}>{escape(bank_account_display_label(index, item))}</option>'
+        for index, item in enumerate(bank_account_balances)
+        if str(item.get("account_number", "")).strip()
+    )
+
+
+def bank_account_transfer_link_marker(income_entry_id: int) -> str:
+    return f"[{BANK_ACCOUNT_TRANSFER_MARKER}: {int(income_entry_id)}]"
+
+
+def linked_bank_account_transfer_entry(entries: Iterable, income_entry_id: int):
+    marker = bank_account_transfer_link_marker(income_entry_id)
+    for entry in entries:
+        if (
+            (entry.payment_source or "bank") == "bank"
+            and (entry.operation_type or "expense") == "expense"
+            and (entry.category_code or "") == INCOME_BANK_TRANSFER_CATEGORY_CODE
+            and marker in (entry.comment or "")
+            and entry.status != "closed"
+        ):
+            return entry
+    return None
+
+
+def sync_bank_account_transfer_entry(
+    storage: Storage,
+    owner_chat_id: int,
+    income_entry_id: int,
+    entries: Iterable,
+    expense_date: date,
+    source_account_number: str,
+    target_account_number: str,
+    amount: float,
+    raw_comment: str,
+    created_by_user_id: int | None,
+    created_by_name: str,
+) -> int:
+    source_account_number = source_account_number.strip()
+    target_account_number = target_account_number.strip()
+    source_label = bank_account_label_for_number(source_account_number)
+    target_label = bank_account_label_for_number(target_account_number)
+    title = f"Перевод между счетами: {source_label or source_account_number} → {target_label or target_account_number}"
+    comment = " ".join(
+        part
+        for part in (
+            bank_account_transfer_link_marker(income_entry_id),
+            f"[Счет источник: {source_account_number}]",
+            f"[Счет получатель: {target_account_number}]",
+            expense_comment_without_service_markers(raw_comment),
+        )
+        if part
+    )
+    linked_entry = linked_bank_account_transfer_entry(entries, income_entry_id)
+    if linked_entry is not None:
+        storage.update_expense_entry(
+            owner_chat_id,
+            linked_entry.id,
+            expense_date,
+            "admin",
+            INCOME_BANK_TRANSFER_CATEGORY_CODE,
+            title,
+            amount,
+            comment,
+            "bank",
+            False,
+            payroll_period="",
+            operation_type="expense",
+            expense_group_code="transfer",
+            raw_import_text=raw_bank_account_text(source_account_number, False),
+        )
+        return linked_entry.id
+    return storage.add_expense_entry(
+        owner_chat_id,
+        expense_date,
+        "admin",
+        INCOME_BANK_TRANSFER_CATEGORY_CODE,
+        title,
+        amount,
+        comment,
+        "bank",
+        False,
+        created_by_user_id,
+        created_by_name,
+        raw_import_text=raw_bank_account_text(source_account_number, False),
+        operation_type="expense",
+        expense_group_code="transfer",
+        client_request_key=f"bank-transfer:{income_entry_id}:out",
+    )
+
+
+def delete_linked_bank_account_transfer_entry(storage: Storage, owner_chat_id: int, entries: Iterable, income_entry_id: int) -> None:
+    linked_entry = linked_bank_account_transfer_entry(entries, income_entry_id)
+    if linked_entry is not None:
+        storage.delete_expense_entry(owner_chat_id, linked_entry.id)
+
+
+def bank_account_transfer_source_from_comment(comment: str) -> str:
+    match = re.search(r"\[Счет источник:\s*([^\]]+)\]", comment or "")
+    return match.group(1).strip() if match else ""
+
+
+def bank_account_transfer_comment(raw_comment: str, source_account_number: str, target_account_number: str) -> str:
+    return " ".join(
+        part
+        for part in (
+            f"[Счет источник: {source_account_number.strip()}]" if source_account_number.strip() else "",
+            f"[Счет получатель: {target_account_number.strip()}]" if target_account_number.strip() else "",
+            expense_comment_without_service_markers(raw_comment),
+        )
+        if part
+    )
 
 
 def mobile_cash_can_modify_cashbox(cash_access: dict | None, cashbox_code: str) -> bool:
@@ -19627,11 +19838,16 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     bank_account_number = bank_account_number_from_expense_entry(entry)
     bank_account_label = bank_account_label_for_number(bank_account_number, bank_account_balances)
     is_imported_bank_entry = bool(entry.import_source) and (entry.payment_source or "bank") == "bank" and bool(bank_account_label)
+    bank_account_options_html = bank_account_select_options(bank_account_balances, bank_account_number)
+    bank_transfer_source_account = bank_account_transfer_source_from_comment(entry.comment) or TREASURY_BANK_ACCOUNT_NUMBER
+    bank_transfer_source_options_html = bank_account_select_options(bank_account_balances, bank_transfer_source_account)
     payment_source_options_html = (
         '<option value="bank" selected>Расчетный счет</option>'
         if is_imported_bank_entry
         else expense_payment_source_options(expense_payment_source_value_for_entry(entry, cashboxes), cashboxes)
     )
+    show_bank_account_select = (entry.payment_source or "bank") == "bank" and not is_imported_bank_entry and bool(bank_account_options_html)
+    show_bank_transfer_source = is_income_operation and display_category_code == INCOME_BANK_TRANSFER_CATEGORY_CODE
     bank_account_field_html = (
         f"""
           <div class="field">
@@ -19639,7 +19855,24 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <input type="text" value="{escape(bank_account_label)}" readonly>
           </div>
         """
-        if (is_income_operation or is_imported_bank_entry) and bank_account_label
+        if is_imported_bank_entry and bank_account_label
+        else f"""
+          <div class="field{' is-hidden' if not show_bank_account_select else ''}" data-dds-bank-account-field>
+            <label>{'Расчетный счет зачисления' if is_income_operation else 'Расчетный счет списания'}</label>
+            <select name="bank_account_number" {'disabled' if not show_bank_account_select else ''}>{bank_account_options_html}</select>
+          </div>
+        """
+        if bank_account_options_html
+        else ""
+    )
+    bank_transfer_source_field_html = (
+        f"""
+          <div class="field{' is-hidden' if not show_bank_transfer_source else ''}" data-dds-bank-transfer-source-field>
+            <label>Счет списания</label>
+            <select name="bank_transfer_source_account" {'disabled' if not show_bank_transfer_source else ''}>{bank_transfer_source_options_html}</select>
+          </div>
+        """
+        if bank_transfer_source_options_html
         else ""
     )
     project_attention_class = " dds-editor-attention" if project_needs_attention else ""
@@ -19651,7 +19884,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
     <details id="expense-entry-{entry.id}" class="status-menu expense-editor-menu" data-expense-editor-id="{entry.id}">
       <summary>{summary_html or f'<span class="timeline-title">{escape(entry.title)}</span>'}</summary>
       <div class="status-popover expense-editor-popover" data-modal-title="Редактирование операции ДДС">
-        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-deposit-return-category-code="{INCOME_DEPOSIT_RETURN_CATEGORY_CODE}" data-operation-type="{escape(effective_operation_type)}" data-needs-adjustment="{'1' if form_needs_attention else '0'}">
+        <form class="form-grid" method="post" action="{base_path}/{entry.id}/update?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-deposit-return-category-code="{INCOME_DEPOSIT_RETURN_CATEGORY_CODE}" data-bank-transfer-category-code="{INCOME_BANK_TRANSFER_CATEGORY_CODE}" data-operation-type="{escape(effective_operation_type)}" data-needs-adjustment="{'1' if form_needs_attention else '0'}">
           <input type="hidden" name="operation_type" value="{escape(effective_operation_type)}">
           <div class="field">
             <label>Дата операции</label>
@@ -19670,6 +19903,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
             <select name="category_code" data-dds-category-select>{category_options}</select>
           </div>
           {bank_account_field_html}
+          {bank_transfer_source_field_html}
 	          <div class="field dds-payment-source-field{' is-hidden' if not show_payment_source_field else ''}" data-dds-payment-source-field>
 	            <label>Источник оплаты</label>
 	            <select name="payment_source" {'disabled' if not show_payment_source_field else ''}>{payment_source_options_html}</select>
@@ -27676,7 +27910,11 @@ def render_expenses_section(
         for employee in storage.list_payroll_employees(owner_chat_id)
         if (employee.employee_group or "admin") == "builders"
     ]
-    bank_account_balances = storage.list_latest_bank_account_balances(owner_chat_id)
+    bank_account_balances = bank_account_options_with_manual_accounts(
+        storage.list_latest_bank_account_balances(owner_chat_id),
+        active_entries,
+        owner_chat_id,
+    )
     bank_account_numbers = {str(item.get("account_number", "")).strip() for item in bank_account_balances}
     if project_filter and project_filter not in project_labels:
         project_filter = ""
@@ -27745,6 +27983,11 @@ def render_expenses_section(
     def is_system_expense_entry(entry) -> bool:
         return (
             is_cashbox_linked_income_entry(entry)
+            or (
+                (entry.category_code or "") == INCOME_BANK_TRANSFER_CATEGORY_CODE
+                and (entry.operation_type or "expense") == "expense"
+                and bank_account_transfer_source_from_comment(entry.comment)
+            )
             or cash_withdrawal_commission_source_id(entry) > 0
             or (
                 (entry.operation_type or "expense") == "income"
@@ -27911,6 +28154,10 @@ def render_expenses_section(
         f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map))))}" data-allow-deposit="{"1" if category_deposit_map.get(code, False) else "0"}">{escape(label)}</option>'
         for code, label in sorted_dds_options(category_options_list)
     )
+    form_income_category_options = "".join(
+        f'<option value="{code}" data-expense-groups="{escape(" ".join(sorted(category_groups_for_code(code, category_labels, category_group_map))))}" data-allow-deposit="{"1" if category_deposit_map.get(code, False) else "0"}"{" selected" if code == "income_work_payment" else ""}>{escape(label)}</option>'
+        for code, label in sorted_dds_options(category_options_list)
+    )
     form_payroll_employee_options = '<option value="">Выберите сотрудника</option>' + "".join(
         f'<option value="{employee_id}">{escape(employee_name)}</option>'
         for employee_id, employee_name in payroll_employee_options_list
@@ -27954,6 +28201,23 @@ def render_expenses_section(
         for item in cashboxes
         if str(item.get("code", "")).strip()
     )
+    form_bank_account_options = bank_account_select_options(bank_account_balances, TREASURY_BANK_ACCOUNT_NUMBER)
+    form_default_bank_account = (
+        TREASURY_BANK_ACCOUNT_NUMBER
+        if any(str(item.get("account_number", "")).strip() == TREASURY_BANK_ACCOUNT_NUMBER for item in bank_account_balances)
+        else (str(bank_account_balances[0].get("account_number", "")).strip() if bank_account_balances else "")
+    )
+    form_default_bank_account_options = bank_account_select_options(bank_account_balances, form_default_bank_account)
+    form_bank_transfer_source_account = next(
+        (
+            str(item.get("account_number", "")).strip()
+            for item in bank_account_balances
+            if str(item.get("account_number", "")).strip()
+            and str(item.get("account_number", "")).strip() != form_default_bank_account
+        ),
+        "",
+    )
+    form_bank_transfer_source_options = bank_account_select_options(bank_account_balances, form_bank_transfer_source_account)
     source_options = "".join(
         f'<option value="{code}"{" selected" if code == source_filter else ""}>{escape(label)}</option>'
         for code, label in [("", "Все источники"), ("bank", "Расчетный счет"), ("cash", "Касса")]
@@ -28058,6 +28322,7 @@ def render_expenses_section(
         entries_by_id = {entry.id: entry for entry in row_entries}
         linked_income_by_source_id = {}
         linked_commission_by_source_id = {}
+        linked_bank_transfer_by_income_id = {}
         for entry in row_entries:
             linked_match = re.search(r"\[Связанный расход:\s*(\d+)\]", entry.comment or "")
             if linked_match:
@@ -28065,20 +28330,30 @@ def render_expenses_section(
             commission_source_id = cash_withdrawal_commission_source_id(entry)
             if commission_source_id:
                 linked_commission_by_source_id[commission_source_id] = entry
+            bank_transfer_match = re.search(r"\[Перевод между счетами:\s*(\d+)\]", entry.comment or "")
+            if bank_transfer_match:
+                linked_bank_transfer_by_income_id[int(bank_transfer_match.group(1))] = entry
         def row_sort_key(entry):
             linked_match = re.search(r"\[Связанный расход:\s*(\d+)\]", entry.comment or "")
-            linked_source_id = int(linked_match.group(1)) if linked_match else cash_withdrawal_commission_source_id(entry)
+            bank_transfer_match = re.search(r"\[Перевод между счетами:\s*(\d+)\]", entry.comment or "")
+            linked_source_id = (
+                int(linked_match.group(1)) if linked_match
+                else int(bank_transfer_match.group(1)) if bank_transfer_match
+                else cash_withdrawal_commission_source_id(entry)
+            )
             linked_income = linked_income_by_source_id.get(entry.id)
             linked_commission = linked_commission_by_source_id.get(entry.id)
+            linked_bank_transfer = linked_bank_transfer_by_income_id.get(entry.id)
             linked_source = entries_by_id.get(linked_source_id) if linked_source_id else None
             if linked_source is not None:
                 linked_income = linked_income_by_source_id.get(linked_source.id)
                 linked_commission = linked_commission_by_source_id.get(linked_source.id)
-            group_entries = [item for item in (entry, linked_income, linked_commission, linked_source) if item is not None]
+                linked_bank_transfer = linked_bank_transfer_by_income_id.get(linked_source.id)
+            group_entries = [item for item in (entry, linked_income, linked_commission, linked_source, linked_bank_transfer) if item is not None]
             group_date = max(item.expense_date for item in group_entries)
             group_created = max(item.created_at for item in group_entries)
             group_id = max(item.id for item in group_entries)
-            sequence = 2 if cash_withdrawal_commission_source_id(entry) else 1 if linked_match else 0
+            sequence = 2 if cash_withdrawal_commission_source_id(entry) else 1 if linked_match or bank_transfer_match else 0
             return (group_date, group_created, group_id, -sequence)
         def status_editor(entry) -> str:
             entry_has_adjustment = entry_needs_adjustment(entry)
@@ -28225,6 +28500,67 @@ def render_expenses_section(
           {dds_actions_html}
           <a class="secondary-btn mini" href="/expenses/imports?owner={owner_chat_id}">Импорт выписки</a>
           <details class="dds-action-menu">
+            <summary class="secondary-btn mini">Добавить приход</summary>
+            <div class="dds-action-popover">
+              <div class="panel-head" style="margin-bottom:14px;">
+                <div>
+                  <h3 class="panel-title">Добавить приход</h3>
+                  <div class="panel-sub">Ручное поступление на расчетный счет: оплата работ, займ, банк или перевод между счетами.</div>
+                </div>
+              </div>
+              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-deposit-return-category-code="{INCOME_DEPOSIT_RETURN_CATEGORY_CODE}" data-bank-transfer-category-code="{INCOME_BANK_TRANSFER_CATEGORY_CODE}" data-operation-type="income" data-needs-adjustment="0">
+                <input type="hidden" name="operation_type" value="income">
+                <input type="hidden" name="payment_source" value="bank">
+                <div class="field">
+                  <label>Дата операции</label>
+                  <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
+                </div>
+                <div class="field">
+                  <label>Группа</label>
+                  <select name="expense_group_code" required data-dds-group-select>
+                    <option value="income" selected>Поступления</option>
+                  </select>
+                </div>
+                <div class="field dds-project-field" data-dds-project-field>
+                  <label>Объект</label>
+                  <select name="project_code" required>
+                    {form_project_options}
+                  </select>
+                </div>
+                <div class="field">
+                  <label data-dds-category-label>Тип поступления</label>
+                  <select name="category_code" required data-dds-category-select>
+                    {form_income_category_options}
+                  </select>
+                </div>
+                <div class="field" data-dds-bank-account-field>
+                  <label>Расчетный счет зачисления</label>
+                  <select name="bank_account_number">{form_bank_account_options}</select>
+                </div>
+                <div class="field is-hidden" data-dds-bank-transfer-source-field>
+                  <label>Счет списания</label>
+                  <select name="bank_transfer_source_account" disabled>{form_bank_transfer_source_options}</select>
+                </div>
+                <div class="field span-2">
+                  <label>Наименование операции</label>
+                  <input type="text" name="title" placeholder="Например, оплата от заказчика / перевод между счетами" required>
+                </div>
+                <div class="field">
+                  <label>Сумма, ₽</label>
+                  <input type="text" name="amount" data-money-input="1" placeholder="Например, 2900" required>
+                </div>
+                <div class="field span-2">
+                  <label>Комментарий</label>
+                  <textarea name="comment" placeholder="Коротко фиксируем основание поступления"></textarea>
+                </div>
+                <label class="advance-toggle span-2">
+                  <input class="toggle-checkbox" type="checkbox" name="needs_adjustment" value="1"> Откорректировать
+                </label>
+                <button class="submit-btn" type="submit">Добавить приход</button>
+              </form>
+            </div>
+          </details>
+          <details class="dds-action-menu">
             <summary class="secondary-btn mini">Добавить расход</summary>
             <div class="dds-action-popover">
               <div class="panel-head" style="margin-bottom:14px;">
@@ -28233,7 +28569,7 @@ def render_expenses_section(
                   <div class="panel-sub">Ручное добавление списания в ДДС: объект, группа, сумма, источник и комментарий.</div>
                 </div>
               </div>
-              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-deposit-return-category-code="{INCOME_DEPOSIT_RETURN_CATEGORY_CODE}" data-operation-type="expense" data-needs-adjustment="0">
+              <form class="form-grid" method="post" action="/expenses/new?owner={owner_chat_id}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}{extra_filter_query}" data-dds-expense-form="1" data-payroll-category-codes="{escape(json.dumps(payroll_category_codes, ensure_ascii=False))}" data-transfer-category-codes="{escape(json.dumps(transfer_category_codes, ensure_ascii=False))}" data-no-project-category-codes="{escape(json.dumps(sorted(EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES), ensure_ascii=False))}" data-cash-withdrawal-category-code="{CASH_WITHDRAWAL_CATEGORY_CODE}" data-deposit-return-category-code="{INCOME_DEPOSIT_RETURN_CATEGORY_CODE}" data-bank-transfer-category-code="{INCOME_BANK_TRANSFER_CATEGORY_CODE}" data-operation-type="expense" data-needs-adjustment="0">
                 <div class="field">
                   <label>Дата операции</label>
                   <input type="date" name="expense_date" value="{datetime.now(VLADIVOSTOK_TZ).date().isoformat()}" required>
@@ -28269,6 +28605,10 @@ def render_expenses_section(
 	                  <select name="payment_source">
 	                    {expense_payment_source_options(default_cashbox_source, cashboxes)}
 	                  </select>
+	                </div>
+	                <div class="field is-hidden" data-dds-bank-account-field>
+	                  <label>Расчетный счет списания</label>
+	                  <select name="bank_account_number" disabled>{form_default_bank_account_options}</select>
 	                </div>
 	                <label class="advance-toggle deposit-field" data-dds-deposit-field style="grid-column: 1;">
 	                  <input class="toggle-checkbox" type="checkbox" name="has_deposit" value="1"> В сумме есть залог
@@ -35449,6 +35789,12 @@ self.addEventListener("notificationclick", (event) => {
             category_group_map = expense_category_group_map(storage, current_owner, entries)
             category_deposit_map = expense_category_deposit_map(storage, current_owner)
             category_codes = {code for code, _label in category_options_list}
+            bank_account_balances = bank_account_options_with_manual_accounts(
+                storage.list_latest_bank_account_balances(current_owner),
+                entries,
+                current_owner,
+            )
+            bank_account_numbers = {str(item.get("account_number", "")).strip() for item in bank_account_balances}
             payroll_employees = storage.list_payroll_employees(current_owner)
             payroll_employee_lookup = {
                 employee.id: employee
@@ -35481,8 +35827,28 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите объект")
             if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
                 raise ValueError("Выберите источник оплаты")
+            selected_bank_account_number = form.get("bank_account_number", "").strip()
+            raw_import_text = ""
+            if payment_source == "bank":
+                if selected_bank_account_number not in bank_account_numbers:
+                    raise ValueError("Выберите расчетный счет")
+                raw_import_text = raw_bank_account_text(selected_bank_account_number, is_income_operation)
             if is_income_operation and category_code == "income_unallocated":
                 needs_adjustment = True
+            is_bank_account_transfer = is_income_operation and category_code == INCOME_BANK_TRANSFER_CATEGORY_CODE
+            bank_transfer_source_account = ""
+            if is_bank_account_transfer:
+                bank_transfer_source_account = form.get("bank_transfer_source_account", "").strip()
+                if bank_transfer_source_account not in bank_account_numbers:
+                    raise ValueError("Выберите счет списания")
+                if bank_transfer_source_account == selected_bank_account_number:
+                    raise ValueError("Счет списания и счет зачисления должны отличаться")
+                if not title:
+                    title = (
+                        f"Перевод между счетами: "
+                        f"{bank_account_label_for_number(bank_transfer_source_account)} → "
+                        f"{bank_account_label_for_number(selected_bank_account_number)}"
+                    )
             is_transfer_operation = (not is_income_operation) and is_cash_transfer_category(category_code, category_labels)
             if is_transfer_operation:
                 if payment_source != "cash" or not selected_cashbox_code:
@@ -35551,6 +35917,8 @@ self.addEventListener("notificationclick", (event) => {
                 if payment_source == "cash"
                 else " ".join(part for part in [*extra_markers, expense_comment_without_service_markers(raw_comment)] if part)
             )
+            if is_bank_account_transfer:
+                comment = bank_account_transfer_comment(raw_comment, bank_transfer_source_account, selected_bank_account_number)
             actor_name = (current_user or {}).get("full_name", "").strip() or (current_user or {}).get("display_name", "").strip() or "Автор неизвестен"
             if is_transfer_operation:
                 target_cashbox_label = cashbox_label_from_directory(cashboxes, target_cashbox_code)
@@ -35626,6 +35994,7 @@ self.addEventListener("notificationclick", (event) => {
                     (current_user or {}).get("id"),
                     actor_name,
                     payroll_period="",
+                    raw_import_text=raw_import_text,
                     operation_type="expense",
                     expense_group_code="transfer",
                 )
@@ -35648,8 +36017,22 @@ self.addEventListener("notificationclick", (event) => {
                 if commission_created:
                     notify_cash_expense_created(storage, current_owner, commission_amount, actor_name)
                 return redirect(start_response, f"/expenses?owner={current_owner}&tab={quote_plus(active_tab)}&project={quote_plus(project_filter)}&category={quote_plus(category_filter)}&adjustment={quote_plus(adjustment_filter)}&day={quote_plus(selected_day.isoformat() if selected_day else '')}{extra_query}")
-            saved_expense_id = storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_employee_id=payroll_employee_id, payroll_employee_name=payroll_employee_name, payroll_period=payroll_period, expense_group_code=expense_group_code, operation_type=operation_type)
+            saved_expense_id = storage.add_expense_entry(current_owner, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, (current_user or {}).get("id"), actor_name, payroll_employee_id=payroll_employee_id, payroll_employee_name=payroll_employee_name, payroll_period=payroll_period, raw_import_text=raw_import_text, expense_group_code=expense_group_code, operation_type=operation_type)
             storage.set_expense_worker_allocations(current_owner, saved_expense_id, labor_allocations)
+            if is_bank_account_transfer:
+                sync_bank_account_transfer_entry(
+                    storage,
+                    current_owner,
+                    saved_expense_id,
+                    storage.list_expense_entries(current_owner),
+                    expense_date,
+                    bank_transfer_source_account,
+                    selected_bank_account_number,
+                    amount,
+                    raw_comment,
+                    (current_user or {}).get("id"),
+                    actor_name,
+                )
             if payment_source == "cash":
                 if is_income_operation:
                     notify_cash_income_created(storage, current_owner, amount, actor_name, saved_expense_id, selected_cashbox_code)
@@ -35709,6 +36092,12 @@ self.addEventListener("notificationclick", (event) => {
             category_group_map = expense_category_group_map(storage, current_owner, entries)
             category_deposit_map = expense_category_deposit_map(storage, current_owner)
             category_codes = {code for code, _label in category_options_list}
+            bank_account_balances = bank_account_options_with_manual_accounts(
+                storage.list_latest_bank_account_balances(current_owner),
+                entries,
+                current_owner,
+            )
+            bank_account_numbers = {str(item.get("account_number", "")).strip() for item in bank_account_balances}
             payroll_employees = storage.list_payroll_employees(current_owner)
             payroll_employee_lookup = {
                 employee.id: employee
@@ -35724,6 +36113,16 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите статью расхода")
             if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
                 raise ValueError("Выберите источник оплаты")
+            selected_bank_account_number = (
+                form.get("bank_account_number", "").strip()
+                or bank_account_number_from_expense_entry(existing_entry)
+            )
+            raw_import_text_update: str | None = None
+            if payment_source == "bank":
+                if selected_bank_account_number not in bank_account_numbers:
+                    raise ValueError("Выберите расчетный счет")
+                if not existing_entry.import_source:
+                    raw_import_text_update = raw_bank_account_text(selected_bank_account_number, operation_type == "income")
             if operation_type not in MONEY_OPERATION_TYPE_META:
                 raise ValueError("Выберите тип операции")
             if expense_group_code == "income":
@@ -35734,6 +36133,20 @@ self.addEventListener("notificationclick", (event) => {
             is_labor_operation = (not is_income_operation) and is_labor_force_category(category_code, category_labels)
             if is_income_operation and category_code == "income_unallocated":
                 needs_adjustment = True
+            is_bank_account_transfer = is_income_operation and category_code == INCOME_BANK_TRANSFER_CATEGORY_CODE
+            bank_transfer_source_account = ""
+            if is_bank_account_transfer:
+                bank_transfer_source_account = form.get("bank_transfer_source_account", "").strip()
+                if bank_transfer_source_account not in bank_account_numbers:
+                    raise ValueError("Выберите счет списания")
+                if bank_transfer_source_account == selected_bank_account_number:
+                    raise ValueError("Счет списания и счет зачисления должны отличаться")
+                if not title:
+                    title = (
+                        f"Перевод между счетами: "
+                        f"{bank_account_label_for_number(bank_transfer_source_account)} → "
+                        f"{bank_account_label_for_number(selected_bank_account_number)}"
+                    )
             if expense_group_code not in EXPENSE_GROUP_META:
                 raise ValueError("Выберите группу расхода")
             if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels, category_group_map):
@@ -35895,6 +36308,7 @@ self.addEventListener("notificationclick", (event) => {
                     payroll_period="",
                     operation_type="expense",
                     expense_group_code="transfer",
+                    raw_import_text=raw_import_text_update,
                 )
                 commission_created, commission_amount = sync_cash_withdrawal_commission_entry(
                     storage,
@@ -35988,8 +36402,26 @@ self.addEventListener("notificationclick", (event) => {
                 if payment_source == "cash"
                 else " ".join(part for part in [*preserved_markers, expense_comment_without_service_markers(raw_comment)] if part)
             )
-            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, payroll_employee_id=payroll_employee_id, payroll_employee_name=payroll_employee_name, payroll_period=payroll_period, operation_type=operation_type, expense_group_code=expense_group_code)
+            if is_bank_account_transfer:
+                comment = bank_account_transfer_comment(raw_comment, bank_transfer_source_account, selected_bank_account_number)
+            storage.update_expense_entry(current_owner, entry_id, expense_date, project_code, category_code, title, amount, comment, payment_source, needs_adjustment, payroll_employee_id=payroll_employee_id, payroll_employee_name=payroll_employee_name, payroll_period=payroll_period, operation_type=operation_type, expense_group_code=expense_group_code, raw_import_text=raw_import_text_update)
             storage.set_expense_worker_allocations(current_owner, entry_id, labor_allocations)
+            if is_bank_account_transfer:
+                sync_bank_account_transfer_entry(
+                    storage,
+                    current_owner,
+                    entry_id,
+                    entries,
+                    expense_date,
+                    bank_transfer_source_account,
+                    selected_bank_account_number,
+                    amount,
+                    raw_comment,
+                    (current_user or {}).get("id"),
+                    actor_name,
+                )
+            else:
+                delete_linked_bank_account_transfer_entry(storage, current_owner, entries, entry_id)
             if payment_source == "cash" and category_code != CASH_WITHDRAWAL_CATEGORY_CODE and not existing_was_visible_cash_operation:
                 if is_income_operation:
                     notify_cash_income_created(storage, current_owner, amount, actor_name, entry_id, selected_cashbox_code)
