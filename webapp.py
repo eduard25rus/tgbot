@@ -28126,8 +28126,18 @@ def render_expenses_section(
         for item in cashboxes
     }
     cashbox_total_balance = sum(cashbox_balances.values())
-    bank_cash_balance = sum(item["closing_balance"] for item in bank_account_balances) if bank_account_balances else None
-    company_money_total = (bank_cash_balance + cashbox_total_balance) if bank_cash_balance is not None else None
+    treasury_account_numbers = {account_number for account_number, _label in MANUAL_BANK_ACCOUNTS}
+    treasury_bank_account_balances = [
+        item for item in bank_account_balances
+        if str(item.get("account_number", "")).strip() in treasury_account_numbers
+    ]
+    settlement_bank_account_balances = [
+        item for item in bank_account_balances
+        if str(item.get("account_number", "")).strip() not in treasury_account_numbers
+    ]
+    settlement_bank_balance = sum(item["closing_balance"] for item in settlement_bank_account_balances) if settlement_bank_account_balances else None
+    treasury_bank_balance = sum(item["closing_balance"] for item in treasury_bank_account_balances) if treasury_bank_account_balances else 0
+    company_money_total = (settlement_bank_balance or 0) + treasury_bank_balance + cashbox_total_balance if bank_account_balances else None
     needs_adjustment_count = sum(1 for entry in source_entries if entry_needs_adjustment(entry))
     anchor_day = today
     day_window = [anchor_day - timedelta(days=offset) for offset in range(20, -1, -1)]
@@ -28749,16 +28759,16 @@ def render_expenses_section(
           <strong>{format_amount(item["closing_balance"])}</strong>
         </div>
         """
-        for index, item in enumerate(bank_account_balances)
+        for index, item in enumerate(settlement_bank_account_balances)
     )
-    if len(bank_account_balances) == 1:
+    if len(settlement_bank_account_balances) == 1:
         bank_account_lines += """
         <div class="dds-money-line bank-account-balance-line">
           <span>Резерв Сбербанк</span>
           <strong>—</strong>
         </div>
         """
-    elif not bank_account_balances:
+    elif not settlement_bank_account_balances:
         bank_account_lines = """
         <div class="dds-money-line bank-account-balance-line">
           <span>Фелис Сбербанк</span>
@@ -28778,7 +28788,7 @@ def render_expenses_section(
     <section class="stats dds-money-stats">
       <article class="card stat-card">
         <div class="stat-label">Расчетные счета</div>
-        <div class="stat-value">{format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}</div>
+        <div class="stat-value">{format_amount(settlement_bank_balance) if settlement_bank_balance is not None else "—"}</div>
         <div class="stat-note">{bank_accounts_note}</div>
       </article>
       <article class="card stat-card">
@@ -28791,7 +28801,8 @@ def render_expenses_section(
         <div class="stat-value">{format_amount(company_money_total) if company_money_total is not None else "—"}</div>
         <div class="stat-note">
           <div class="dds-money-breakdown">
-            <div class="dds-money-line"><span>Счета</span><strong>{format_amount(bank_cash_balance) if bank_cash_balance is not None else "—"}</strong></div>
+            <div class="dds-money-line"><span>Расчетные счета</span><strong>{format_amount(settlement_bank_balance) if settlement_bank_balance is not None else "—"}</strong></div>
+            <div class="dds-money-line"><span>Казначейские счета</span><strong>{format_amount(treasury_bank_balance)}</strong></div>
             <div class="dds-money-line"><span>Кассы</span><strong>{format_amount(cashbox_total_balance)}</strong></div>
           </div>
         </div>
