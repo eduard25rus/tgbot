@@ -18511,6 +18511,7 @@ CASH_WITHDRAWAL_COMMISSION_CATEGORY_CODE = "cash_withdrawal_commission"
 EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES = {
     "admin",
     "bank_commission",
+    "income_bank",
     CASH_WITHDRAWAL_COMMISSION_CATEGORY_CODE,
     CASH_WITHDRAWAL_CATEGORY_CODE,
 }
@@ -18856,11 +18857,11 @@ def infer_expense_group_code(entry, category_labels: dict[str, str] | None = Non
     return "object"
 
 
-def expense_group_requires_project(group_code: str, operation_type: str = "expense") -> bool:
+def expense_group_requires_project(group_code: str, operation_type: str = "expense", category_code: str = "") -> bool:
     if group_code == "object":
         return True
     if group_code == "income":
-        return operation_type == "income"
+        return operation_type == "income" and category_code not in EXPENSE_CATEGORY_WITHOUT_PROJECT_CODES
     return False
 
 
@@ -19507,7 +19508,7 @@ def expense_entry_editor(owner_chat_id: int, entry, current_user: dict | None, a
         and display_category_code == "other"
     )
     display_group_code = "" if group_needs_attention else selected_group_code
-    project_requires_selection = expense_group_requires_project(display_group_code or "object", effective_operation_type)
+    project_requires_selection = expense_group_requires_project(display_group_code or "object", effective_operation_type, display_category_code)
     project_needs_attention = (
         entry.needs_adjustment
         and (entry.project_code or "") == "admin"
@@ -35473,9 +35474,9 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите статью для выбранной группы")
             is_income_operation = operation_type == "income"
             is_labor_operation = (not is_income_operation) and is_labor_force_category(category_code, category_labels)
-            if is_labor_operation or not expense_group_requires_project(expense_group_code, operation_type):
+            if is_labor_operation or not expense_group_requires_project(expense_group_code, operation_type, category_code):
                 project_code = "admin"
-            project_required = expense_group_requires_project(expense_group_code, operation_type) and not is_labor_operation
+            project_required = expense_group_requires_project(expense_group_code, operation_type, category_code) and not is_labor_operation
             if project_code not in project_codes or (project_code == "admin" and project_required):
                 raise ValueError("Выберите объект")
             if payment_source not in EXPENSE_PAYMENT_SOURCE_META:
@@ -35737,9 +35738,9 @@ self.addEventListener("notificationclick", (event) => {
                 raise ValueError("Выберите группу расхода")
             if expense_group_code != "income" and expense_group_code not in category_groups_for_code(category_code, category_labels, category_group_map):
                 raise ValueError("Выберите статью для выбранной группы")
-            if is_labor_operation or not expense_group_requires_project(expense_group_code, operation_type):
+            if is_labor_operation or not expense_group_requires_project(expense_group_code, operation_type, category_code):
                 project_code = "admin"
-            project_required = expense_group_requires_project(expense_group_code, operation_type) and not is_labor_operation
+            project_required = expense_group_requires_project(expense_group_code, operation_type, category_code) and not is_labor_operation
             if project_code not in project_codes or (project_code == "admin" and project_required):
                 raise ValueError("Выберите объект")
             is_transfer_operation = is_cash_transfer_category(category_code, category_labels)
