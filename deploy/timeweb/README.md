@@ -10,6 +10,11 @@ The production layout is isolated from PANTERA:
 /srv/felis/state     current-release and previous-release
 ```
 
+Server releases run as the dedicated `felis-deploy` user (UID 10001) through
+`~/.ssh/felis_timeweb_deploy_ed25519`. The PANTERA key is used only for initial
+server administration. GitHub access uses a second, repository-scoped read-only
+key at `/srv/felis/config/deploy_ed25519`.
+
 The container is bound only to `127.0.0.1:8002`. Caddy terminates HTTPS. The
 Compose service refuses to start when the database, the `web_users` table, or
 the upload directory is absent. It never copies a production database into the

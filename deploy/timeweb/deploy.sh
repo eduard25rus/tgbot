@@ -20,6 +20,6 @@ python3 scripts/smoke_webapp.py
 
 git push origin main
 release_sha="$(git rev-parse HEAD)"
-server="${FELIS_SERVER:-root@72.56.8.42}"
-admin_key="${FELIS_ADMIN_KEY:-$HOME/.ssh/pantera_timeweb_admin_ed25519}"
-ssh -i "$admin_key" -o IdentitiesOnly=yes "$server" "/srv/felis/app/deploy/timeweb/release.sh '$release_sha'"
+server="${FELIS_SERVER:-felis-deploy@72.56.8.42}"
+deploy_key="${FELIS_DEPLOY_KEY:-$HOME/.ssh/felis_timeweb_deploy_ed25519}"
+ssh -i "$deploy_key" -o IdentitiesOnly=yes "$server" "/srv/felis/app/deploy/timeweb/release.sh '$release_sha'"
