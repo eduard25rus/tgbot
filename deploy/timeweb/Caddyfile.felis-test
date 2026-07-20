@@ -1,0 +1,3 @@
+felis-test-72056842.72-56-8-42.sslip.io {
+	reverse_proxy 127.0.0.1:8002
+}

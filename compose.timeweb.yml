@@ -1,0 +1,29 @@
+services:
+  web:
+    image: felis-crm:${RELEASE_SHA:?RELEASE_SHA is required}
+    container_name: felis-crm-web
+    user: "10001:10001"
+    restart: unless-stopped
+    env_file:
+      - /srv/felis/config/app.env
+    environment:
+      DB_PATH: /app/data/contracts.db
+      FILE_STORAGE_LOCAL_ROOT: /app/data/uploads
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: 8000
+      REQUIRE_EXISTING_DB: "1"
+      REQUIRE_EXISTING_UPLOAD_ROOT: "1"
+    ports:
+      - "127.0.0.1:${WEB_BIND_PORT:-8002}:8000"
+    volumes:
+      - /srv/felis/data:/app/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    mem_limit: 768m
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).read()"]
+      interval: 15s
+      timeout: 7s
+      retries: 4
+      start_period: 20s

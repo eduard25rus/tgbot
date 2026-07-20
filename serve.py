@@ -17,6 +17,7 @@ from bot import build_application
 from scripts.backup_sqlite_to_s3 import backup_sqlite_to_storage
 from scripts.import_bank_mail import run_bank_mail_import
 from webapp import app as web_app
+from runtime_safety import validate_runtime_storage
 
 
 logging.basicConfig(
@@ -184,9 +185,24 @@ def start_db_backup_thread() -> None:
 
 
 def main() -> None:
+    storage_report = validate_runtime_storage()
+    LOGGER.info(
+        "Persistent storage validated: path=%s required=%s size_bytes=%s",
+        storage_report.get("path"),
+        storage_report.get("required"),
+        storage_report.get("size_bytes", "n/a"),
+    )
     host, port = resolve_web_bind()
     server = make_server(host, port, web_app, server_class=ThreadingWSGIServer)
     LOGGER.info("CRM web is listening on http://%s:%s", host, port)
+
+    if not env_truthy("BOT_ENABLED", True):
+        LOGGER.info("Web-only mode is active; Telegram polling and bot reminders are disabled")
+        try:
+            server.serve_forever()
+        finally:
+            server.server_close()
+        return
 
     web_thread = threading.Thread(target=server.serve_forever, name="crm-web-server", daemon=True)
     web_thread.start()

@@ -29490,6 +29490,20 @@ def render_forbidden_body(section_label: str) -> str:
 
 
 def app(environ, start_response):
+    path = environ.get("PATH_INFO", "/")
+    method = environ.get("REQUEST_METHOD", "GET").upper()
+
+    if path == "/healthz" and method == "GET":
+        from runtime_safety import validate_existing_sqlite
+
+        try:
+            report = validate_existing_sqlite()
+        except Exception as exc:
+            start_response("503 Service Unavailable", [("Content-Type", "application/json; charset=utf-8")])
+            return [json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8")]
+        start_response("200 OK", [("Content-Type", "application/json; charset=utf-8")])
+        return [json.dumps({"ok": True, **report}, ensure_ascii=False).encode("utf-8")]
+
     storage = Storage(os.getenv("DB_PATH", "contracts.db"))
     query = parse_qs(environ.get("QUERY_STRING", ""))
     current_auction_tab = query.get("tab", ["active"])[0]
@@ -29533,9 +29547,6 @@ def app(environ, start_response):
     owners = owner_options(storage)
     if current_owner is not None:
         detach_labor_force_expense_projects(storage, current_owner)
-
-    path = environ.get("PATH_INFO", "/")
-    method = environ.get("REQUEST_METHOD", "GET").upper()
 
     if path == "/brand/felis-logo-banner.jpg" and method == "GET":
         logo_path = Path(__file__).resolve().with_name("felis-logo-banner.jpg")

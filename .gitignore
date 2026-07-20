@@ -4,3 +4,8 @@
 __pycache__/
 *.pyc
 contracts.db
+.DS_Store
+cash_push_keys/
+*.pem
+deploy/timeweb/*.local
+deploy/timeweb/*.env
