@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
@@ -184,6 +185,39 @@ def start_db_backup_thread() -> None:
     LOGGER.info("SQLite backup thread started")
 
 
+def telegram_polling_loop() -> None:
+    retry_seconds = max(10, int(os.getenv("BOT_RETRY_SECONDS", "30")))
+    while True:
+        application = None
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            application = build_application()
+            LOGGER.info("Telegram bot polling is starting")
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                stop_signals=None,
+                close_loop=True,
+            )
+            LOGGER.warning("Telegram bot polling stopped; retrying in %s seconds", retry_seconds)
+        except Exception:
+            LOGGER.exception(
+                "Telegram bot polling failed; CRM web remains available and polling will retry in %s seconds",
+                retry_seconds,
+            )
+            if not loop.is_closed():
+                loop.close()
+        finally:
+            asyncio.set_event_loop(None)
+        time.sleep(retry_seconds)
+
+
+def start_telegram_bot_thread() -> None:
+    thread = threading.Thread(target=telegram_polling_loop, name="telegram-bot", daemon=True)
+    thread.start()
+    LOGGER.info("Telegram bot thread started")
+
+
 def main() -> None:
     storage_report = validate_runtime_storage()
     LOGGER.info(
@@ -196,25 +230,16 @@ def main() -> None:
     server = make_server(host, port, web_app, server_class=ThreadingWSGIServer)
     LOGGER.info("CRM web is listening on http://%s:%s", host, port)
 
-    if not env_truthy("BOT_ENABLED", True):
-        LOGGER.info("Web-only mode is active; Telegram polling and bot reminders are disabled")
-        try:
-            server.serve_forever()
-        finally:
-            server.server_close()
-        return
-
-    web_thread = threading.Thread(target=server.serve_forever, name="crm-web-server", daemon=True)
-    web_thread.start()
     start_bank_mail_import_thread()
     start_db_backup_thread()
+    if env_truthy("BOT_ENABLED", True):
+        start_telegram_bot_thread()
+    else:
+        LOGGER.info("Web-only mode is active; Telegram polling and bot reminders are disabled")
 
-    application = build_application()
-    LOGGER.info("Telegram bot and CRM web are starting")
     try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        server.serve_forever()
     finally:
-        server.shutdown()
         server.server_close()
 
 
